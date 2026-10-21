@@ -17,6 +17,37 @@ export class LenientJSONError extends SyntaxError {
   }
 }
 
+// LaTeX written inside JSON string props ("\\frac{1}{n}" is right, but models often write
+// "\frac{1}{n}"): a backslash followed by the letters of a known LaTeX command is kept literally
+// instead of decoding \f \t \b \n \r \v \u \x (\frac -> form feed + "rac", \theta -> tab + "heta").
+// Unknown letter escapes (\lambda-like, not valid JSON) keep their backslash too.
+// Genuine escapes still decode: "\n" + a word that is not a command ("\nNext"), \", \\, \uXXXX.
+export const LATEX_COMMANDS = new Set(`
+  frac dfrac tfrac cfrac sqrt text textbf textit textrm texttt textsf mathrm mathbf mathit mathsf mathtt mathcal mathbb mathfrak
+  boldsymbol operatorname mbox times div cdot cdots ldots dots vdots ddots pm mp ast star circ bullet
+  alpha beta gamma delta epsilon varepsilon zeta eta theta vartheta iota kappa lambda mu nu xi pi varpi rho varrho
+  sigma varsigma tau upsilon phi varphi chi psi omega Gamma Delta Theta Lambda Xi Pi Sigma Upsilon Phi Psi Omega
+  neq ne leq le geq ge ll gg approx sim simeq cong equiv propto parallel perp mid nmid
+  in notin ni subset subseteq supset supseteq cup cap setminus emptyset varnothing forall exists nexists neg lnot land lor wedge vee
+  to gets rightarrow leftarrow leftrightarrow Rightarrow Leftarrow Leftrightarrow longrightarrow longleftarrow mapsto implies iff
+  uparrow downarrow updownarrow nearrow searrow
+  sum prod coprod int iint iiint oint lim limsup liminf sup inf max min arg det deg dim exp ker gcd hom log ln lg
+  sin cos tan cot sec csc arcsin arccos arctan sinh cosh tanh coth
+  partial nabla infty hbar ell Re Im aleph prime angle triangle square degree
+  left right big Big bigg Bigg bigl bigr Bigl Bigr middle langle rangle lfloor rfloor lceil rceil lvert rvert lVert rVert vert Vert
+  hat widehat bar overline underline vec dot ddot tilde widetilde acute grave breve check overbrace underbrace overset underset stackrel
+  binom tbinom dbinom choose pmod bmod mod
+  quad qquad displaystyle textstyle scriptstyle hspace vspace phantom
+  begin end cases matrix pmatrix bmatrix vmatrix aligned array
+  top bot vdash models therefore because checkmark not boxed color textcolor
+`.trim().split(/\s+/));
+
+/** Length of the LaTeX command name at s[i] (the letters after a backslash), or 0. */
+function latexCommandAt(s, i) {
+  const m = /^[A-Za-z]+/.exec(s.slice(i, i + 24));
+  return m && LATEX_COMMANDS.has(m[0]) ? m[0].length : 0;
+}
+
 const ID_START = /[A-Za-z_$]/;
 const ID_PART = /[\w$]/;
 const NUMBER_RE = /^[+-]?(?:Infinity|NaN|0[xX][0-9a-fA-F]+|(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?)/;
@@ -47,7 +78,10 @@ export function parseLenientJSON(source) {
       if (c === q) return out;
       if (q === '`' && c === '$' && s[i] === '{') fail('Template expressions are not allowed');
       if (c !== '\\') { out += c; continue; }
+      const cmd = latexCommandAt(s, i);
+      if (cmd) { out += '\\' + s.slice(i, i + cmd); i += cmd; continue; } // \frac, \theta, \nabla … stay LaTeX
       const e = s[i++];
+      if (/[A-Za-z]/.test(e || '') && !'ntrbfvux'.includes(e)) { out += '\\' + e; continue; } // not a JSON escape: keep
       switch (e) {
         case 'n': out += '\n'; break;
         case 't': out += '\t'; break;
@@ -182,6 +216,7 @@ export function parseLenientJSON(source) {
 export function tryParseExpression(source) {
   const t = String(source ?? '').trim();
   if (!t) return { ok: false, error: 'empty expression' };
-  try { return { ok: true, value: JSON.parse(t) }; } catch {}
+  // strict JSON would decode "\frac" as a form feed: anything with a backslash takes the lenient path
+  if (!t.includes('\\')) try { return { ok: true, value: JSON.parse(t) }; } catch {}
   try { return { ok: true, value: parseLenientJSON(t) }; } catch (e) { return { ok: false, error: e.message }; }
 }

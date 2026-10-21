@@ -20,21 +20,62 @@ export function learningCatalog(__dil, DIL, GenUI) {
   // Inline markdown -> DIL primitives (bold/italic/code/inline math). Built here instead of
   // using the host's text-only-markdown, whose "$...$" math rule swallows dollar amounts
   // ("$1,000 × 10% = **$100**").
-  const INLINE_RE = /\*\*([^*]+)\*\*|__([^_]+)__|\*([^*\s][^*]*)\*|`([^`]+)`|\\\((.+?)\\\)/g;
+  const INLINE_RE = /\*\*([^*]+)\*\*|__([^_]+)__|\*([^*\s][^*]*)\*|`([^`]+)`/g;
+  // Math spans first, with the same rules as server/math-spans.js: \(…\) and \[…\], $$…$$, and
+  // $…$ only when the opener is not followed by whitespace, the next "$" on the line is not
+  // preceded by whitespace or followed by a digit, and the content looks like math. Prices
+  // ("$40,000 … $3, $4", "costs $5 and $10") stay text.
+  const MATHY = /[A-Za-z\\^_={}]/;
+  function splitMath(s) {
+    const out = [];
+    let buf = '';
+    let i = 0;
+    const push = (v, display) => { if (buf) out.push(buf); buf = ''; if (v) out.push({ math: v, display }); };
+    while (i < s.length) {
+      const c = s[i];
+      if (c === '`') {
+        const e = s.indexOf('`', i + 1);
+        if (e > i) { buf += s.slice(i, e + 1); i = e + 1; continue; }
+      }
+      if (c === '\\' && (s[i + 1] === '(' || s[i + 1] === '[')) {
+        const e = s.indexOf(s[i + 1] === '(' ? '\\)' : '\\]', i + 2);
+        if (e >= 0) { push(s.slice(i + 2, e).trim(), s[i + 1] === '['); i = e + 2; continue; }
+      }
+      if (c === '\\' && s[i + 1] === '$') { buf += '$'; i += 2; continue; }
+      if (c === '$' && s[i + 1] === '$') {
+        const e = s.indexOf('$$', i + 2);
+        if (e >= 0) { push(s.slice(i + 2, e).trim(), true); i = e + 2; continue; }
+      } else if (c === '$' && s[i + 1] && !/\s/.test(s[i + 1])) {
+        let j = i + 1;
+        while (j < s.length && s[j] !== '$' && s[j] !== '\n') j += s[j] === '\\' ? 2 : 1;
+        if (s[j] === '$' && !/\s/.test(s[j - 1]) && !/\d/.test(s[j + 1] || '') && MATHY.test(s.slice(i + 1, j))) {
+          push(s.slice(i + 1, j), false);
+          i = j + 1;
+          continue;
+        }
+      }
+      buf += c;
+      i++;
+    }
+    if (buf) out.push(buf);
+    return out;
+  }
   function inline(s) {
     const out = [];
-    let last = 0;
-    let m;
-    INLINE_RE.lastIndex = 0;
-    while ((m = INLINE_RE.exec(s))) {
-      if (m.index > last) out.push(s.slice(last, m.index));
-      if (m[1] != null || m[2] != null) out.push(h('bold', null, m[1] ?? m[2]));
-      else if (m[3] != null) out.push(h('italic', null, m[3]));
-      else if (m[4] != null) out.push(h('code', null, m[4]));
-      else out.push(h('math', null, m[5]));
-      last = INLINE_RE.lastIndex;
+    for (const piece of splitMath(s)) {
+      if (typeof piece !== 'string') { out.push(h('math', piece.display ? { display: true } : null, piece.math)); continue; }
+      let last = 0;
+      let m;
+      INLINE_RE.lastIndex = 0;
+      while ((m = INLINE_RE.exec(piece))) {
+        if (m.index > last) out.push(piece.slice(last, m.index));
+        if (m[1] != null || m[2] != null) out.push(h('bold', null, m[1] ?? m[2]));
+        else if (m[3] != null) out.push(h('italic', null, m[3]));
+        else out.push(h('code', null, m[4]));
+        last = INLINE_RE.lastIndex;
+      }
+      if (last < piece.length) out.push(piece.slice(last));
     }
-    if (last < s.length) out.push(s.slice(last));
     return out;
   }
   const md = (s, props) => h('text', props || null, ...inline(str(s)));

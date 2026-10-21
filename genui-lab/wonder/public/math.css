@@ -1,0 +1,8 @@
+/* Math typesetting (public/math.js). The host's own LaTeX text stays in the DOM, hidden; the
+   KaTeX (or Unicode fallback) output lives in .wonder-math-out next to it. */
+.wonder-math-on .dil-root [data-d-component="math"] > :not(.wonder-math-out) { display: none !important; }
+.dil-root [data-wonder-math="katex"] { font-family: inherit; font-style: normal; }
+.dil-root [data-d-component="math"][data-display] > .wonder-math-out { display: block; overflow-x: auto; overflow-y: hidden; max-width: 100%; }
+.dil-root .wonder-math-out .katex-display { margin: 0.25em 0; }
+.dil-root .wonder-math-out .katex { font-size: 1.12em; line-height: 1.2; color: inherit; }
+.dil-root .wonder-math-out .katex-error { color: inherit; font-family: inherit; }

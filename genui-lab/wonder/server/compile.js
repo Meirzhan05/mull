@@ -14,10 +14,12 @@
 //      invalid -> replace the component with fallback markdown so the lesson still reads,
 //   5. a half-streamed learning tag at the tail is cut so partial streams always compile,
 //   6. <Followups items={[...]}/> is protocol, not UI: it is lifted out (followupPrompts).
+//   7. math spans (<math>, $$…$$, \[…\], \(…\), safe $…$) are hoisted verbatim (math-spans.js).
 
 import { compile, toDilPayload, defaultResolutionId } from '../../chatgpt-dil/src/compiler.js';
 import { tryParseExpression } from './lenient-json.js';
 import { LEARNING_COMPONENTS, META_COMPONENTS, validateComponentProps, fallbackMarkdownFor } from './catalog-schema.js';
+import { protectMath, restoreMathConstants } from './math-spans.js';
 
 const KNOWN = new Set([...Object.keys(LEARNING_COMPONENTS), ...Object.keys(META_COMPONENTS)]);
 const PLACEHOLDER = (n) => `__wonder_h${n}__`;
@@ -330,6 +332,8 @@ export function compileWonder(markdown, opts = {}) {
   const pre = preprocess(String(markdown ?? ''));
   pre.source = sanitizePrimitiveExpressions(pre.source);
   pre.fallbackSource = sanitizePrimitiveExpressions(pre.fallbackSource);
+  const math = protectMath(pre.source, { partial: !!opts.partial });
+  pre.source = math.source; // fallbackSource keeps the model's own math markup ($…$ reads fine as markdown)
   const salt = opts.salt || '';
   // ids depend only on (name, ordinal, salt): stable across streamed revisions of one message
   const explicit = {};
@@ -337,7 +341,7 @@ export function compileWonder(markdown, opts = {}) {
   const resolutionIdFor = (name, _props, ordinal) => explicit[name]?.[ordinal] || defaultResolutionId(name, { __salt: salt }, ordinal);
   const result = compile(pre.source, { partial: !!opts.partial, resolutionIdFor });
   let next = Object.keys(result.constants).reduce((m, k) => Math.max(m, Number(k) + 1), 0);
-  const constants = result.constants;
+  const constants = restoreMathConstants(result.constants, math.latex);
   const code = result.code.replace(PLACEHOLDER_RE, (_, n) => {
     const key = String(next++);
     constants[key] = pre.hoisted[Number(n)];

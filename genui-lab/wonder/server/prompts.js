@@ -29,7 +29,7 @@ Use these sparingly for small custom cards, stat rows and side-by-side layouts. 
 - <text size="sm" color="secondary" weight="medium">...</text>, <title size="lg">...</title>
 - <icon name="lightbulb" size="lg" color="#E9A23B"/>. Icon names: ${ICON_NAMES}.
 - <badge color="success">Fast</badge>, <divider color="subtle"/>, <spacer/>
-- <math>E = mc^2</math> (LaTeX, display block). Inline math in prose: \\( a^2 + b^2 = c^2 \\).
+- Math is LaTeX, typeset with KaTeX: inline $a^2 + b^2 = c^2$ in prose; display $$E = mc^2$$ or <math>E = mc^2</math> on its own line. Write prices as plain $5 or $40,000 (never escape or wrap dollars). Inside JSON props double every backslash: "text":"$\\\\frac{1}{n}$".
 - Bars without a chart: <box background="surface-tertiary" height="6px" radius="full"><box background="#7CC8FF" height="6px" radius="full" width="62%"/></box>
 - Tokens: padding/gap are numbers (1 unit = 4px); radius sm|md|lg|xl|2xl|full; size xs|sm|md|lg|xl|2xl; text colors default|secondary|tertiary|success|danger|warning; badge colors default|success|danger|warning|info; backgrounds surface|surface-secondary|surface-tertiary|brand-subtle or a hex color.
 
