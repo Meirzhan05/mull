@@ -3,7 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createWonderServer } from '../server/app.js';
-import { normalizeContinueFrom, createContinuationSources, demoContinuation, steeringUserContent } from '../server/steering.js';
+import { normalizeContinueFrom, createContinuationSources, demoContinuation, steeringUserContent, trimToLastBlock } from '../server/steering.js';
 import {
   trimToLastPage, trimBeforePage, sliceFromPage, pageCount, pageTitles, keptForContinue, citeRefsIn, resolutionIdsOf,
   carryOver, mergeContinuedAppData, sourcesFromAppData, lessonPhase, statusAfterStop, isResumableFailure, STEER_CHIPS,
@@ -57,23 +57,24 @@ const REST = '## Page three, again\n\nNew third page.\n\n## Check your understan
 
 // ---------------------------------------------------------------- Claude path (fake client)
 
-test('continueFrom resume (no instruction): kept pages replace, no prefill, search + memory still applied', async () => {
-  const client = fakeClient({ text: REST });
+test('continueFrom resume (no instruction): complete blocks replace, no prefill, search + memory still applied', async () => {
+  const TAIL = 'Third page text.\n\n## Check your understanding\n\nQuiz here.\n';
+  const client = fakeClient({ text: TAIL });
   await withServer({ mode: 'claude', client }, async (base, server) => {
     server.memory.add({ fact: 'Learns best with cooking analogies.', kind: 'preference', source: 'user' });
     const res = await post(base, '/api/lesson/stream', { topic: 'steady', continueFrom: { markdown: PARTIAL } });
     assert.equal(res.status, 200);
     const { recs, turn } = await readStream(res);
     assertWellFormed(recs);
-    const kept = trimToLastPage(PARTIAL);
-    assert.equal(kept, FULL.slice(0, FULL.indexOf('## Page three')));
+    const kept = trimToLastBlock(PARTIAL);
+    assert.equal(kept, FULL.slice(0, FULL.indexOf('Third page')), 'mid-page: the "## Page three" heading block is kept, the half paragraph dropped');
     const status = recs.find((r) => r.detail?.kind === 'steering-status').detail;
     assert.deepEqual([status.status, status.resume], ['accepted', true]);
     assert.ok(!recs.some((r) => r.detail?.kind === 'steering-message'), 'no user message without an instruction');
     const replace = recs.find((r) => r.type === 'content' && r.mode === 'replace' && r.revision > 1);
     assert.equal(replace.markdown, kept);
     assert.ok(replace.dil);
-    assert.equal(turn.primary.markdown, kept + REST);
+    assert.equal(turn.primary.markdown, FULL, 'continued seamlessly mid-page');
     assert.equal(turn.primary.status, 'complete');
     assert.ok(recs.some((r) => r.type === 'reasoning' && /Resuming/.test(r.status.text)));
 
@@ -82,9 +83,10 @@ test('continueFrom resume (no instruction): kept pages replace, no prefill, sear
     assert.equal(params.messages[0].role, 'user');
     const [req, ctx] = params.messages[0].content;
     assert.match(req.text, /Write a lesson about: steady/);
-    assert.match(ctx.text, /<lesson_so_far>\n# Steady lesson[\s\S]*## Page two\n\nSecond page text\.\n<\/lesson_so_far>/);
-    assert.doesNotMatch(ctx.text, /Third page/, 'the unfinished page is dropped');
-    assert.match(ctx.text, /Continue the lesson from where it stopped/);
+    assert.match(ctx.text, /<lesson_so_far>\n# Steady lesson[\s\S]*## Page two\n\nSecond page text\.\n\n## Page three\n<\/lesson_so_far>/);
+    assert.doesNotMatch(ctx.text, /Third page/, 'the unfinished paragraph is dropped');
+    assert.match(ctx.text, /continue from the very next sentence; do not repeat or rewrite anything above; keep the same page structure/i);
+    assert.match(ctx.text, /partway through the page "## Page three"[\s\S]*without writing its "## " heading again/);
     assert.ok(params.tools.some((t) => t.name === WEB_SEARCH_TOOL.name), 'web search stays on');
     assert.ok(JSON.stringify(params.system).includes('cooking analogies'), 'memory still personalizes');
   });
@@ -220,9 +222,11 @@ test('steeringUserContent modes: steer, resume, resume with an instruction, revi
   const kept = '# T\n\n## P\n\nx<Cite refs={["turn0search0"]}/>\n\n';
   assert.match(steeringUserContent('req', kept, 'Simpler')[1].text, /While it was streaming[\s\S]*Continue the lesson from here/);
   const resume = steeringUserContent('req', kept, '', { mode: 'resume' })[1].text;
-  assert.match(resume, /connection dropped[\s\S]*Continue the lesson from where it stopped/);
+  assert.match(resume, /connection dropped[\s\S]*Continue from the very next sentence; do not repeat or rewrite anything above; keep the same page structure/);
   assert.doesNotMatch(resume, /Cite|""/);
-  assert.match(steeringUserContent('req', kept, 'Go deeper', { mode: 'resume' })[1].text, /asked you to change course for the rest: "Go deeper"/);
+  const withChange = steeringUserContent('req', kept, 'Go deeper', { mode: 'resume' })[1].text;
+  assert.match(withChange, /asked you to change course for the rest: "Go deeper"[\s\S]*Continue from the very next sentence/);
+  assert.match(withChange, /partway through the page "## P"/);
   assert.match(steeringUserContent('req', kept, 'Shorter', { mode: 'revise', fromPage: 2 })[1].text, /from page 2 on[\s\S]*"Shorter"[\s\S]*Write page 2 and every page after it/);
 });
 

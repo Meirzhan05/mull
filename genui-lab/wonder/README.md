@@ -242,6 +242,7 @@ test/*.test.js, test/index.js, test/helpers.js
 - **One sandbox worker per surface**: the lesson plus each tutor reply. Very long tutor threads therefore start many workers. They are terminated when you leave the lesson.
 - **Tutor replies are not lesson-specific in demo mode.** They are templates that use the lesson's KeyTerms and Quiz. Any other topic streams one of the three sample lessons.
 - **No accounts or sync.** Courses, lessons, the deck and XP live in this browser's localStorage, and the app falls back to in-memory storage when localStorage is blocked.
+- **Multi-tab is one writer per lesson, not a merge.** The cross-tab lock keeps two tabs from streaming the same lesson, but `store.js` still writes its whole state under one key. A save in one tab (XP, the deck, another lesson) can overwrite another tab's unrelated changes made since it loaded. The lease fallback, used only without Web Locks, is best effort: two tabs that write the lease in the same instant can both believe they won.
 - **Teacher history is text.** Earlier turns go back to Claude as markdown with `[Card: …]` notes, not as the original tool_use/tool_result blocks. Card state on the server is in memory, but cards carry their state, so they survive restarts.
 - **Memory is one file for one local learner.** There are no accounts. It is not encrypted; "Forget everything" deletes it.
 - **Inherited from chatgpt-dil:** a best-effort sandbox lockdown and no SVG `<text>`. Flowchart and ConceptMap are therefore laid out with boxes rather than drawn edges.
@@ -293,13 +294,14 @@ Lessons can search the web, and Claude's citations show up as ChatGPT-style numb
 
 ## Phase 4: mid-turn steering
 
-- **UI.** One composer (`public/steer-bar.js`) with the same chips (Simpler, More examples, Go deeper, Shorter) and free-text input in three modes. `public/steering-core.js` holds the chips, the page helpers, the reducer and the continuation/persistence helpers shared by server, client and tests.
+- **UI.** One composer (`public/steer-bar.js`) with the same chips (Simpler, More examples, Go deeper, Shorter) and free-text input in four modes. `public/steering-core.js` holds the chips, the page helpers, the reducer and the continuation/persistence helpers shared by server, client and tests.
   - **Live** (under the reasoning line while a lesson streams): `POST /api/lesson/steer`, below.
   - **Revise** (a finished lesson): a sticky "Revise from page N" pill that follows the `##` page in view and opens the composer. It rewrites that page and every page after it.
-  - **Resume** (an interrupted lesson): a "Lesson interrupted" banner with **Resume lesson**, or resume with a chip or typed change.
+  - **Resume** (an interrupted lesson): a "Lesson interrupted" banner with **Resume lesson**, or resume with a chip or typed change. It continues from the last complete paragraph, mid-page included.
+  - **Elsewhere** (another tab holds the lesson's lock): a "Writing in another tab" notice instead of the chips, input and Resume (see the cross-tab lock below).
 - **`POST /api/lesson/steer {operationId, instruction}`.** The operationId comes from the stream's control records. The endpoint aborts that operation's current upstream attempt (`server/steering.js`: one AbortController per attempt, linked to the response).
   - Accepted: returns `{ok:true, status:"accepted"}`. It answers "accepted" only while the operation is open, and an accepted steer is always applied. That includes a steer that lands after Claude's last token but before the turn closes: the server then keeps every page except the last and continues with the instruction, so it is never dropped silently.
-  - Finished or unknown operation: 409 `{status:"rejected", reason:"not_streaming"}`. The client then falls back to `continueFrom` automatically, after the current stream ends: it trims to the last page and continues.
+  - Finished or unknown operation: 409 `{status:"rejected", reason:"not_streaming"}`. The client then falls back to `continueFrom` automatically, after the current stream ends: it sends the finished lesson with `fromPage` = its last page, so the steer stays page-level and rewrites that page.
   - A second steer while one is still being applied: 409 `{status:"rejected", reason:"busy"}`, plus a `steering-status rejected` record on the stream.
 - **The same NDJSON response continues** with:
   1. `control steering-status {status:"accepted", instruction}` and `control steering-message` (ChatGPT §1.5).
@@ -327,13 +329,32 @@ Before this, steering needed the original NDJSON connection: after a reload ther
 | `messageId?` | The original message id. It salts the resolution ids, so the kept pages compile to the same ids and their components keep their state |
 | `sources?` | Up to 60 source items behind the kept Cite pills (from the old `componentResults`). Only refs cited in the kept pages are accepted |
 
-- **Kept part.** `fromPage` → everything before that page (`trimBeforePage`); otherwise the last complete `##` page (`trimToLastPage`, fence-aware).
+- **Kept part.** `fromPage` (revise) → everything before that page (`trimBeforePage`). Otherwise (resume, with or without an instruction) → everything up to the last complete paragraph/block (`trimToLastBlock` in `server/steering.js`), so an interrupted page keeps its heading and finished paragraphs. A cut point is the start of a line after a blank line, accepted only when the kept prefix:
+  - is outside a code fence;
+  - has no half-written component tag and no component or primitive element left open (`scanComponentTags` from `server/compile.js`: an `incomplete` tag means JSON props still streaming; `<Callout>…`/`<grid>…` must be closed);
+  - has no open math span (`$…$`, `$$…$$`, `\[…\]`, `\(…\)`, `<math>…</math>`: `protectMath` from `server/math-spans.js` holds nothing back in partial mode);
+  - does not end in a list, table or blockquote that may still continue (a different block must already have started after it).
+
+  The page-level cut is the floor: it never keeps less than `trimToLastPage`. A live steer and "Revise from this page" stay page-level on purpose (they rewrite the rest from the next page).
 - **Records.** The same as a live steer: `control steering-status accepted` (with `resume: true` when there is no instruction), `steering-message` (only with an instruction), a reasoning line, then a `replace` record with the kept markdown (revision 2, after the empty start) and normal appends. Every record passes chatgpt-dil's `validateRecord`, and revisions only increase.
-- **Request.** The normal lesson loop, with web search, memory and citations exactly as for a new lesson. The single user turn is `steeringUserContent(request, kept, instruction, {mode})`: the original request plus `<lesson_so_far>` (cites stripped) plus the instruction. There is no prefill. There are three wordings: steer, resume ("continue from where it stopped") and revise ("write page N and every page after it again"). A continuation stream is steerable live like any other.
+- **Request.** The normal lesson loop, with web search, memory and citations exactly as for a new lesson. The single user turn is `steeringUserContent(request, kept, instruction, {mode})`: the original request plus `<lesson_so_far>` (cites stripped) plus the instruction. There is no prefill. There are three wordings: steer ("start directly with the next `##` page"), resume ("it stopped right after the last line above, possibly partway through the page "## X". Continue from the very next sentence; do not repeat or rewrite anything above; keep the same page structure", and finish that page without writing its heading again; with an instruction, the change applies from there on) and revise ("write page N and every page after it again"). A continuation stream is steerable live like any other.
+- **Duplicate guard.** Resuming mid-page invites the model to restate the page heading or the last paragraph. `createContinuationGuard(kept)` sits between the continuation's first upstream attempt and the writer. It buffers the start of the stream and drops every leading block that matches a kept block, exactly or after whitespace/case normalisation with Cite tags removed. The first text that cannot be a repeat is released immediately, so streaming isn't delayed.
 - **Citation ids.** `createContinuationSources` (in `server/steering.js`; it wraps `grounding.js`'s registry) seeds the kept sources so their pills resolve on the server, and the final `<Sources/>` lists old and new sources. New refs start after the highest `turn0search<N>` in the kept markdown, numbered N+2, so they never collide with kept Cite tags. A URL that was already cited reuses its ref and number.
 - **Client merge.** At the first program of the continuation, `carryOver` keeps the old citation and widget `componentResults` only for resolution ids still present in the kept program. Old Cite pills therefore keep working even without `sources`, and rewritten widgets (such as the quiz) start fresh. `mergeContinuedAppData` overlays the new stream's results on top, with new winning, and the merged appData is persisted with the lesson.
 - **Persistence states** (`lesson.status`): `new` | `streaming` (with `streamOwner` = this page load's id) | `interrupted` | `complete` | `failed`. During a stream the client persists the markdown, the latest dil, `messageId` and appData about once a second, and again on `pagehide`/`beforeunload`. `lessonPhase()` treats a `streaming` lesson owned by another page load (reload, closed tab) as interrupted. A stream that ends with `control failed` code `stalled` or `network` (the idle watchdog in `server/claude.js`), or with a client-side network drop, is persisted as `interrupted` and gets the Resume banner. Other failure codes keep the normal error card with "Try again". A failed continuation that never started leaves the persisted lesson untouched.
-- **Demo mode.** It is deterministic. `demoContinuation` streams the sample's pages after the kept ones, grounds their citations with the continuation registry, and applies `steerDemoRemainder` when there is an instruction. Resuming an interrupted sample reproduces it byte for byte.
+- **Demo mode.** It is deterministic. When the kept text (Cite tags removed) is a prefix of the sample, `demoContinuation` streams the sample from exactly that paragraph boundary, mid-page included. Otherwise it continues after the kept text's last block if the sample contains it, or else from the next page. It grounds citations with the continuation registry and applies `steerDemoRemainder` when there is an instruction. Resuming an interrupted sample reproduces it byte for byte from every paragraph boundary.
+
+### Cross-tab lock: one writer per lesson
+
+Every stream writes the lesson to localStorage, so two tabs resuming the same lesson would both write it. `public/lesson-lock.js` (`createLessonLocks`; locks, storage, clock, timers, channel and event target are all injectable) gives each lesson a lock that is held for the whole of any stream of it: a new lesson, a resume, a steer after a reload, or a revise.
+
+- **Web Locks** (preferred): `navigator.locks.request('wonder-lesson-<id>', {ifAvailable:true}, …)`. A tab that can't take it gets `null` immediately instead of queueing. The browser frees it when the tab closes or crashes. `isHeld()` uses `locks.query()`, or an `ifAvailable` probe when `query` is missing.
+- **Lease fallback** (no `navigator.locks`): `localStorage['wonder.lock.<id>'] = {owner, expires}`. The lease lasts 10 s, is renewed every 3 s, and is removed on release and on `pagehide`. An expired lease (a frozen or crashed tab) is free to take.
+- **Lesson screen** (`public/app.js`). Before deciding what to show, the screen asks `isHeld()`. `lessonPhase(lesson, {lockedElsewhere})` returns `elsewhere` whenever another tab holds the lock, so the "streaming → interrupted after a reload" rule never fires for a lesson another tab is still writing, and no second stream starts.
+  - The waiting tab shows "This lesson is being written in another tab" and re-reads the lesson from storage on every `storage` event, so it follows the other tab's saves live. These copies are in memory only, never written back.
+  - When the lock is freed (a BroadcastChannel `wonder` "released" message, the storage event on the lease key, or a 3 s poll as a backstop), it re-opens the lesson from storage. That lands in Revise when the other tab finished and in Resume when it was interrupted.
+  - A tab sitting in Resume or Revise also switches to the notice when another tab takes the lock (an "acquired" broadcast). If two tabs click Resume at once, the one that loses `acquire()` shows the notice.
+  - The writer releases the lock in its own `pagehide` handler, after its last save, so a waiting tab never re-opens the lesson from an older save.
 
 ## Phase 5: interactive function graphs
 
@@ -389,6 +410,13 @@ Before this, steering needed the original NDJSON connection: after a reload ther
   - NDJSON validity and monotonic revisions.
   - Client `carryOver`/`mergeContinuedAppData` tail replacement.
   - Persistence states and the `stalled`/`network` → interrupted mapping.
+- **`resume.test.js`** (mid-page resume + cross-tab lock):
+  - Paragraph-boundary trimming on crafted cases: never inside a tag, a component's JSON props, a code fence, a math span, or a list/table/blockquote in progress; never below the page floor.
+  - An every-prefix property on the three demo lessons plus the grounded one: the kept text compiles with zero invalid components, has no half-written tag or open math span, and a demo resume from it reproduces the lesson.
+  - The continuation prompt shape: resume vs steer vs revise, and `normalizeContinueFrom` keeping blocks for a resume.
+  - The duplicate guard: heading, heading + paragraph, whitespace-normalised and cited repeats, several chunk sizes, early release.
+  - The Claude path de-duplicating a repeated heading and paragraph, and demo resume over HTTP from a mid-page boundary, with and without a change.
+  - The lock: lease acquisition, exclusivity, renewal, expiry, takeover and release; `watch` via poll, storage event and `pagehide`; Web Locks across two instances sharing Node's `navigator.locks` (including the probe path and the "acquired" broadcast); interrupted detection respecting a live lock.
 - **`function-graph.test.js`:**
   - Good and bad props: syntax, unknown variables and functions, too many params, points or curves, reserved names, ranges.
   - Fallback.
@@ -419,8 +447,15 @@ Live check against `claude-opus-5-5`, using 5 requests:
    - **"Revise from page 3" with More examples.** Pages 1–2 were unchanged and pages 3–5 were rewritten (5.9k → 7.2k chars), with new refs starting after the kept `turn0search4`. Old pills on page 1 still opened their popover.
    - Checked at desktop and 390 px with no horizontal scroll and no console errors.
 
+6. **Mid-page resume + cross-tab lock, 2 requests.** "How ocean tides work":
+   - **Reload mid-page.** The lesson was reloaded on page 3, "Coastlines turn up the volume", at 6,469 chars, in the middle of its second paragraph.
+   - **Resume.** The `replace` record kept the page heading and its first complete paragraph (it ends after `…measured at Burntcoat Head.` + the Cite pill). The continuation began "Why so huge there? The main reason is resonance…", with no repeated heading or paragraph. The heading appears once, and the lesson finished with 4 pages + Quiz (10,011 chars).
+   - **Second tab during the resume.** It showed "Writing in another tab", with no Resume or Steer and the stored status still `streaming`, not marked interrupted. When the first tab finished, it re-opened the lesson in Revise mode with Finish enabled.
+   - Also checked against a slowed demo server (no requests): a tab already in Resume mode switches to the notice when the other tab resumes, and it follows the other tab into Resume when that tab is reloaded mid-stream.
+   - Checked at desktop and 390 px with no horizontal scroll and no console errors.
+
 Known gaps:
-- Revising or resuming rewrites from a page boundary. It can't edit one paragraph inside a page, and an interrupted page is always rewritten from its heading.
+- Revise still rewrites from a page boundary. It can't edit one paragraph inside a page. Resume continues mid-page, but only from a paragraph boundary: a half-written paragraph is dropped and written again.
 - A continuation drops widget state (such as quiz answers) for the rewritten pages, and a steer that lands after the last page has been written only rewrites the last page.
 - Graph slider values are not persisted.
 - **Search latency is tuned.** Claude writes the title and hook before searching and makes 1–2 focused searches (`max_uses: 3`). On the same JWST topic, live: first text went from 34.2 s to 1.6 s and the whole lesson from 59.5 s to 44.1 s, with 9 sources still cited. Every stream has an idle watchdog (`WONDER_STREAM_IDLE_MS`, default 120 s), so a stalled connection fails fast as a resumable `stalled`/`network` error instead of hanging. After a search, an exact repeat of an already-written paragraph (e.g. the hook) is dropped.

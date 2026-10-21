@@ -177,15 +177,21 @@ export function citeRefsIn(markdown) {
 // lesson.status: 'new' (never streamed) | 'streaming' (a page is writing it: streamOwner = that
 // page's id) | 'interrupted' (stopped before the end, markdown = what was shown) | 'complete'
 // | 'failed' (an error before anything was written). A 'streaming' lesson whose owner is not
-// the current page was left by a reload or a closed tab, so it counts as interrupted.
+// the current page was left by a reload or a closed tab, so it counts as interrupted, unless
+// another tab still holds the lesson's lock (public/lesson-lock.js): then it is 'elsewhere'.
 
 /** Failure codes that mean "the stream was cut", not "the request was bad": resumable. */
 export const RESUMABLE_FAILURES = Object.freeze(['stalled', 'network']);
 export const isResumableFailure = (code) => RESUMABLE_FAILURES.includes(String(code || ''));
 
-/** 'complete' | 'streaming' | 'interrupted' | 'new' for a persisted lesson. */
-export function lessonPhase(lesson, { pageId } = {}) {
+/**
+ * 'complete' | 'streaming' | 'interrupted' | 'new' | 'elsewhere' for a persisted lesson.
+ * `lockedElsewhere`: another tab holds this lesson's lock (it is streaming, resuming or
+ * revising it), so this page must neither mark it interrupted nor start its own stream.
+ */
+export function lessonPhase(lesson, { pageId, lockedElsewhere = false } = {}) {
   if (!lesson) return 'new';
+  if (lockedElsewhere) return 'elsewhere';
   const hasText = !!String(lesson.markdown || '').trim();
   if (lesson.status === 'complete' && lesson.dil) return 'complete';
   if (lesson.status === 'streaming' && pageId && lesson.streamOwner === pageId) return 'streaming';

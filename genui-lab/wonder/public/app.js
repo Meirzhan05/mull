@@ -13,9 +13,24 @@ import { renderTeacher, queueTeacherMessage } from './teacher-screen.js';
 import { renderMemory } from './memory-screen.js';
 import { createSteerBar } from './steer-bar.js'; // Phase 4
 import { lessonPhase, statusAfterStop, carryOver, mergeContinuedAppData, sourcesFromAppData, pageCount, pageTitles } from './steering-core.js';
+import { createLessonLocks } from './lesson-lock.js'; // one writer per lesson across tabs
 
 const store = createStore();
 const PAGE_ID = uid('page'); // this page load: a 'streaming' lesson owned by another id was interrupted
+// Cross-tab lock per lesson, held for any stream of it. Released by the lesson's own pagehide
+// handler (after its last save), so a waiting tab never reads the lesson before that save.
+const lessonLocks = createLessonLocks({ owner: PAGE_ID, releaseOnHide: false });
+const STORE_KEY = 'wonder.v1'; // store.js KEY: the waiting tab re-reads the lesson from it
+
+/** Replace this tab's in-memory copy of a lesson with the stored one (no write back). */
+function syncLessonFromStorage(lessonId) {
+  try {
+    const fresh = JSON.parse(localStorage.getItem(STORE_KEY) || 'null')?.lessons?.[lessonId];
+    if (!fresh || typeof fresh !== 'object') return false;
+    store.data.lessons[lessonId] = fresh; // in memory only: the writing tab owns the stored copy
+    return true;
+  } catch { return false; }
+}
 const app = document.getElementById('app');
 let status = { mode: 'demo', model: 'claude-opus-5-5' };
 let teardown = [];
@@ -362,6 +377,7 @@ function renderLesson(lessonId) {
   // -- streaming, resume and revise (Phase 4). Persisted lesson.status: 'new' | 'streaming'
   // (streamOwner = PAGE_ID) | 'interrupted' | 'complete' | 'failed' (see steering-core lessonPhase).
   let streaming = false;
+  let busy = false; // runStream holds (or is taking / releasing) the cross-tab lock
   let queued = null; // a continuation requested while a stream is still finishing
   let failNote = '';
 
@@ -384,26 +400,83 @@ function renderLesson(lessonId) {
     if (note) steerBar.setStatus(note);
   }
 
-  const phase = lessonPhase(lesson, { pageId: PAGE_ID });
-  if (phase === 'complete') {
-    surface.render({ code: lesson.dil.code, constants: lesson.dil.constants, appData: appDataFor() });
-    markComplete();
-    steerBar.setMode('revise');
-    requestAnimationFrame(onPageScroll);
-  } else if (phase === 'interrupted' || phase === 'streaming') {
-    // reload, closed tab or dropped connection mid-lesson: show what was written, offer Resume
-    if (lesson.dil) surface.render({ code: lesson.dil.code, constants: lesson.dil.constants, appData: appDataFor() });
-    if (lesson.status !== 'interrupted') saveLesson(lessonId, { status: 'interrupted', streamOwner: null });
-    showInterrupted(lesson.interruptedReason || '');
-  } else {
-    runStream();
+  /** Show the stored program (another tab's latest save, or this lesson after a reload). */
+  function renderStored() {
+    const l = store.data.lessons[lessonId];
+    if (!l) return;
+    current = { dil: l.dil, appData: l.appData };
+    if (l.dil) surface.render({ code: l.dil.code, constants: l.dil.constants, appData: appDataFor() }, { animated: false });
+    const t = lessonTitleFrom(l.markdown || '', '');
+    if (t && titleEl.textContent !== t) titleEl.textContent = t;
+    if (l.status !== 'complete') progressFill.style.width = `${Math.min(92, 6 + pageCount(l.markdown) * 18)}%`;
   }
 
+  // Another tab is writing this lesson (holds its lock): show its saves live, no Resume/Steer,
+  // and re-open the lesson from storage once that tab lets go.
+  let stopWatch = null;
+  function showElsewhere() {
+    reasoning.hidden = true;
+    errorBox.hidden = true;
+    finishBtn.disabled = true;
+    steerBar.setMode('elsewhere');
+    if (stopWatch) return;
+    const onStorage = (e) => { if (e.key === STORE_KEY && syncLessonFromStorage(lessonId)) renderStored(); };
+    window.addEventListener('storage', onStorage);
+    let reopen = 0;
+    stopWatch = lessonLocks.watch(lessonId, () => {
+      window.removeEventListener('storage', onStorage);
+      // the writer saves right before it releases; give that save a moment to land
+      reopen = setTimeout(() => {
+        if (ac.signal.aborted) return;
+        syncLessonFromStorage(lessonId);
+        const y = window.scrollY;
+        route();
+        window.scrollTo(0, y);
+      }, 250);
+    });
+    teardown.push(() => { stopWatch?.(); clearTimeout(reopen); window.removeEventListener('storage', onStorage); });
+  }
+
+  // In Resume / Revise mode, another tab may take the lesson (its own Resume / Revise): follow it.
+  const stopTaken = lessonLocks.onTaken(lessonId, () => {
+    if (busy || ac.signal.aborted) return;
+    syncLessonFromStorage(lessonId);
+    renderStored();
+    showElsewhere();
+  });
+  teardown.push(stopTaken);
+
+  // Decide what to show. A lesson another tab holds the lock for is never marked interrupted
+  // here, and never streamed twice; ask the lock first (async), showing what is stored meanwhile.
+  const initialPhase = lessonPhase(lesson, { pageId: PAGE_ID });
+  if (lesson.dil && initialPhase !== 'new') renderStored();
+  lessonLocks.isHeld(lessonId).then((elsewhere) => {
+    if (ac.signal.aborted) return;
+    const l = store.data.lessons[lessonId];
+    const phase = lessonPhase(l, { pageId: PAGE_ID, lockedElsewhere: elsewhere });
+    if (phase === 'elsewhere') {
+      showElsewhere();
+    } else if (phase === 'complete') {
+      markComplete();
+      steerBar.setMode('revise');
+      requestAnimationFrame(onPageScroll);
+    } else if (phase === 'interrupted' || phase === 'streaming') {
+      // reload, closed tab or dropped connection mid-lesson: show what was written, offer Resume
+      if (l.status !== 'interrupted') saveLesson(lessonId, { status: 'interrupted', streamOwner: null });
+      showInterrupted(l.interruptedReason || '');
+    } else {
+      runStream();
+    }
+  });
+
   /** Resume (no instruction), steer after a reload, or revise from page N: POST {continueFrom}. */
-  function continueLesson({ instruction = '', fromPage } = {}) {
-    if (streaming) { queued = { instruction, fromPage }; return; }
+  function continueLesson({ instruction = '', fromPage, fallback = false } = {}) {
+    if (streaming || busy) { queued = { instruction, fromPage, fallback }; return; }
     const l = store.data.lessons[lessonId];
     if (!String(l?.markdown || '').trim()) { runStream(); return; }
+    // a live steer that missed the stream (Claude had finished) stays page-level like a live
+    // steer: rewrite the last page. A resume (interrupted lesson) continues mid-page.
+    if (fallback && !fromPage && l.status === 'complete' && pageCount(l.markdown) > 0) fromPage = pageCount(l.markdown);
     runStream({
       markdown: l.markdown,
       ...(instruction ? { instruction } : {}),
@@ -413,7 +486,31 @@ function renderLesson(lessonId) {
     });
   }
 
+  /** Take the lesson's cross-tab lock for the whole stream; without it, wait for the other tab. */
   async function runStream(continueFrom = null) {
+    busy = true;
+    let lock = null;
+    try {
+      lock = await lessonLocks.acquire(lessonId);
+      if (ac.signal.aborted) return;
+      if (!lock) {
+        // another tab took it first (both offered Resume): show its progress instead
+        queued = null;
+        syncLessonFromStorage(lessonId);
+        renderStored();
+        showElsewhere();
+        return;
+      }
+      teardown.push(() => lock.release()); // leaving the screen frees it at once
+      await streamLesson(continueFrom, lock);
+    } finally {
+      await lock?.release();
+      busy = false;
+      if (queued && !ac.signal.aborted) { const q = queued; queued = null; continueLesson(q); }
+    }
+  }
+
+  async function streamLesson(continueFrom, lock) {
     streaming = true;
     errorBox.hidden = true;
     finishBtn.disabled = true;
@@ -428,7 +525,7 @@ function renderLesson(lessonId) {
     let lastSave = 0;
     const persist = (status = 'streaming') => saveLesson(lessonId, { status, streamOwner: status === 'streaming' ? PAGE_ID : null, markdown: latest.markdown, dil: latest.dil, appData: current.appData, messageId, interruptedReason: null });
     let unloading = false; // a reload / closed tab rejects the fetch: that is an interruption, not an error
-    const onHide = () => { unloading = true; if (streaming && began) { persist(); store.flush(); } };
+    const onHide = () => { unloading = true; if (streaming && began) { persist(); store.flush(); } lock.release(); };
     window.addEventListener('pagehide', onHide);
     window.addEventListener('beforeunload', onHide);
     if (!continueFrom) { current.dil = null; persist(); }
@@ -496,7 +593,7 @@ function renderLesson(lessonId) {
       const next = statusAfterStop({ markdown: latest.markdown, failureCode: e.code });
       if (next === 'interrupted') {
         // stalled / network / client-side drop: keep the pages, offer Resume (continueFrom)
-        failNote = e.code ? e.message : 'The connection dropped. Resume to continue from the last complete page.';
+        failNote = e.code ? e.message : 'The connection dropped. Resume to continue from the last complete paragraph.';
         persist('interrupted');
         if (e.code) saveLesson(lessonId, { interruptedReason: failNote }); // a client-side drop may just be a reload: not persisted
         store.flush();
@@ -513,7 +610,6 @@ function renderLesson(lessonId) {
     } finally {
       window.removeEventListener('pagehide', onHide);
       window.removeEventListener('beforeunload', onHide);
-      if (queued && !ac.signal.aborted) { const q = queued; queued = null; continueLesson(q); }
     }
   }
 }

@@ -31,7 +31,7 @@ import { TEACHER_TOOLS, createCardStore, createTeacherToolkit, runTeacherLoop, n
 import { createDemoTeacherClient } from './teacher-demo.js';
 // Phase 3 (grounded lessons) + Phase 4 (steering)
 import { withWebSearch, streamGrounded, createSourceRegistry, citationAppData, stripGroundingTags, SOURCES_TAG } from './grounding.js';
-import { createSteeringRegistry, cleanInstruction, steeringUserContent, steerDemoRemainder, trimToLastPage, normalizeContinueFrom, createContinuationSources, demoContinuation } from './steering.js';
+import { createSteeringRegistry, cleanInstruction, steeringUserContent, steerDemoRemainder, trimToLastPage, normalizeContinueFrom, createContinuationSources, demoContinuation, createContinuationGuard } from './steering.js';
 import { groundDemoLesson } from './demo-grounding.js';
 import { pageCount } from '../public/steering-core.js';
 
@@ -244,7 +244,13 @@ export function createWonderServer(opts = {}) {
     if (cont) applyContinue(writer, cont);
     else writer.reasoning('Planning the lesson…');
     const narrate = progressNarrator(writer, cont ? { first: cont.instruction ? `Steering: ${cont.instruction}` : 'Resuming where the lesson stopped…', pages: pageCount(cont.kept) } : undefined);
-    const onText = (t) => { writer.append(t); narrate(); };
+    // continueFrom: the first attempt continues the kept text (mid-page for a resume); a leading
+    // repeat of a kept heading/paragraph is dropped (createContinuationGuard). A later live steer
+    // is page-level and streams unguarded.
+    let guard = cont ? createContinuationGuard(cont.kept) : null;
+    const emit = (t) => { if (t) { writer.append(t); narrate(); } };
+    const onText = (t) => emit(guard ? guard.push(t) : t);
+    const endAttempt = () => { if (guard) { const g = guard; guard = null; emit(g.flush()); } };
     const op = steering.open(writer.operationId, signal, { onReject: (reason, instruction) => writer.control('steering-status', { status: 'rejected', reason, instruction }) });
     // A steer queued while (or just after) the upstream stream ended is applied as a continuation,
     // never dropped: lessonSteer only says "accepted" while the operation is still open, and the
@@ -263,9 +269,11 @@ export function createWonderServer(opts = {}) {
         for (;;) {
           const params = withWebSearch(buildStreamParams({ system: LESSON_SYSTEM_PROMPT, context, messages, effort: 'medium' }), useWebSearch);
           result = await runClaude(writer, params, onText, op.attempt(), useWebSearch ? groundedStream(writer, sources) : undefined);
+          if (result.status === 'done') endAttempt();
           if (result.status !== 'aborted' && result.status !== 'done') break;
           const instruction = nextSteer();
           if (!instruction) break;
+          guard = null;
           const kept = applySteer(writer, instruction);
           messages = [{ role: 'user', content: steeringUserContent(request, kept, instruction) }];
         }
@@ -281,7 +289,9 @@ export function createWonderServer(opts = {}) {
           text = kept + demoContinuation(pick.markdown, kept, cont.instruction, { ground });
         } else text = ground(pick.markdown);
         let r = await streamDemoText(text.slice(kept.length), { onText, delayMs: state.demoDelayMs, signal: op.attempt(), seed: topic.length });
+        if (!r.aborted) endAttempt();
         for (let instruction = nextSteer(); instruction && !signal.aborted; instruction = nextSteer()) {
+          guard = null;
           kept = applySteer(writer, instruction);
           text = kept + (text.startsWith(kept) ? steerDemoRemainder(text.slice(kept.length), instruction) : demoContinuation(pick.markdown, kept, instruction, { ground }));
           r = await streamDemoText(text.slice(kept.length), { onText, delayMs: state.demoDelayMs, signal: op.attempt(), seed: topic.length });

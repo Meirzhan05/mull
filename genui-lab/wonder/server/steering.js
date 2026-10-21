@@ -11,14 +11,261 @@
 //   POST /api/lesson/stream {…, continueFrom:{markdown, instruction?, fromPage?, messageId?, sources?}}
 //     -> the same records without a live stream to steer: resume an interrupted lesson (no
 //        instruction), steer it after a reload, or revise a finished lesson from page N.
+//        An interrupted lesson (resume, with or without an instruction) keeps every complete
+//        paragraph/block of the page it stopped on (trimToLastBlock), not just complete pages,
+//        and the continuation stream is passed through createContinuationGuard so a repeated
+//        heading/paragraph at its start is dropped.
 
 import {
-  trimToLastPage, keptForContinue, pageCount, pageOffsets, citeRefsIn, MAX_STEER_CHARS, STEER_CHIPS,
+  trimToLastPage, trimBeforePage, pageCount, pageOffsets, pageTitles, citeRefsIn, MAX_STEER_CHARS, STEER_CHIPS,
   MAX_CONTINUE_MARKDOWN, MAX_CONTINUE_SOURCES,
 } from '../public/steering-core.js';
 import { stripGroundingTags, createSourceRegistry, domainOf } from './grounding.js';
+import { scanComponentTags } from './compile.js';
+import { protectMath } from './math-spans.js';
+import { PRIMITIVE_TAGS } from '../../chatgpt-dil/src/compiler.js';
 
 export { trimToLastPage };
+
+// ---------------------------------------------------------------- paragraph-boundary trimming
+//
+// Resume keeps everything up to the last complete block: a cut point is the start of a line
+// that follows a blank line, and it is only accepted when the kept prefix
+//   - is outside a code fence,
+//   - has no half-written component tag (scanComponentTags: an "incomplete" tag, e.g. JSON
+//     props still streaming) and no component or primitive element left open (<Callout>…,
+//     <grid>…),
+//   - has no math span left open ($…$, $$…$$, \[…\], \(…\), <math>…</math>: protectMath in
+//     partial mode holds nothing back),
+//   - does not end in a list, table or blockquote that may still continue (the text after the
+//     cut must already have started a different kind of block).
+// The page-level cut (trimToLastPage) is the floor: never keep less than that.
+
+const RAW_PRIMITIVES = new Set(['math', 'code', 'markdown', 'text-only-markdown']);
+const LISTISH = /^[ \t]*(?:[-*+][ \t]|\d{1,9}[.)][ \t]|>|\|)/;
+const CONTINUES_LIST = /^(?:[ \t]+\S|[ \t]*(?:[-*+][ \t]|\d{1,9}[.)][ \t]|>|\|))/;
+
+/** End (exclusive) of the tag at src[i] === '<' (quote- and brace-aware), or -1 if unterminated. */
+function tagEnd(src, i) {
+  let depth = 0;
+  for (let j = i + 1; j < src.length; j++) {
+    const c = src[j];
+    if (c === '"' || c === "'" || (depth > 0 && c === '`')) {
+      let k = j + 1;
+      while (k < src.length && src[k] !== c) k += depth > 0 && src[k] === '\\' ? 2 : 1;
+      if (k >= src.length) return -1;
+      j = k;
+    } else if (c === '{') depth++;
+    else if (c === '}') depth = Math.max(0, depth - 1);
+    else if (c === '>' && depth === 0) return j + 1;
+  }
+  return -1;
+}
+
+/** True when every primitive element (<grid>, <box>, <math>…) opened in `src` is closed. */
+function primitivesClosed(src) {
+  const stack = [];
+  let i = 0;
+  let atLineStart = true;
+  while (i < src.length) {
+    const c = src[i];
+    if (atLineStart) {
+      const fm = /^[ \t]*(`{3,}|~{3,})/.exec(src.slice(i, i + 64));
+      if (fm) {
+        const re = new RegExp('\\n[ \\t]*' + fm[1][0] + '{' + fm[1].length + ',}[ \\t]*(?=\\n|$)', 'g');
+        re.lastIndex = i + fm[0].length;
+        const em = re.exec(src);
+        if (!em) return false; // open fence
+        i = em.index + em[0].length;
+        atLineStart = false;
+        continue;
+      }
+    }
+    if (c === '`') {
+      const run = /^`+/.exec(src.slice(i, i + 16))[0];
+      const close = src.indexOf(run, i + run.length);
+      const para = src.indexOf('\n\n', i);
+      if (close >= 0 && (para < 0 || close < para)) { i = close + run.length; atLineStart = false; continue; }
+    }
+    if (c === '<') {
+      const m = /^<(\/?)([a-z][\w-]*)/.exec(src.slice(i, i + 40));
+      if (m && PRIMITIVE_TAGS.has(m[2])) {
+        const end = tagEnd(src, i);
+        if (end < 0) return false; // half-written tag
+        const name = m[2];
+        if (m[1]) {
+          const at = stack.lastIndexOf(name);
+          if (at >= 0) stack.length = at;
+        } else if (src[end - 2] !== '/') {
+          if (RAW_PRIMITIVES.has(name)) {
+            const close = src.indexOf(`</${name}>`, end);
+            if (close < 0) return false;
+            i = close + name.length + 3;
+            atLineStart = false;
+            continue;
+          }
+          stack.push(name);
+        }
+        i = end;
+        atLineStart = false;
+        continue;
+      }
+    }
+    atLineStart = c === '\n';
+    i++;
+  }
+  return stack.length === 0;
+}
+
+/** True when no component tag is half-written or left open in `src`. */
+function componentsClosed(src) {
+  const depth = new Map();
+  for (const t of scanComponentTags(src)) {
+    if (t.kind === 'incomplete') return false;
+    if (t.kind === 'open' && !t.selfClosing) depth.set(t.name, (depth.get(t.name) || 0) + 1);
+    if (t.kind === 'close') depth.set(t.name, Math.max(0, (depth.get(t.name) || 0) - 1));
+  }
+  for (const n of depth.values()) if (n > 0) return false;
+  return true;
+}
+
+const mathClosed = (src) => protectMath(src, { partial: true }).source === protectMath(src, { partial: false }).source;
+
+// Prefix checks are pure in the prefix; resuming (and the every-prefix tests) re-check the same
+// prefixes, so keep a small memo.
+const prefixMemo = new Map();
+function prefixSafe(prefix) {
+  let v = prefixMemo.get(prefix);
+  if (v === undefined) {
+    v = componentsClosed(prefix) && primitivesClosed(prefix) && mathClosed(prefix);
+    if (prefixMemo.size > 512) prefixMemo.clear();
+    prefixMemo.set(prefix, v);
+  }
+  return v;
+}
+
+/** Cut points: offsets of lines that follow a blank line, outside code fences. */
+function blockStarts(md) {
+  const out = [];
+  let fence = null;
+  let prevBlank = false;
+  let pos = 0;
+  for (const line of md.split('\n')) {
+    if (!fence && prevBlank && pos > 0 && pos <= md.length) out.push(pos);
+    const fm = /^[ \t]*(`{3,}|~{3,})/.exec(line);
+    if (fence) { if (fm && fm[1][0] === fence[0] && fm[1].length >= fence.length && !line.trim().slice(fm[1].length).trim()) fence = null; }
+    else if (fm) fence = fm[1];
+    prevBlank = !fence && line.trim() === '';
+    pos += line.length + 1;
+  }
+  return out;
+}
+
+/** The last non-blank block before `p` (lines since the previous blank line). */
+function blockBefore(md, p) {
+  const lines = md.slice(0, p).replace(/\s+$/, '').split('\n');
+  let i = lines.length - 1;
+  while (i > 0 && lines[i - 1].trim() !== '') i--;
+  return lines.slice(i);
+}
+
+function cutIsSafe(md, p) {
+  const last = blockBefore(md, p);
+  if (!last.length || !last.join('').trim()) return false;
+  if (last.some((l) => LISTISH.test(l))) {
+    // a list / table / blockquote is only finished once a different block has started after it
+    const next = md.slice(p).split('\n').find((l) => l.trim() !== '');
+    if (next === undefined || CONTINUES_LIST.test(next)) return false;
+  }
+  return prefixSafe(md.slice(0, p));
+}
+
+/**
+ * Everything up to the last complete paragraph/block (see above), never less than
+ * trimToLastPage. The result ends at a line start after a blank line (or is the page floor).
+ */
+export function trimToLastBlock(markdown) {
+  const md = String(markdown ?? '');
+  const floor = trimToLastPage(md);
+  const cuts = blockStarts(md).filter((p) => p > floor.length);
+  for (let k = cuts.length - 1; k >= 0; k--) if (cutIsSafe(md, cuts[k])) return md.slice(0, cuts[k]);
+  return floor;
+}
+
+/** The kept part of a continuation: pages before `fromPage` (revise), else complete blocks (resume). */
+export function keptForResume(markdown, fromPage) {
+  return fromPage ? trimBeforePage(markdown, fromPage) : trimToLastBlock(markdown);
+}
+
+/** Heading text of the page the kept text stops on ('' before the first "## "). */
+export function currentPageTitle(kept) {
+  const t = pageTitles(kept);
+  return t.length ? t[t.length - 1] : '';
+}
+
+// ---------------------------------------------------------------- duplicate guard
+//
+// The continuation is asked not to repeat anything, but a model resuming mid-page sometimes
+// re-emits the page heading or the last paragraph. The guard buffers the start of the stream
+// and drops every leading block that matches (exactly, or after whitespace/case normalisation
+// and with Cite tags removed) a block of the kept text, then passes everything through.
+
+const normBlock = (s) => stripGroundingTags(s).replace(/\s+/g, ' ').trim().toLowerCase();
+
+function splitBlocks(md) {
+  return String(md ?? '').split(/\n[ \t]*\n/).map((b) => b.trim()).filter(Boolean);
+}
+
+export function createContinuationGuard(kept) {
+  const k = String(kept ?? '');
+  const cands = new Set(splitBlocks(k).map(normBlock).filter(Boolean));
+  let open = cands.size > 0;
+  let buf = '';
+  let started = false;
+  let dropped = 0;
+  const keptEndsLine = !k || k.endsWith('\n');
+  const release = (s) => {
+    if (!started && keptEndsLine) s = s.replace(/^\n+/, ''); // the kept text already ends the block
+    if (s) started = true;
+    return s;
+  };
+  const isPrefixOfCandidate = (n) => { for (const c of cands) if (c.startsWith(n)) return true; return false; };
+  return {
+    get dropped() { return dropped; },
+    /** Feed streamed text; returns the text to emit now ('' while undecided). */
+    push(text) {
+      if (!open) return release(String(text));
+      buf += String(text);
+      for (;;) {
+        const body = buf.replace(/^\s+/, '');
+        const m = /\n[ \t]*\n/.exec(body);
+        if (m) {
+          if (cands.has(normBlock(body.slice(0, m.index)))) {
+            buf = body.slice(m.index + m[0].length);
+            dropped++;
+            continue;
+          }
+        } else {
+          const n = normBlock(body.replace(/<[^<>]*$/, '')); // a tag still arriving (e.g. a Cite pill)
+          if (!n || isPrefixOfCandidate(n)) return ''; // could still be a repeat: wait
+        }
+        open = false;
+        const out = buf;
+        buf = '';
+        return release(out);
+      }
+    },
+    /** End of stream: a buffered block that is a full repeat is dropped, anything else emitted. */
+    flush() {
+      if (!open) return '';
+      open = false;
+      const out = buf;
+      buf = '';
+      if (cands.has(normBlock(out))) { dropped++; return ''; }
+      return release(out);
+    },
+  };
+}
 
 /** In-flight steerable operations, keyed by the NDJSON operationId. */
 export function createSteeringRegistry() {
@@ -66,8 +313,10 @@ export function cleanInstruction(v) {
  * The continuation request's single user turn: the original request, the lesson so far
  * (already on screen) and the instruction. Server-inserted Cite/Sources tags are removed so
  * Claude does not imitate them. No assistant prefill.
- *   mode 'steer'  (live steer, or a steer that arrived just after Claude finished)
- *   mode 'resume' (the stream was cut; with an instruction it is a steer after a reload)
+ *   mode 'steer'  (live steer, or a steer that arrived just after Claude finished): page level
+ *   mode 'resume' (the stream was cut; with an instruction it is a steer after a reload): the
+ *                 kept text ends at a paragraph boundary, so Claude continues seamlessly from
+ *                 the very next sentence of the page it stopped on
  *   mode 'revise' (a finished lesson, rewritten from page `fromPage` on)
  */
 export function steeringUserContent(originalRequest, keptMarkdown, instruction, { mode = 'steer', fromPage } = {}) {
@@ -84,21 +333,34 @@ export function steeringUserContent(originalRequest, keptMarkdown, instruction, 
         ? `Write page ${fromPage} and every page after it again, applying that request to each of them. Start directly with the next "## " page heading. Do not repeat or rewrite anything above, and do not acknowledge the request in prose. ${finishLine}`
         : 'Write the whole lesson again with that request applied, following the lesson format.',
     );
-  } else if (mode === 'resume' && !instruction) {
-    lines.push(
-      'You already started this lesson, but the connection dropped before you finished. Here is everything the learner can see so far:',
-      `<lesson_so_far>\n${kept || '(nothing yet)'}\n</lesson_so_far>`,
-      kept
-        ? `Continue the lesson from where it stopped. Start directly with the next "## " page heading. Do not repeat or rewrite anything above, and do not mention the interruption. ${finishLine}`
-        : 'Write the whole lesson now, following the lesson format.',
-    );
+  } else if (mode === 'resume') {
+    // an interrupted lesson: the kept text ends at a paragraph boundary, possibly mid-page
+    const page = currentPageTitle(kept);
+    const where = page ? `, possibly partway through the page "## ${page}"` : '';
+    const seamless = kept
+      ? `It stopped right after the last line above${where}. Continue from the very next sentence; do not repeat or rewrite anything above; keep the same page structure. ${page ? `If that page is not finished, finish it first without writing its "## " heading again, then write the remaining pages.` : 'Then write the pages.'} ${finishLine}`
+      : '';
+    if (!instruction) {
+      lines.push(
+        'You already started this lesson, but the connection dropped before you finished. Here is everything the learner can see so far:',
+        `<lesson_so_far>\n${kept || '(nothing yet)'}\n</lesson_so_far>`,
+        kept ? `${seamless} Do not mention the interruption.` : 'Write the whole lesson now, following the lesson format.',
+      );
+    } else {
+      lines.push(
+        'You already started this lesson, but it stopped before you finished. Here is everything shown so far:',
+        `<lesson_so_far>\n${kept || '(nothing yet)'}\n</lesson_so_far>`,
+        `The learner asked you to change course for the rest: ${ask}`,
+        kept
+          ? `Apply that request to everything you write from here on. ${seamless} Do not acknowledge the request in prose.`
+          : 'Write the whole lesson now with that request applied, following the lesson format.',
+      );
+    }
   } else {
     lines.push(
-      mode === 'resume'
-        ? 'You already started this lesson, but it stopped before you finished. Here is everything shown so far:'
-        : 'You already started this lesson and the learner is reading it. Here is everything shown so far:',
+      'You already started this lesson and the learner is reading it. Here is everything shown so far:',
       `<lesson_so_far>\n${kept || '(nothing yet)'}\n</lesson_so_far>`,
-      mode === 'resume' ? `The learner asked you to change course for the rest: ${ask}` : `While it was streaming, the learner asked you to change course: ${ask}`,
+      `While it was streaming, the learner asked you to change course: ${ask}`,
       kept
         ? `Continue the lesson from here, applying that request to every remaining page. Start directly with the next "## " page heading. Do not repeat or rewrite anything above, and do not acknowledge the request in prose. ${finishLine}`
         : 'Write the whole lesson now with that request applied, following the lesson format.',
@@ -132,7 +394,7 @@ export function normalizeContinueFrom(raw) {
     fromPage = n;
   }
   const messageId = typeof raw.messageId === 'string' && MESSAGE_ID_RE.test(raw.messageId) ? raw.messageId : undefined;
-  const kept = keptForContinue(markdown, fromPage);
+  const kept = keptForResume(markdown, fromPage);
   const sources = cleanSources(raw.sources, citeRefsIn(kept));
   return { markdown, kept, instruction, fromPage, messageId, sources, mode: fromPage ? 'revise' : 'resume' };
 }
@@ -245,16 +507,30 @@ export function steerDemoRemainder(remaining, instruction) {
 }
 
 /**
- * Demo continuation (deterministic): the sample's pages after the kept ones, grounded with the
+ * Demo continuation (deterministic): the sample's text after the kept part, grounded with the
  * continuation registry, rewritten with steerDemoRemainder when there is an instruction.
- * A revise rewrites from `fromPage`; a resume continues after the last kept page.
+ * When the kept text (Cite tags removed) is a prefix of the sample, the continuation starts
+ * exactly at that paragraph boundary, mid-page included; otherwise it continues after the kept
+ * text's last block if the sample contains it, else from the page after the last kept heading.
+ * A complete lesson (nothing left) redoes its last page.
  */
 export function demoContinuation(sample, keptMarkdown, instruction, { ground } = {}) {
-  const pages = pageCount(keptMarkdown);
   const md = String(sample ?? '');
+  const kept = String(keptMarkdown ?? '');
+  const raw = stripGroundingTags(kept);
   const heads = pageOffsets(md);
-  let rest = pages < heads.length ? md.slice(heads[pages]) : '';
-  if (!rest && heads.length) rest = md.slice(heads[heads.length - 1]); // every page kept: redo the last one
+  let rest;
+  if (md.startsWith(raw)) rest = md.slice(raw.length);
+  else {
+    const lastBlock = splitBlocks(raw).pop();
+    const at = lastBlock && !/^#{1,2} /.test(lastBlock) ? md.indexOf(lastBlock) : -1;
+    if (at >= 0) rest = md.slice(at + lastBlock.length).replace(/^[ \t]*\n(?:[ \t]*\n)*/, '');
+    else {
+      const pages = pageCount(kept);
+      rest = pages < heads.length ? md.slice(heads[pages]) : '';
+    }
+  }
+  if (!rest.trim() && heads.length) rest = md.slice(heads[heads.length - 1]); // every page kept: redo the last one
   if (ground) rest = ground(rest);
   return instruction ? steerDemoRemainder(rest, instruction) : rest;
 }

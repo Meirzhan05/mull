@@ -7,7 +7,9 @@
 //           to onContinue({instruction}) automatically.
 //   revise  a finished lesson: "Revise from this page" (the page in view -> fromPage).
 //   resume  an interrupted lesson (reload, closed tab, network drop): "Resume lesson", or
-//           resume with a change.
+//           resume with a change. It continues from the last complete paragraph.
+//   elsewhere  another tab holds the lesson's lock (public/lesson-lock.js) and is writing it:
+//           a notice only, no chips, input or Resume.
 //
 // revise and resume call onContinue({instruction, fromPage?}); the screen then streams
 // POST /api/lesson/stream {continueFrom}.
@@ -19,6 +21,7 @@ const HEAD = {
   live: ['Steer', 'Change the lesson while it is being written'],
   revise: ['Revise from this page', ''],
   resume: ['Lesson interrupted', 'It stopped before the end. Resume it, or resume with a change:'],
+  elsewhere: ['Writing in another tab', 'This lesson is being written in another tab. This page updates when it finishes.'],
 };
 
 export function createSteerBar({ onContinue, onMode, onOpen } = {}) {
@@ -37,9 +40,10 @@ export function createSteerBar({ onContinue, onMode, onOpen } = {}) {
   const body = el('div', { class: 'steer-body' },
     el('div', { class: 'steer-chips' }, ...chips),
     el('div', { class: 'steer-row' }, input, sendBtn));
+  const head = el('div', { class: 'steer-head' }, icon('sparkles'), title, status, resumeBtn, closeBtn);
   const form = el('form', { class: 'steer-bar', hidden: true, onsubmit: (e) => { e.preventDefault(); steer(input.value, input.value); } },
     openBtn,
-    el('div', { class: 'steer-head' }, icon('sparkles'), title, status, resumeBtn, closeBtn),
+    head,
     body);
 
   const setBusy = (busy) => { for (const b of [...chips, sendBtn, resumeBtn]) b.disabled = busy; input.disabled = busy; };
@@ -62,6 +66,12 @@ export function createSteerBar({ onContinue, onMode, onOpen } = {}) {
     status.textContent = next === 'revise' ? pageLabel() : s;
     resumeBtn.hidden = next !== 'resume';
     closeBtn.hidden = next !== 'revise';
+    body.hidden = next === 'elsewhere';
+    // the notice gets its own wrapping row, like resume mode (inline: no extras.css rule for this mode)
+    const notice = next === 'elsewhere';
+    head.style.flexWrap = notice ? 'wrap' : '';
+    head.style.rowGap = notice ? '4px' : '';
+    Object.assign(status.style, { whiteSpace: notice ? 'normal' : '', flex: notice ? '1 0 100%' : '', order: notice ? '5' : '' });
     sendBtn.lastChild.textContent = next === 'live' ? 'Steer' : next === 'resume' ? 'Resume' : 'Revise';
     input.placeholder = next === 'revise' ? 'e.g. use a cooking analogy' : 'e.g. focus on real examples';
     setOpen(next !== 'revise');
