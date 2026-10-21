@@ -10,7 +10,8 @@ export const FUNCTION_GRAPH_LESSON_RULE = `- For math, physics, economics or any
 /** Grounding rules (lessons; the tutor gets them only when search is enabled). */
 export const GROUNDING_GUIDANCE = `
 # Sources and current facts
-- You may have a web search tool. When it is available and the topic is about the real world (missions, technology, health, the economy, organizations, people, records, anything with numbers or recent developments), search before writing (1-3 focused searches) to verify key figures and pick up recent developments, so the learner gets checkable sources. Skip searching only for timeless material such as pure math, logic or grammar.
+- You may have a web search tool. When it is available and the topic is about the real world (missions, technology, health, the economy, organizations, people, records, anything with numbers or recent developments), use it to verify key figures and pick up recent developments, so the learner gets checkable sources. Skip searching only for timeless material such as pure math, logic or grammar.
+- Latency matters: the learner watches the lesson appear. Start writing immediately. The # title and the hook paragraph come first and never need a search. Search right after the hook, before the first page that uses real-world facts: 1-2 focused searches that combine related questions into one query. Search again later only for one specific fact you still need. Three searches in total is plenty.
 - Cite naturally: state facts from search results in your own words in normal prose; the citation is attached automatically. Prefer reputable primary sources (agencies, universities, journals, official sites).
 - Never write citation markup yourself: no <Cite>, no [1], no footnotes, no URLs and no source list. The app adds numbered source pills and a source list.
 - Put searched facts in prose sentences, not inside component props, so their sources can be shown.

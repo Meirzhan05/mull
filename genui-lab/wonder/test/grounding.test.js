@@ -93,7 +93,7 @@ test('web_search tool is added only when enabled (and never code_execution)', ()
   const base = buildStreamParams({ system: 'S', messages: [{ role: 'user', content: 'u' }] });
   assert.equal(withWebSearch(base, false).tools, undefined);
   const p = withWebSearch(base, true);
-  assert.deepEqual(p.tools, [{ type: 'web_search_20260209', name: 'web_search', max_uses: 5, allowed_callers: ['direct'] }]);
+  assert.deepEqual(p.tools, [{ type: 'web_search_20260209', name: 'web_search', max_uses: 3, allowed_callers: ['direct'] }]);
   assert.deepEqual(WEB_SEARCH_TOOL, p.tools[0]);
   assert.ok(!JSON.stringify(p.tools).includes('code_execution'));
   assert.equal(withWebSearch(p, true).tools.length, 1, 'idempotent');

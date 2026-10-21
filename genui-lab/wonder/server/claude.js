@@ -84,13 +84,55 @@ export function buildStructuredParams({ system, schema, user, effort = 'low', ma
  * Stream text deltas. Returns {stopReason, message}. Throws SDK errors to the caller.
  * @param {{beta:{messages:{stream:Function}}}} client
  */
-export async function streamText(client, params, { onText, signal } = {}) {
-  const stream = client.beta.messages.stream(params, signal ? { signal } : undefined);
-  for await (const event of stream) {
-    if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') onText?.(event.delta.text);
+/** Raised when a stream goes silent for longer than the idle limit (see idleWatch). */
+export class StreamStalledError extends Error {
+  constructor(idleMs) { super(`No data from Claude for ${Math.round(idleMs / 1000)}s`); this.name = 'StreamStalledError'; this.code = 'stalled'; }
+}
+
+export const STREAM_IDLE_MS = Number(process.env.WONDER_STREAM_IDLE_MS) || 120_000;
+
+/**
+ * Idle watchdog for one streaming request: an inner AbortSignal that fires when the outer
+ * signal aborts or when no event arrives for `idleMs` (a silently stalled connection otherwise
+ * hangs until the socket dies minutes later and surfaces as a bare TypeError).
+ */
+export function idleWatch(signal, idleMs = STREAM_IDLE_MS) {
+  const ac = new AbortController();
+  let stalled = false;
+  let timer = null;
+  const onAbort = () => ac.abort(signal.reason);
+  if (signal) { if (signal.aborted) ac.abort(signal.reason); else signal.addEventListener('abort', onAbort, { once: true }); }
+  const touch = () => {
+    clearTimeout(timer);
+    timer = setTimeout(() => { stalled = true; ac.abort(new StreamStalledError(idleMs)); }, idleMs);
+    timer.unref?.();
+  };
+  touch();
+  return {
+    signal: ac.signal,
+    touch,
+    get stalled() { return stalled; },
+    /** Rethrow as StreamStalledError when the watchdog (not the caller) aborted the stream. */
+    rethrow(err) { throw stalled ? new StreamStalledError(idleMs) : err; },
+    done() { clearTimeout(timer); signal?.removeEventListener?.('abort', onAbort); },
+  };
+}
+
+export async function streamText(client, params, { onText, signal, idleMs } = {}) {
+  const watch = idleWatch(signal, idleMs);
+  try {
+    const stream = client.beta.messages.stream(params, { signal: watch.signal });
+    for await (const event of stream) {
+      watch.touch();
+      if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') onText?.(event.delta.text);
+    }
+    const message = await stream.finalMessage();
+    return { stopReason: message.stop_reason, message };
+  } catch (err) {
+    return watch.rethrow(err);
+  } finally {
+    watch.done();
   }
-  const message = await stream.finalMessage();
-  return { stopReason: message.stop_reason, message };
 }
 
 /** Non-streaming structured call; returns parsed JSON or throws. */
@@ -114,12 +156,21 @@ export function isCredentialError(err) {
   return /credential|api[ _-]?key|apiKey|auth(entication)? token|could not resolve authentication/i.test(msg);
 }
 
+/** Low-level fetch/socket failures that the SDK does not wrap while a stream is being read. */
+function isNetworkError(err) {
+  const code = err?.code || err?.cause?.code || '';
+  return /^(ECONNRESET|ECONNREFUSED|ETIMEDOUT|EPIPE|ENOTFOUND|EAI_AGAIN|UND_ERR_[A-Z_]+)$/.test(code)
+    || (err instanceof TypeError && /terminated|fetch failed|network/i.test(String(err.message)));
+}
+
 /** Map an error to a user-facing {code, message}. Most specific class first. */
 export function friendlyError(err) {
   if (err instanceof Anthropic.AuthenticationError) return { code: 'auth_failed', message: 'Claude rejected the credentials. Check ANTHROPIC_API_KEY in genui-lab/wonder/.env and restart the server.' };
   if (err instanceof Anthropic.RateLimitError) return { code: 'rate_limited', message: 'Claude is busy right now (rate limit). Wait a few seconds and try again.' };
   if (err instanceof Anthropic.BadRequestError && /anthropic-workspace-id/.test(String(err?.error?.error?.message || err.message))) return { code: 'workspace_required', message: 'This API key is not scoped to a workspace. Add ANTHROPIC_WORKSPACE_ID=wrkspc_... to ~/.config/wonder/.env and restart.' };
   if (err instanceof Anthropic.BadRequestError) return { code: 'bad_request', message: 'Claude could not process this request. Try a shorter or simpler prompt.' };
+  if (err?.code === 'stalled' || err instanceof StreamStalledError) return { code: 'stalled', message: 'Claude stopped responding partway through. Resume to continue from the last complete page.' };
+  if (err instanceof Anthropic.APIConnectionError || isNetworkError(err)) return { code: 'network', message: 'The connection to Claude dropped. Resume to continue from the last complete page.' };
   if (err instanceof Anthropic.APIError) return { code: 'api_error', message: `Claude had a problem${err.status ? ` (HTTP ${err.status})` : ''}. Please try again.` };
   if (err?.name === 'AbortError' || err?.code === 'aborted') return { code: 'aborted', message: 'Stopped.' };
   return { code: 'internal', message: 'Something went wrong while generating. Please try again.' };

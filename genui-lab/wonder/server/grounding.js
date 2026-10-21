@@ -13,11 +13,12 @@
 // Claude never writes Cite tags itself: the server inserts them, so the refs always resolve.
 
 import { scanComponentTags } from './compile.js';
+import { idleWatch } from './claude.js';
 
 // allowed_callers ["direct"]: with the default (dynamic filtering through code execution) the
 // results reach Claude as encrypted code-execution stdout and the answer carries NO text-block
 // citations (verified live). Direct calls keep web_search_result_location citations.
-export const WEB_SEARCH_TOOL = Object.freeze({ type: 'web_search_20260209', name: 'web_search', max_uses: 5, allowed_callers: ['direct'] });
+export const WEB_SEARCH_TOOL = Object.freeze({ type: 'web_search_20260209', name: 'web_search', max_uses: 3, allowed_callers: ['direct'] });
 export const MAX_PAUSE_CONTINUATIONS = 4;
 
 /** Add the web_search server tool to stream params (never code_execution). */
@@ -181,16 +182,19 @@ const queryOf = (input) => (input && typeof input === 'object' && typeof input.q
  * (append the paused assistant content and re-send; no extra user message).
  * Throws SDK errors to the caller like streamText.
  */
-export async function streamGrounded(client, params, { onText, onSearch, onSearchError, signal, registry, maxContinuations = MAX_PAUSE_CONTINUATIONS } = {}) {
+export async function streamGrounded(client, params, { onText, onSearch, onSearchError, signal, registry, maxContinuations = MAX_PAUSE_CONTINUATIONS, idleMs } = {}) {
   const sources = registry || createSourceRegistry();
   const asm = createCiteAssembler({ emit: (s) => onText?.(s), registry: sources });
   let p = params;
   let message = null;
   let continuations = 0;
   for (;;) {
-    const stream = client.beta.messages.stream(p, signal ? { signal } : undefined);
+    const watch = idleWatch(signal, idleMs);
+    const stream = client.beta.messages.stream(p, { signal: watch.signal });
     const blocks = new Map();
+    try {
     for await (const ev of stream) {
+      watch.touch();
       if (ev.type === 'content_block_start') {
         const b = ev.content_block || {};
         blocks.set(ev.index, { type: b.type, name: b.name, json: '' });
@@ -221,6 +225,11 @@ export async function streamGrounded(client, params, { onText, onSearch, onSearc
       }
     }
     message = await stream.finalMessage();
+    } catch (err) {
+      watch.rethrow(err);
+    } finally {
+      watch.done();
+    }
     if (message.stop_reason === 'pause_turn' && continuations < maxContinuations) {
       continuations++;
       const msgs = [...p.messages];
