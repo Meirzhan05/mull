@@ -87,6 +87,12 @@ export function typesetMath(node, katex) {
     out.className = 'wonder-math-out';
     node.appendChild(out);
   }
+  // A formula appearing in a surface that is streaming (the host only creates fading
+  // [data-d-streaming-word] spans for streamed text) fades in with the words around it
+  // instead of popping in. Restored lessons render without word spans, so they don't animate.
+  if (node.__wonderLatex === undefined && node.closest?.('.dil-root')?.querySelector('[data-d-streaming-word]')) {
+    out.setAttribute('data-wonder-math-enter', '');
+  }
   const display = node.hasAttribute('data-display');
   let rendered = false;
   if (katex && latex) {

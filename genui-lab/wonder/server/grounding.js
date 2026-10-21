@@ -187,18 +187,44 @@ const queryOf = (input) => (input && typeof input === 'object' && typeof input.q
  */
 const normPara = (t) => String(t).replace(/<Cite\b[^>]*\/>/g, '').replace(/\s+/g, ' ').trim().toLowerCase();
 
+const STOP = new Set('a an the of to in on and or but is are was were be been it its this that these those for with as at by from you your we our they their there here so than then just very can will would'.split(' '));
+const tokens = (t) => normPara(t).replace(/[^\p{L}\p{N}\s]/gu, ' ').split(/\s+/).filter((w) => w && !STOP.has(w));
+
+/**
+ * Is `para` a repeat of `prev`? Exact after normalization, or a light rewording: most content
+ * words shared (Jaccard >= 0.6), or the shorter one's words almost all present in the longer.
+ * Headings must match more strictly (they are short).
+ */
+export function isRepeat(para, prev) {
+  const a = normPara(para);
+  const b = normPara(prev);
+  if (!a || !b) return false;
+  if (a === b) return true;
+  const heading = /^#{1,6}\s/.test(a) || /^#{1,6}\s/.test(b);
+  if (heading && (!/^#{1,6}\s/.test(a) || !/^#{1,6}\s/.test(b))) return false;
+  const ta = new Set(tokens(a));
+  const tb = new Set(tokens(b));
+  if (ta.size < 3 || tb.size < 3) return heading && [...ta].join(' ') === [...tb].join(' ');
+  let inter = 0;
+  for (const w of ta) if (tb.has(w)) inter++;
+  const jaccard = inter / (ta.size + tb.size - inter);
+  const containment = inter / Math.min(ta.size, tb.size);
+  return heading ? jaccard >= 0.8 : jaccard >= 0.6 || containment >= 0.85;
+}
+
 /**
  * After a web search Claude sometimes starts over, re-writing the title and hook it already
  * streamed. This filter sits in front of the cite assembler: right after a search it buffers
  * text paragraph by paragraph and drops any paragraph (heading included) identical to one
- * already emitted, then passes everything through once new text appears.
+ * already emitted (or a light rewording of one, see isRepeat), then passes everything through
+ * once new text appears.
  */
 export function createRepeatFilter(asm) {
   let emitted = '';
   let checking = false;
   let buf = '';
   let cites = [];
-  const seen = () => new Set(emitted.split(/\n\s*\n|\n(?=#)/).map(normPara).filter(Boolean));
+  const seen = () => emitted.split(/\n\s*\n|\n(?=#)/).filter((p) => normPara(p));
   const pass = (t) => { emitted += t; asm.text(t); };
   const release = () => {
     if (buf) pass(buf);
@@ -211,7 +237,7 @@ export function createRepeatFilter(asm) {
       const para = m ? buf.slice(0, m.index) : final ? buf : null;
       if (para === null) return;
       const n = normPara(para);
-      if (n && !seen().has(n)) return release();
+      if (n && !seen().some((p) => isRepeat(para, p))) return release();
       buf = m ? buf.slice(m.index + m[0].length) : '';
       cites = [];
       if (!m) return;

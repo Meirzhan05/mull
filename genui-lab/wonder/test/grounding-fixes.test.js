@@ -56,3 +56,31 @@ test('cites are never inserted inside an unfinished math span', () => {
   assert.equal(isSafeInsertionPoint('Energy is $E = mc^2$ here'), true);
   assert.equal(isSafeInsertionPoint('It costs $40 and $5 more'), true); // prices are not math
 });
+
+import { isRepeat } from '../server/grounding.js';
+
+test('isRepeat: reworded hooks and headings count as repeats', () => {
+  const hook = 'The James Webb Space Telescope has spent the last few years rewriting what we know about the early universe, distant planets and how galaxies form.';
+  assert.ok(isRepeat('Over the last few years, the James Webb Space Telescope has been rewriting what we know about the early universe, distant planets, and how galaxies form.', hook));
+  assert.ok(isRepeat('# What Webb Has Discovered So Far', '# What Webb has discovered so far'));
+  assert.ok(isRepeat('Picture this: one sick person infects two others, and each of them infects two more.', 'Picture this: one sick person infects two others. Each of them then infects two more.'));
+});
+
+test('isRepeat: new paragraphs on the same topic are kept (no false positives)', () => {
+  const hook = 'The James Webb Space Telescope has spent the last few years rewriting what we know about the early universe, distant planets and how galaxies form.';
+  assert.ok(!isRepeat('## Page 1: Seeing the first galaxies', '# What Webb has discovered so far'));
+  assert.ok(!isRepeat('Webb found galaxies that existed just 290 million years after the Big Bang, far brighter and more mature than models predicted.', hook));
+  assert.ok(!isRepeat('In 2023 Webb detected carbon dioxide in the atmosphere of the exoplanet WASP-39b, the first clear detection of its kind.', hook));
+  assert.ok(!isRepeat('Exponential growth means each step multiplies the total.', 'Linear growth means each step adds the same amount to the total.'));
+});
+
+test('repeat filter: a reworded hook after a search is dropped, new content kept', () => {
+  const { out, asm } = sink();
+  const f = createRepeatFilter(asm);
+  f.text('# Webb so far\n\nThe James Webb Space Telescope has spent the last few years rewriting what we know about the early universe, distant planets and how galaxies form.\n\n');
+  f.afterSearch();
+  f.text('Over the last few years, the James Webb Space Telescope has been rewriting what we know about the early universe, distant planets, and how galaxies form.\n\n## Page 1: The first galaxies\n\nWebb found galaxies just 290 million years after the Big Bang.');
+  f.blockStop(); f.flush();
+  assert.equal((out.text.match(/rewriting what we know/g) || []).length, 1);
+  assert.match(out.text, /## Page 1: The first galaxies\n\nWebb found galaxies/);
+});
