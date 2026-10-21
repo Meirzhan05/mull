@@ -120,6 +120,16 @@ function saveLesson(id, patch) {
   });
 }
 
+// Reset helpers: resolution ids of server-graded quizzes in a widget-results appData, and the
+// server call that forgets their answers (otherwise the next answer would merge with old ones).
+function quizResolutionIds(appData) {
+  const cr = appData?.opGenui?.componentResults || {};
+  return Object.keys(cr).filter((rid) => cr[rid]?.state && typeof cr[rid].state === 'object' && 'answers' in cr[rid].state);
+}
+function restartQuizzes(rids) {
+  for (const rid of new Set(rids)) postJson('/api/widget_action', { componentName: 'Quiz', action_type: 'quiz_restart', resolutionId: rid, payload: { attempt: 0 } }).catch(() => {});
+}
+
 function courseProgress(course) {
   let done = 0;
   let total = 0;
@@ -313,7 +323,18 @@ function renderLesson(lessonId) {
   // >>> widget state: lesson overflow menu
   const lessonMenu = createOverflowMenu({ label: 'More lesson options', items: [{
     label: 'Reset interactive widgets', hint: 'Sliders, steps, cards and quiz progress go back to their start.',
-    onSelect: () => { surface.resetViewState(); saveLesson(lessonId, { viewState: null }); toast('Interactive widgets reset'); },
+    onSelect: () => {
+      // local widget state, server-graded quiz results and tutor-reply widgets all go back to start
+      const graded = quizResolutionIds(current.appData);
+      current.appData = null;
+      // order matters: drop the grades first, then remount widgets, so a Quiz that derives its
+      // start position from server grades remounts at question 1
+      if (current.dil) surface.setAppData(appDataFor());
+      surface.resetViewState();
+      saveLesson(lessonId, { viewState: null, appData: null });
+      restartQuizzes([...graded, ...tutor.resetWidgets()]);
+      toast('Interactive widgets reset');
+    },
   }] });
   teardown.push(() => lessonMenu.destroy());
   // <<< widget state
@@ -707,6 +728,7 @@ function createTutor(lessonId) {
     });
   }
 
+  const resetters = []; // one per tutor reply: clears its widgets, returns its graded quiz ids
   function addAssistant(index = null, viewState = null) {
     empty.hidden = true;
     const vsRef = { index, pending: null }; // widget state
@@ -732,6 +754,14 @@ function createTutor(lessonId) {
       onViewState: (vs) => { const v = hasViewState(vs) ? vs : null; if (vsRef.index == null) vsRef.pending = v; else saveTutorViewState(vsRef.index, v); },
     });
     surfaces.push(surface);
+    resetters.push(() => {
+      const graded = quizResolutionIds(appData);
+      appData = {};
+      vsRef.pending = null;
+      if (dilRef) surface.setAppData(mergeComponentResults(dilRef.appData, null)); // grades first, then remount
+      surface.resetViewState();
+      return graded;
+    });
     return {
       typing,
       vsRef,
@@ -748,6 +778,15 @@ function createTutor(lessonId) {
   showFollowups(lastBot?.followups);
 
   const api = {
+    /** Reset every tutor reply's widgets (and their saved state); returns graded quiz ids. */
+    resetWidgets() {
+      const graded = resetters.flatMap((f) => f());
+      store.update((d) => {
+        for (const m of d.lessons[lessonId]?.tutor || []) if (m?.role === 'assistant') delete m.viewState;
+        return d;
+      });
+      return graded;
+    },
     panel,
     fab,
     onOpenChange: null,

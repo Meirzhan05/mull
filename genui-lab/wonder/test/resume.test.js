@@ -288,7 +288,7 @@ function fakeEnv(start = 1_000_000) {
   };
 }
 
-const leaseTab = (env, owner, extra = {}) => createLessonLocks({ locks: null, storage: env.storage, now: env.now, timers: env.timers, channel: null, target: null, owner, ...extra });
+const leaseTab = (env, owner, extra = {}) => createLessonLocks({ locks: null, storage: env.storage, now: env.now, timers: env.timers, channel: null, target: null, owner, settleMs: 1, ...extra });
 
 test('lease fallback: acquisition, exclusivity, renewal, expiry and release', async () => {
   const env = fakeEnv();

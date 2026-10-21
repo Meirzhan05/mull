@@ -20,7 +20,7 @@ import {
   trimToLastPage, trimBeforePage, pageCount, pageOffsets, pageTitles, citeRefsIn, MAX_STEER_CHARS, STEER_CHIPS,
   MAX_CONTINUE_MARKDOWN, MAX_CONTINUE_SOURCES,
 } from '../public/steering-core.js';
-import { stripGroundingTags, createSourceRegistry, domainOf } from './grounding.js';
+import { stripGroundingTags, isRepeat, trimRepeatedLead, splitSentences, createSourceRegistry, domainOf } from './grounding.js';
 import { scanComponentTags } from './compile.js';
 import { protectMath } from './math-spans.js';
 import { PRIMITIVE_TAGS } from '../../chatgpt-dil/src/compiler.js';
@@ -230,6 +230,19 @@ export function createContinuationGuard(kept) {
     return s;
   };
   const isPrefixOfCandidate = (n) => { for (const c of cands) if (c.startsWith(n)) return true; return false; };
+  const blocks = splitBlocks(k);
+  // the continuation may also open by restating one of the kept text's last sentences
+  const sentCands = splitSentences(stripGroundingTags(k).split(/\n[ \t]*\n/).filter((b) => b.trim() && !/^\s*(#|<)/.test(b)).slice(-3).join(' ')).map(normBlock).filter((x) => x.length > 12);
+  const isPrefixOfSentence = (n) => sentCands.some((c) => c.startsWith(n) || n.startsWith(c) && n.length < c.length + 3);
+  // a block repeats the kept text exactly (normalized) or as a light rewording (isRepeat)
+  const isCand = (b) => cands.has(normBlock(b)) || blocks.some((c) => isRepeat(stripGroundingTags(b), stripGroundingTags(c)));
+  // the first new block may still open by restating the kept text's last sentences
+  const trimLead = (s) => {
+    const m = /\n[ \t]*\n/.exec(s);
+    const first = m ? s.slice(0, m.index) : s;
+    const t = trimRepeatedLead(first, stripGroundingTags(k));
+    return t === first ? s : t + s.slice(first.length);
+  };
   return {
     get dropped() { return dropped; },
     /** Feed streamed text; returns the text to emit now ('' while undecided). */
@@ -240,17 +253,17 @@ export function createContinuationGuard(kept) {
         const body = buf.replace(/^\s+/, '');
         const m = /\n[ \t]*\n/.exec(body);
         if (m) {
-          if (cands.has(normBlock(body.slice(0, m.index)))) {
+          if (isCand(body.slice(0, m.index))) {
             buf = body.slice(m.index + m[0].length);
             dropped++;
             continue;
           }
         } else {
           const n = normBlock(body.replace(/<[^<>]*$/, '')); // a tag still arriving (e.g. a Cite pill)
-          if (!n || isPrefixOfCandidate(n)) return ''; // could still be a repeat: wait
+          if (!n || isPrefixOfCandidate(n) || isPrefixOfSentence(n)) return ''; // could still be a repeat: wait
         }
         open = false;
-        const out = buf;
+        const out = trimLead(buf);
         buf = '';
         return release(out);
       }
@@ -261,8 +274,8 @@ export function createContinuationGuard(kept) {
       open = false;
       const out = buf;
       buf = '';
-      if (cands.has(normBlock(out))) { dropped++; return ''; }
-      return release(out);
+      if (isCand(out)) { dropped++; return ''; }
+      return release(trimLead(out));
     },
   };
 }

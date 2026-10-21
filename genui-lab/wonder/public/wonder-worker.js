@@ -5,7 +5,10 @@
 //   main -> worker  {type:'setStateSnapshot', snapshot}  (sent before the first render)
 //                   {type:'pruneViewState', keep:[resolutionId]} | {type:'resetViewState'}
 //                   {type:'flushViewState'}               (deliver a pending change now)
-//   worker -> main  {type:'viewState', snapshot}          (debounced ~300 ms after a change)
+//   worker -> main  {type:'viewState', snapshot}          (immediately on every change: the main
+//                                                          thread's store batches writes and flushes them
+//                                                          synchronously on pagehide, so a change made just
+//                                                          before a hard reload is not lost in the worker)
 //                   {type:'viewStateFlushed'}
 
 import { createLearningRuntime, encodeOps } from './learning-runtime.js';
@@ -25,6 +28,7 @@ function ensure(viewportWidth) {
   runtime = createLearningRuntime({
     viewportWidth,
     viewState: pendingSnapshot,
+    viewStateDebounceMs: 0, // see the protocol note above
     onViewState(snapshot) { post({ type: 'viewState', snapshot }); },
     onOps(ops, meta) {
       if (useBinary) {

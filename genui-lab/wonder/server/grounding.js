@@ -192,7 +192,7 @@ const tokens = (t) => normPara(t).replace(/[^\p{L}\p{N}\s]/gu, ' ').split(/\s+/)
 
 /**
  * Is `para` a repeat of `prev`? Exact after normalization, or a light rewording: most content
- * words shared (Jaccard >= 0.6), or the shorter one's words almost all present in the longer.
+ * words shared (Jaccard >= 0.6), or almost all of `para`'s words present in `prev`.
  * Headings must match more strictly (they are short).
  */
 export function isRepeat(para, prev) {
@@ -208,9 +208,51 @@ export function isRepeat(para, prev) {
   let inter = 0;
   for (const w of ta) if (tb.has(w)) inter++;
   const jaccard = inter / (ta.size + tb.size - inter);
-  const containment = inter / Math.min(ta.size, tb.size);
+  // containment is measured on the NEW text: a paragraph that adds a sentence to an old one is
+  // not a repeat (its repeated lead sentence is trimmed by trimRepeatedLead instead)
+  const containment = inter / ta.size;
   return heading ? jaccard >= 0.8 : jaccard >= 0.6 || containment >= 0.85;
 }
+
+/** Split prose into sentences (keeps each sentence's trailing punctuation and spacing). */
+export function splitSentences(text) {
+  return String(text).match(/[^.!?]+(?:[.!?]+(?:["')\]]+)?\s*|$)/g)?.filter((x) => x) ?? [];
+}
+
+/** Is `sentence` a repeat of one of `prior` (normalized equal, or a light rewording)? */
+function sentenceRepeats(sentence, prior) {
+  const n = normPara(sentence);
+  if (!n) return false;
+  const ta = new Set(tokens(n));
+  for (const p of prior) {
+    if (normPara(p) === n) return true;
+    if (ta.size < 5) continue;
+    const tb = new Set(tokens(p));
+    if (tb.size < 5) continue;
+    let inter = 0;
+    for (const w of ta) if (tb.has(w)) inter++;
+    if (inter / (ta.size + tb.size - inter) >= 0.7) return true;
+  }
+  return false;
+}
+
+/**
+ * Drop the leading sentences of `para` that repeat sentences of `priorText` (a model resuming
+ * after a search or an interruption sometimes restates the last thing it wrote, then goes on).
+ * Headings, markup and component tags are never trimmed. Returns the trimmed paragraph.
+ */
+export function trimRepeatedLead(para, priorText) {
+  const text = String(para);
+  if (!text.trim() || /^\s*(#|<|[-*+]\s|\d+[.)]\s|>|\||```|~~~|\$\$)/.test(text)) return text;
+  const prior = splitBlocksForRepeat(priorText).flatMap(splitSentences).slice(-80);
+  if (!prior.length) return text;
+  const lead = /^\s*/.exec(text)[0];
+  const sents = splitSentences(text.slice(lead.length));
+  let k = 0;
+  while (k < sents.length - 1 && sentenceRepeats(sents[k], prior)) k++; // always keep the last sentence for the paragraph check
+  return k ? lead + sents.slice(k).join('') : text;
+}
+const splitBlocksForRepeat = (md) => String(md ?? '').split(/\n\s*\n/).filter((b) => b.trim() && !/^\s*(#|<|```|~~~)/.test(b));
 
 /**
  * After a web search Claude sometimes starts over, re-writing the title and hook it already
@@ -240,7 +282,11 @@ export function createRepeatFilter(asm) {
       if (para === null) return;
       const n = normPara(para);
       if (!n) { if (!m) return; sep += buf.slice(0, m.index + m[0].length); buf = buf.slice(m.index + m[0].length); continue; }
-      if (!seen().some((p) => isRepeat(para, p))) return release();
+      if (!seen().some((p) => isRepeat(para, p))) {
+        const trimmed = trimRepeatedLead(para, emitted);
+        if (trimmed !== para) buf = trimmed + buf.slice(para.length);
+        return release();
+      }
       buf = m ? buf.slice(m.index + m[0].length) : '';
       cites = [];
       if (!m) return;

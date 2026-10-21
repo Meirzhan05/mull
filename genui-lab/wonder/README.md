@@ -267,7 +267,10 @@ Interactive widgets keep their state across reloads and when a lesson is reopene
 - **One sandbox worker per surface**: the lesson plus each tutor reply. Very long tutor threads therefore start many workers. They are terminated when you leave the lesson.
 - **Tutor replies are not lesson-specific in demo mode.** They are templates that use the lesson's KeyTerms and Quiz. Any other topic streams one of the three sample lessons.
 - **No accounts or sync.** Courses, lessons, the deck and XP live in this browser's localStorage, and the app falls back to in-memory storage when localStorage is blocked.
-- **Multi-tab is one writer per lesson, not a merge.** The cross-tab lock keeps two tabs from streaming the same lesson, but `store.js` still writes its whole state under one key. A save in one tab (XP, the deck, another lesson) can overwrite another tab's unrelated changes made since it loaded. The lease fallback, used only without Web Locks, is best effort: two tabs that write the lease in the same instant can both believe they won.
+- **Multi-tab is safe.**
+  - The cross-tab lock keeps two tabs from streaming the same lesson.
+  - `store.js` writes with a three-way merge per lesson, thread, course and plan, and idle tabs pick up other tabs' saves. So one tab no longer wipes another tab's changes.
+  - Without Web Locks, the lease fallback is still exclusive. Acquiring broadcasts a claim, writes the lease, waits a 120 ms settle window and re-checks, and the lowest claim ticket wins ties. `test/lock-race.test.js` races two tabs 100 times; exactly one wins every time.
 - **Teacher history is text.** Earlier turns go back to Claude as markdown with `[Card: …]` notes, not as the original tool_use/tool_result blocks. Card state on the server is in memory, but cards carry their state, so they survive restarts.
 - **Memory is one file for one local learner.** There are no accounts. It is not encrypted; "Forget everything" deletes it.
 - **Inherited from chatgpt-dil:** a best-effort sandbox lockdown and no SVG `<text>`. Flowchart and ConceptMap are therefore laid out with boxes rather than drawn edges.
@@ -482,5 +485,5 @@ Live check against `claude-opus-5-5`, using 5 requests:
 Known gaps:
 - Revise still rewrites from a page boundary. It can't edit one paragraph inside a page. Resume continues mid-page, but only from a paragraph boundary: a half-written paragraph is dropped and written again.
 - A continuation drops widget state (such as quiz answers) for the rewritten pages, and a steer that lands after the last page has been written only rewrites the last page.
-- Widget state (graph sliders, stepper step, flashcards, …) is saved per lesson and message; see "Widget state persistence". A change made less than 300 ms before a hard reload can be lost.
+- Widget state (graph sliders, stepper step, flashcards, …) is saved per lesson and message; see "Widget state persistence". The sandbox worker reports every change immediately and the store flushes synchronously on `pagehide`, so a change made just before a hard reload is kept. "Reset interactive widgets" also clears server-graded quiz answers (`quiz_restart` for each graded quiz) and the widgets in tutor replies.
 - **Search latency is tuned.** Claude writes the title and hook before searching and makes 1–2 focused searches (`max_uses: 3`). On the same JWST topic, live: first text went from 34.2 s to 1.6 s and the whole lesson from 59.5 s to 44.1 s, with 9 sources still cited. Every stream has an idle watchdog (`WONDER_STREAM_IDLE_MS`, default 120 s), so a stalled connection fails fast as a resumable `stalled`/`network` error instead of hanging. After a search, an exact repeat of an already-written paragraph (e.g. the hook) is dropped.

@@ -5,6 +5,8 @@
 //     held for the whole stream; the browser releases it if the tab closes or crashes.
 //   Lease fallback (no navigator.locks): localStorage `wonder.lock.<id>` = {owner, expires},
 //     a ~10 s lease renewed every ~3 s and removed on release / pagehide. An expired lease is free.
+//     Acquiring claims on the channel, writes, waits a ~120 ms settle window and re-checks, so two
+//     tabs racing for a free lease cannot both win.
 //
 // A tab that cannot get the lock shows "being written in another tab" and calls watch(): it is
 // told when the lock is free again (a BroadcastChannel 'wonder' message, the storage event on
@@ -18,6 +20,7 @@ export const LEASE_PREFIX = 'wonder.lock.';
 export const LEASE_TTL_MS = 10000;
 export const LEASE_RENEW_MS = 3000;
 export const CHANNEL_NAME = 'wonder';
+export const LEASE_SETTLE_MS = 120; // lease fallback: wait this long after writing before checking who won
 
 export const lockName = (lessonId) => `${LOCK_PREFIX}${lessonId}`;
 export const leaseKey = (lessonId) => `${LEASE_PREFIX}${lessonId}`;
@@ -39,7 +42,8 @@ const randomOwner = () => `tab-${Date.now().toString(36)}-${Math.random().toStri
 /**
  * @param {{locks?:object|null, storage?:Storage|null, owner?:string, now?:()=>number,
  *   timers?:{setInterval:Function, clearInterval:Function}, channel?:object|null,
- *   target?:EventTarget|null, ttlMs?:number, renewMs?:number}} [opts]
+ *   target?:EventTarget|null, ttlMs?:number, renewMs?:number, settleMs?:number,
+ *   sleep?:(ms:number)=>Promise<void>, ticket?:()=>number}} [opts]
  */
 export function createLessonLocks(opts = {}) {
   const locks = 'locks' in opts ? opts.locks : (globalThis.navigator?.locks ?? null);
@@ -51,6 +55,9 @@ export function createLessonLocks(opts = {}) {
   const target = 'target' in opts ? opts.target : (typeof window !== 'undefined' ? window : null);
   const ttlMs = opts.ttlMs ?? LEASE_TTL_MS;
   const renewMs = opts.renewMs ?? LEASE_RENEW_MS;
+  const settleMs = opts.settleMs ?? LEASE_SETTLE_MS;
+  const sleep = opts.sleep || ((ms) => new Promise((r) => setTimeout(r, ms)));
+  const ticket = opts.ticket || (() => Math.random());
   const mode = locks && typeof locks.request === 'function' ? 'web-locks' : storage ? 'lease' : 'none';
   const held = new Map(); // lessonId -> handle (held by this instance)
   const watchers = new Set();
@@ -111,9 +118,27 @@ export function createLessonLocks(opts = {}) {
     if (mode === 'lease') {
       const cur = liveLease(lessonId);
       if (cur && cur.owner !== owner) return null;
-      if (!writeLease(lessonId)) return null;
-      await Promise.resolve(); // let a racing tab's write land, then check who won
-      if (readLease(lessonId)?.owner !== owner) return null;
+      // Two tabs can both see a free lease and both write it. Tabs are separate processes, so
+      // a microtask is not enough: claim on the channel, write, wait a settle window so racing
+      // writes land (last writer wins, both tabs then read the same value), and let the lowest
+      // claim ticket win if the channel saw a competitor before storage settled.
+      const mine = ticket();
+      let beaten = false;
+      const onClaim = (e) => {
+        const d = e?.data;
+        if (d?.type !== 'lesson-lock' || d.lessonId !== lessonId || d.owner === owner) return;
+        if (d.state === 'claiming' && (d.ticket < mine || (d.ticket === mine && d.owner < owner))) beaten = true;
+        if (d.state === 'acquired') beaten = true;
+      };
+      channel?.addEventListener?.('message', onClaim);
+      try {
+        post({ lessonId, state: 'claiming', ticket: mine });
+        if (!writeLease(lessonId)) return null;
+        await sleep(settleMs);
+        if (beaten || readLease(lessonId)?.owner !== owner) { clearLease(lessonId); return null; }
+      } finally {
+        channel?.removeEventListener?.('message', onClaim);
+      }
       const timer = timers.setInterval(() => {
         const l = readLease(lessonId);
         if (l && l.owner !== owner && l.expires > now()) return; // lost it (we stalled past expiry)
