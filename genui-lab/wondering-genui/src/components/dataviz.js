@@ -125,7 +125,7 @@ export function layoutFlowchart(data) {
   const rowWidth = (row) => row.reduce((acc, id) => acc + nodeDimensions(byId.get(id).type).width, 0) + NODESEP * Math.max(0, row.length - 1);
   const hasBack = back.size > 0;
   const backLabelW = Math.max(0, ...conns.filter((c, i) => back.has(i) && (str(c.condition) || str(c.label))).map((c) => Math.min(140, (str(c.condition) || str(c.label)).length * 7 + 12)));
-  const leftPad = MARGIN_X + (hasBack ? BACK_EDGE_LANE * Math.min(back.size, 3) + backLabelW / 2 : 0);
+  const leftPad = MARGIN_X + (hasBack ? BACK_EDGE_LANE * Math.min(back.size, 3) + (backLabelW ? backLabelW + 8 : 0) : 0);
   const contentW = Math.max(...ranks.map(rowWidth), 0);
   const boxes = new Map();
   let y = MARGIN_Y;
@@ -176,7 +176,9 @@ export function layoutFlowchart(data) {
     const sy = a.y + a.height / 2;
     const ty = b.y + b.height / 2;
     const points = [[a.x, sy], [laneX, sy], [laneX, ty], [b.x, ty]];
-    return { from: c.from, to: c.to, label, back: true, dashed: c.style === "dashed", points, labelAt: [laneX, (sy + ty) / 2] };
+    // back-edge labels sit just left of their lane so they never sit under a node
+    const lw = label ? Math.min(140, label.length * 7 + 12) : 0;
+    return { from: c.from, to: c.to, label, back: true, dashed: c.style === "dashed", points, labelAt: [laneX - lw / 2 - 4, (sy + ty) / 2] };
   });
   return { nodes: [...boxes.values()], edges, width, height };
 }

@@ -47,6 +47,14 @@ Before any math happens, check you can name what goes in and what comes out.
     { text: "Same text always gives the same ids", status: "yes" },
     { text: "Ids carry meaning on their own", status: "no" },
   ],
+})}'}}
+
+{{interactive:lesson-stepper title="What happens to your prompt before the first layer" data='${j({
+  steps: [
+    { label: "Normalise", text: "Unicode and whitespace are cleaned up." },
+    { label: "Split", description: "Text is cut into the longest pieces found in the vocabulary." },
+    { label: "Map", text: "Each piece becomes its integer id, ready for the embedding table." },
+  ],
 })}'}}`;
 page2 = insertEmbedAfterParagraph(
   page2,

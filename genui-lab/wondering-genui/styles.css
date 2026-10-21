@@ -369,7 +369,7 @@ main { max-width: 1120px; margin: 0 auto; padding: 24px 16px 96px; }
 .board-empty { border: 1.5px dashed var(--border-strong); border-radius: 18px; padding: 40px 16px; text-align: center; color: var(--text-3); }
 .board-item { border: 1px solid var(--border); background: var(--surface); border-radius: 20px; padding: 16px; transition: box-shadow .3s; min-width: 0; }
 .board-item.is-focused { box-shadow: 0 0 0 3px var(--brand); }
-.board-item__head { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; margin-bottom: 8px; }
+.board-item__head { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 8px; align-items: baseline; margin-bottom: 8px; }
 .board-item__title { font-weight: 600; }
 .board-item__meta { font-family: ui-monospace, Menlo, monospace; font-size: 11px; color: var(--text-3); }
 .tool-log { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; max-height: 540px; overflow: auto; }

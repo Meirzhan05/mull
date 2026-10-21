@@ -1,0 +1,7 @@
+{
+  "name": "wondering-genui-lab",
+  "private": true,
+  "type": "module",
+  "description": "Dependency-free reconstruction of wondering.app generative lesson UI",
+  "scripts": { "test": "node --test test/" }
+}

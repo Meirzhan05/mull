@@ -19,7 +19,11 @@ python3 -m http.server 8740 --directory genui-lab
 Then open http://localhost:8740/. To run the tests:
 
 ```bash
-node --test genui-lab/*/test/
+node --test genui-lab/chatgpt-dil/test/index.js
+```
+
+```bash
+node --test genui-lab/wondering-genui/test/*.test.js
 ```
 
 ## Evidence handling
