@@ -6,6 +6,7 @@
 
 import { uid } from './store.js';
 import { DilSurface, mergeComponentResults } from './dil-surface.js';
+import { hasViewState } from './view-state.js';
 import { streamTurn, postJson } from './stream-client.js';
 import { XP } from './deck.js';
 import { el, icon, toast } from './ui.js';
@@ -127,9 +128,19 @@ export function renderTeacher(ctx, threadId) {
     const typing = el('div', { class: 'typing', 'aria-label': 'Teacher is typing' }, el('i'), el('i'), el('i'));
     const body = el('div', { class: 'bot-body' }, statusLine, typing, mount);
     log.append(el('div', { class: 'msg msg-bot' }, el('span', { class: 'tutor-avatar small', 'aria-hidden': 'true' }, icon('teacher')), body));
-    const state = { msg, dil: msg?.dil || null };
+    const state = { msg, dil: msg?.dil || null, pendingViewState: null };
     const appData = () => mergeComponentResults(state.dil?.appData, state.msg?.componentResults);
-    const surface = new DilSurface(mount, { onAction: (a) => onAction(a, state, surface, appData) });
+    const surface = new DilSurface(mount, {
+      onAction: (a) => onAction(a, state, surface, appData),
+      // widget state (view-state.js): saved on the message entry; held until the reply is saved
+      viewState: msg?.viewState || null,
+      onViewState: (vs) => {
+        const v = hasViewState(vs) ? vs : null;
+        if (!state.msg) { state.pendingViewState = v; return; }
+        if (v) state.msg.viewState = v; else delete state.msg.viewState;
+        persist();
+      },
+    });
     surfaces.push(surface);
     return {
       state,
@@ -252,7 +263,7 @@ export function renderTeacher(ctx, threadId) {
       bot.done();
       const d = r.message.dil;
       const dil = d ? { code: d.code, constants: d.constants, appData: d.appData } : null;
-      const entry = { role: 'assistant', content: r.message.markdown, dil, componentResults: d?.appData?.opGenui?.componentResults || {}, followups: r.final?.followupPrompts || [] };
+      const entry = { role: 'assistant', content: r.message.markdown, dil, componentResults: d?.appData?.opGenui?.componentResults || {}, followups: r.final?.followupPrompts || [], ...(bot.state.pendingViewState ? { viewState: bot.state.pendingViewState } : {}) };
       bot.state.msg = entry;
       thread.messages.push(entry);
       persist();

@@ -1,11 +1,19 @@
 // Wonder DIL sandbox worker: chatgpt-dil's worker protocol (init/render/invokeFunction/
 // viewport/reset -> ops/hostAction/error/completion) around the learning-catalog runtime.
+//
+// Widget state persistence (DILStatePersistence, chatgpt-findings §3.1–3.2):
+//   main -> worker  {type:'setStateSnapshot', snapshot}  (sent before the first render)
+//                   {type:'pruneViewState', keep:[resolutionId]} | {type:'resetViewState'}
+//                   {type:'flushViewState'}               (deliver a pending change now)
+//   worker -> main  {type:'viewState', snapshot}          (debounced ~300 ms after a change)
+//                   {type:'viewStateFlushed'}
 
 import { createLearningRuntime, encodeOps } from './learning-runtime.js';
 
 const post = self.postMessage.bind(self);
 let useBinary = true;
 let runtime = null;
+let pendingSnapshot = null; // a snapshot that arrived before init
 
 // Best-effort network lockdown; program code additionally sees these names shadowed.
 for (const name of ['fetch', 'XMLHttpRequest', 'WebSocket', 'EventSource', 'importScripts', 'indexedDB', 'caches', 'BroadcastChannel', 'SharedWorker', 'Worker']) {
@@ -16,6 +24,8 @@ function ensure(viewportWidth) {
   if (runtime) return runtime;
   runtime = createLearningRuntime({
     viewportWidth,
+    viewState: pendingSnapshot,
+    onViewState(snapshot) { post({ type: 'viewState', snapshot }); },
     onOps(ops, meta) {
       if (useBinary) {
         const { buffer, strings } = encodeOps(ops);
@@ -27,6 +37,7 @@ function ensure(viewportWidth) {
     onHostAction(action) { post({ type: 'hostAction', action }); },
     onError(error) { post({ type: 'error', error }); },
   });
+  pendingSnapshot = null;
   return runtime;
 }
 
@@ -43,6 +54,10 @@ self.onmessage = (e) => {
       }
       case 'viewport': ensure(m.width).setViewport(m.width); break;
       case 'reset': if (runtime) runtime.reset(); break;
+      case 'setStateSnapshot': if (runtime) runtime.setStateSnapshot(m.snapshot); else pendingSnapshot = m.snapshot; break;
+      case 'pruneViewState': if (runtime) runtime.pruneViewState(Array.isArray(m.keep) ? m.keep : []); break;
+      case 'resetViewState': if (runtime) runtime.resetViewState(); break;
+      case 'flushViewState': if (runtime) runtime.flushViewState(); post({ type: 'viewStateFlushed' }); break;
       default: post({ type: 'error', error: { message: `unknown message ${m.type}`, phase: 'protocol' } });
     }
   } catch (err) {

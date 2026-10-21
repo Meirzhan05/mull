@@ -13,6 +13,10 @@ import { renderTeacher, queueTeacherMessage } from './teacher-screen.js';
 import { renderMemory } from './memory-screen.js';
 import { createSteerBar } from './steer-bar.js'; // Phase 4
 import { lessonPhase, statusAfterStop, carryOver, mergeContinuedAppData, sourcesFromAppData, pageCount, pageTitles } from './steering-core.js';
+// widget state persistence (view-state.js): saved per lesson / tutor message, reset from the lesson menu
+import { resolutionIdsOf } from './steering-core.js';
+import { pruneViewState, hasViewState } from './view-state.js';
+import { createOverflowMenu } from './lesson-menu.js';
 
 const store = createStore();
 const PAGE_ID = uid('page'); // this page load: a 'streaming' lesson owned by another id was interrupted
@@ -291,12 +295,20 @@ function renderLesson(lessonId) {
     onMode: (mode, node) => { if (!node.parentNode) return; if (mode === 'revise') errorBox.before(node); else reasoning.after(node); },
   });
   const tutorToggle = el('button', { class: 'btn btn-secondary btn-sm tutor-toggle', type: 'button', 'aria-expanded': 'false' }, icon('chat'), el('span', null, 'Ask tutor'));
+  // >>> widget state: lesson overflow menu
+  const lessonMenu = createOverflowMenu({ label: 'More lesson options', items: [{
+    label: 'Reset interactive widgets', hint: 'Sliders, steps, cards and quiz progress go back to their start.',
+    onSelect: () => { surface.resetViewState(); saveLesson(lessonId, { viewState: null }); toast('Interactive widgets reset'); },
+  }] });
+  teardown.push(() => lessonMenu.destroy());
+  // <<< widget state
 
   const lessonMain = el('div', { class: 'lesson-main' },
     el('div', { class: 'lesson-bar' },
       el('a', { class: 'icon-btn', href: back, 'aria-label': 'Back' }, icon('arrow-left')),
       el('div', { class: 'lesson-bar-mid' }, titleEl, el('span', { class: 'progress', role: 'progressbar', 'aria-label': 'Lesson progress' }, progressFill)),
-      tutorToggle),
+      tutorToggle,
+      lessonMenu.el), // widget state: overflow menu
     reasoning,
     steerBar.el,
     el('article', { class: 'lesson-card card' }, mount),
@@ -319,7 +331,12 @@ function renderLesson(lessonId) {
 
   // -- DIL surface + widget actions
   let current = { dil: lesson.dil, appData: lesson.appData };
-  const surface = new DilSurface(mount, { onAction: (a) => handleAction(a), onError: (e) => console.warn('[dil]', e.phase, e.message) });
+  const surface = new DilSurface(mount, {
+    onAction: (a) => handleAction(a), onError: (e) => console.warn('[dil]', e.phase, e.message),
+    // widget state: saved snapshot goes in before the first render; debounced changes come back
+    viewState: lesson.dil && hasViewState(lesson.viewState) ? pruneViewState(lesson.viewState, resolutionIdsOf(lesson.dil)) : null,
+    onViewState: (vs) => saveLesson(lessonId, { viewState: hasViewState(vs) ? vs : null }),
+  });
   teardown.push(() => surface.destroy());
   const appDataFor = () => mergeComponentResults(current.dil?.appData, current.appData?.opGenui?.componentResults);
 
@@ -478,6 +495,7 @@ function renderLesson(lessonId) {
       streaming = false;
       saveLesson(lessonId, { status: 'complete', streamOwner: null, markdown: msg.markdown, dil, appData: current.appData, messageId, title: lessonTitleFrom(msg.markdown, l.title), truncated: !!r.final?.debug?.truncated, interruptedReason: null });
       store.flush();
+      if (dil) surface.pruneViewState(resolutionIdsOf(dil)); // widget state: drop widgets a revision removed or rewrote
       if (r.final?.debug?.truncated) toast('The lesson was cut short (length limit).');
       markComplete();
       steerBar.setMode('revise');
@@ -582,8 +600,20 @@ function createTutor(lessonId) {
     log.append(el('div', { class: 'msg msg-user' }, el('div', { class: 'bubble' }, text)));
   }
 
-  function addAssistant() {
+  // widget state: `index` of the saved tutor entry (null while the reply streams; the snapshot is
+  // held in vsRef.pending and saved with the entry)
+  function saveTutorViewState(i, v) {
+    store.update((d) => {
+      const t = d.lessons[lessonId]?.tutor;
+      const m = t?.[i];
+      if (m && m.role === 'assistant') { const { viewState: _old, ...rest } = m; t[i] = v ? { ...rest, viewState: v } : rest; }
+      return d;
+    });
+  }
+
+  function addAssistant(index = null, viewState = null) {
     empty.hidden = true;
+    const vsRef = { index, pending: null }; // widget state
     const mount = el('div', { class: 'msg-dil' });
     const typing = el('div', { class: 'typing', 'aria-label': 'Tutor is typing' }, el('i'), el('i'), el('i'));
     const wrapper = el('div', { class: 'msg msg-bot' }, el('span', { class: 'tutor-avatar small', 'aria-hidden': 'true' }, icon('sparkles')), el('div', { class: 'bot-body' }, typing, mount));
@@ -602,19 +632,22 @@ function createTutor(lessonId) {
         }
         handleClientAction(a, { lessonId, openTutor: () => api.onOpenChange?.(true), tutor: api });
       },
+      viewState, // widget state
+      onViewState: (vs) => { const v = hasViewState(vs) ? vs : null; if (vsRef.index == null) vsRef.pending = v; else saveTutorViewState(vsRef.index, v); },
     });
     surfaces.push(surface);
     return {
       typing,
+      vsRef,
       render(dil, animated) { dilRef = dil; surface.render({ code: dil.code, constants: dil.constants, appData: mergeComponentResults(dil.appData, appData.opGenui?.componentResults) }, { animated }); },
     };
   }
 
   // restore transcript
-  for (const m of lesson()?.tutor || []) {
+  (lesson()?.tutor || []).forEach((m, i) => {
     if (m.role === 'user') addUser(m.content);
-    else if (m.dil) { const a = addAssistant(); a.typing.remove(); a.render(m.dil, false); }
-  }
+    else if (m.dil) { const a = addAssistant(i, m.viewState || null); a.typing.remove(); a.render(m.dil, false); }
+  });
   const lastBot = [...(lesson()?.tutor || [])].reverse().find((m) => m.role === 'assistant');
   showFollowups(lastBot?.followups);
 
@@ -650,7 +683,8 @@ function createTutor(lessonId) {
         if (r.failure) throw new Error(r.failure.message || 'The tutor could not answer');
         const dil = r.message.dil ? { code: r.message.dil.code, constants: r.message.dil.constants, appData: r.message.dil.appData } : null;
         const prompts = r.final?.followupPrompts || [];
-        saveLesson(lessonId, { tutor: [...(l.tutor || []), { role: 'user', content: message }, { role: 'assistant', content: r.message.markdown, dil, followups: prompts }] });
+        bot.vsRef.index = (l.tutor || []).length + 1; // widget state: later changes go to the saved entry
+        saveLesson(lessonId, { tutor: [...(l.tutor || []), { role: 'user', content: message }, { role: 'assistant', content: r.message.markdown, dil, followups: prompts, ...(bot.vsRef.pending ? { viewState: bot.vsRef.pending } : {}) }] });
         showFollowups(prompts);
       } catch (e) {
         if (!ac.signal.aborted) {

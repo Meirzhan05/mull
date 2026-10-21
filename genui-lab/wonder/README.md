@@ -171,7 +171,7 @@ The Teacher persona (`TEACHER_SYSTEM_PROMPT`) uses Wondering's dial values fixed
 ## Tests
 
 ```sh
-node --test genui-lab/wonder/test/index.js      # 166 tests, about 8 s, no network
+node --test genui-lab/wonder/test/index.js      # 200 tests, about 15 s, no network
 ```
 
 - **`compile.test.js`**
@@ -213,6 +213,7 @@ node --test genui-lab/wonder/test/index.js      # 166 tests, about 8 s, no netwo
   - LaTeX-aware JSON escapes, with ordinary `\n`/`\t`/`\"` still decoding.
   - Inline math in a LessonStepper step and Quiz options; every demo formula typesets with KaTeX (`throwOnError: true`); the Unicode fallback.
   - `/vendor/katex/` serves css, js and fonts (200) and refuses traversal and other files (404).
+- **`view-state.test.js`** covers widget state persistence: a snapshot restores every persisted widget on the first render (also via `setStateSnapshot`), one debounced message per burst of clicks (mock timers), live state and the snapshot survive streamed recompiles, unknown ids/keys and invalid values are ignored, a revision that rewrites or removes a widget drops its state while unchanged widgets keep theirs, reset, server-graded Quiz state wins over local progress, Cite/KeyTerm stay ephemeral, the compound-interest FunctionGraph slider, Stepper and Flashcards round-trip (desktop and 390 px), size caps and eviction, and store persistence with corrupted snapshots.
 - **`deck.test.js`** covers practice grading, FSRS deck scheduling (learning steps, graduation, growing intervals, lapses), XP/streak rules, and localStorage persistence when storage is blocked or corrupted.
 
 ## Files
@@ -231,8 +232,32 @@ public/index.html, styles.css, app.js (screens), ui.js, review.js, store.js, dec
 server/math-spans.js      math spans hoisted before the stock compiler
 public/teacher-screen.js, teacher-core.js (progress snapshot, history), memory-screen.js
 public/learning-catalog.js (in-sandbox components), learning-runtime.js, wonder-worker.js, dil-surface.js, stream-client.js
+public/view-state.js      widget state snapshots (store, useSaved, caps)   public/lesson-menu.js + .css  lesson overflow menu
 test/*.test.js, test/index.js, test/helpers.js
 ```
+
+## Widget state persistence
+
+Interactive widgets keep their state across reloads and when a lesson is reopened, like ChatGPT's `DIL.useState(initial, {key, widgetId})` + `DILStatePersistence` (chatgpt-findings §3.1–3.2). chatgpt-dil's runtime ignores those options and has no snapshot API, so the store lives in Wonder's runtime wrapper (`public/learning-runtime.js`, `public/view-state.js`) and chatgpt-dil is unchanged.
+
+| Widget | Saved | Not saved |
+|---|---|---|
+| `FunctionGraph` | parameter values | |
+| `LessonStepper` | current step | |
+| `Reveal` | which items are open | |
+| `CompareToggle` | left / right / side by side (side by side shows the left view on phones) | |
+| `InputOutputSlider` | selected stop | |
+| `Flashcards` | card index, flipped, "saved to deck" | |
+| `Quiz` | local progress (answers, current question, attempt) | server-graded `componentResults` win when present |
+| `Cite`, `KeyTerm`, `Flowchart`/`Timeline`/`BarChart`/`ConceptMap`/`Cycle` selection | | ephemeral |
+
+- **Keys.** Surface (the lesson, a tutor message or a Teacher message, which owns the snapshot) + the component's compiler-assigned `__resolutionId` (name + ordinal + messageId salt, stable across streamed revisions, reloads and continuations) + a local key (`i`, `params`, `card`, …).
+- **Snapshot.** `{v: 1, c: {[resolutionId]: {h, t, s: {[key]: value}}}}`. `h` fingerprints the component's props, so a component that a revision rewrote in place does not inherit the old widget's state. Values must be plain JSON (no functions, NaN, class instances, at most 6 levels); one key may hold at most 8 KB and a surface at most 50 KB, with the least recently written widgets evicted first.
+- **In the sandbox.** Persisted components call `useSaved(props, key, initial, restore)` (built on `DIL.useState`) instead of `DIL.useState`. The store reaches them as a non-enumerable `appData.__wonderViewState`; `restore` validates a saved value against the current props (an out-of-range step or unknown param falls back to the initial value).
+- **Worker protocol.** main → worker `setStateSnapshot` is posted before `init`/the first `render`, so widgets mount in their saved state with no flicker. Changes come back as `{type: "viewState", snapshot}`, debounced 300 ms. `pruneViewState {keep}`, `resetViewState` and `flushViewState` (sent when a surface is destroyed, so leaving a lesson right after a change still saves it) complete the set.
+- **Storage.** `store.js` keeps `viewState` on the lesson, each tutor message and each Teacher message, and re-validates it on load. A corrupted snapshot is dropped and the lesson opens with fresh widgets. Quota pruning drops the snapshots of older lessons along with their tutor transcripts.
+- **Streaming and steering.** Live state already survives recompiles (fibers are matched by component name). When a resumed or revised lesson finishes, the snapshot is pruned to the resolution ids of the final program and to widgets whose props are unchanged, so removed or rewritten widgets lose their state and kept ones keep theirs.
+- **Reset.** The lesson bar's "⋯" menu has **Reset interactive widgets**. It clears the lesson's snapshot and remounts the program. A Quiz graded by the server still shows its server-side answers.
 
 ## Limitations
 
@@ -422,5 +447,5 @@ Live check against `claude-opus-5-5`, using 5 requests:
 Known gaps:
 - Revising or resuming rewrites from a page boundary. It can't edit one paragraph inside a page, and an interrupted page is always rewritten from its heading.
 - A continuation drops widget state (such as quiz answers) for the rewritten pages, and a steer that lands after the last page has been written only rewrites the last page.
-- Graph slider values are not persisted.
+- Widget state (graph sliders, stepper step, flashcards, …) is saved per lesson and message; see "Widget state persistence". A change made less than 300 ms before a hard reload can be lost.
 - **Search latency is tuned.** Claude writes the title and hook before searching and makes 1–2 focused searches (`max_uses: 3`). On the same JWST topic, live: first text went from 34.2 s to 1.6 s and the whole lesson from 59.5 s to 44.1 s, with 9 sources still cited. Every stream has an idle watchdog (`WONDER_STREAM_IDLE_MS`, default 120 s), so a stalled connection fails fast as a resumable `stalled`/`network` error instead of hanging. After a search, an exact repeat of an already-written paragraph (e.g. the hook) is dropped.

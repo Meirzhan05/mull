@@ -10,6 +10,8 @@
 //                  parameter sliders (−/+ and a segmented track), live re-render via
 //                  DIL.useState. Expressions are evaluated with public/expr.js, injected as
 //                  source text, so the sandbox never uses eval/Function on model output.
+//                  Slider values persist across reloads (useSaved, view-state.js); the Cite
+//                  popover's open state is deliberately ephemeral.
 //
 // `catalogExtras` must stay self-contained: its source text is injected into the program.
 
@@ -20,8 +22,9 @@ export const EXTRA_COMPONENT_NAMES = Object.freeze(['FunctionGraph', 'Sources'])
 /** Extra components the server validates (catalog-schema.js LEARNING_COMPONENTS). */
 export const EXTRA_SCHEMA_NAMES = Object.freeze(['FunctionGraph']);
 
-export function catalogExtras(__dil, DIL, GenUI, expr) {
+export function catalogExtras(__dil, DIL, GenUI, expr, useSavedImpl) {
   const h = __dil.jsx;
+  const useSaved = useSavedImpl || ((_props, _key, initial) => DIL.useState(initial));
   const F = __dil.Fragment;
   const arr = (v) => (Array.isArray(v) ? v : []);
   const str = (v) => (typeof v === 'string' ? v : v == null ? '' : String(v));
@@ -146,7 +149,13 @@ export function catalogExtras(__dil, DIL, GenUI, expr) {
     const params = arr(props.params).filter((q) => q && typeof q.name === 'string' && q.max > q.min);
     const isMobile = DIL.useIsMobile();
     const initial = () => Object.fromEntries(params.map((q) => [q.name, snap(q, Number(q.value))]));
-    const [vals, setVals] = DIL.useState(initial);
+    const [vals, setVals] = useSaved(props, 'params', initial, (v) => {
+      if (!v || typeof v !== 'object' || Array.isArray(v)) return undefined;
+      const out = initial();
+      let any = false;
+      for (const q of params) if (Number.isFinite(v[q.name])) { out[q.name] = snap(q, v[q.name]); any = true; }
+      return any ? out : undefined;
+    });
     const names = ['x', ...params.map((q) => q.name)];
     const compiled = DIL.useMemo(() => fns.map((f) => expr.compile(f.fn, names)), [fns.map((f) => f.fn).join('\u0000'), names.join(',')]);
     if (!fns.length) return null;
@@ -204,4 +213,4 @@ export function catalogExtras(__dil, DIL, GenUI, expr) {
  * Prelude appended after LEARNING_PRELUDE. Binds FunctionGraph/Sources and swaps the stock
  * Cite (a Function parameter of the program, so it is reassigned, not redeclared).
  */
-export const EXTRAS_PRELUDE = `const {${EXTRA_COMPONENT_NAMES.join(',')},WonderCite}=(${catalogExtras.toString()})(__dil,DIL,GenUI,(${createExprCompiler.toString()})());\ntry{Cite=WonderCite}catch{}\n`;
+export const EXTRAS_PRELUDE = `const {${EXTRA_COMPONENT_NAMES.join(',')},WonderCite}=(${catalogExtras.toString()})(__dil,DIL,GenUI,(${createExprCompiler.toString()})(),typeof __wonderUseSaved==='function'?__wonderUseSaved:null);\ntry{Cite=WonderCite}catch{}\n`;
