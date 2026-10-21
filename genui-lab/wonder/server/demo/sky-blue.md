@@ -14,7 +14,7 @@ White sunlight is every color of the rainbow traveling together. What makes the 
 <box padding={3} radius="lg" background="#E0452B" gap={0}><text size="xs" weight="semibold" color="#ffffff">Red · 680 nm</text></box>
 </row>
 
-When all of these reach your eye at once, your brain reports "white". Remove some of them and the mix shifts color. That is exactly what the atmosphere does.
+When all of these reach your eye at once, your brain reports "white". Remove some of them and the mix shifts color. That is exactly what the atmosphere does. You can split the mix yourself: a $5 glass prism spreads sunlight into a rainbow just as well as a $40 one.
 
 <Reveal title="Predict, then check" items={[{"label":"If you went above the atmosphere, what color would the daytime sky be?","content":"**Black.** Astronauts see a blazing white sun against a black sky. With no air, there is nothing to send sunlight sideways into your eyes."}]}/>
 
@@ -24,7 +24,9 @@ Air molecules are far smaller than a wavelength of light. When light hits them, 
 
 <math>\text{scattering} \propto \frac{1}{\lambda^4}</math>
 
-<LessonStepper title="Worked example: blue vs red" steps={[{"label":"Pick two colors","text":"Blue light at **470 nm** and red light at **680 nm**."},{"label":"Take the ratio","text":"680 ÷ 470 ≈ **1.45**. Blue waves are about 1.45 times shorter."},{"label":"Raise it to the 4th power","text":"1.45 × 1.45 × 1.45 × 1.45 ≈ **4.4**."},{"label":"Read the result","text":"Blue light is scattered about **4.4 times** more than red. Look anywhere away from the sun and you mostly see that scattered blue."}]}/>
+Here $\lambda$ is the wavelength, so halving it makes scattering $2^4 = 16$ times stronger.
+
+<LessonStepper title="Worked example: blue vs red" steps={[{"label":"Pick two colors","text":"Blue light at **470 nm** and red light at **680 nm**."},{"label":"Take the ratio","text":"680 ÷ 470 ≈ **1.45**. Blue waves are about 1.45 times shorter."},{"label":"Raise it to the 4th power","text":"$1.45^4 = 1.45 \\times 1.45 \\times 1.45 \\times 1.45 \\approx 4.4$, so about **4.4**."},{"label":"Read the result","text":"Blue light is scattered about **4.4 times** more than red. Look anywhere away from the sun and you mostly see that scattered blue."}]}/>
 
 <BarChart title="How strongly each color scatters" unit="× red" bars={[{"label":"Violet","value":7.6,"description":"The most scattered of all, but see the next page."},{"label":"Blue","value":4.4,"highlighted":true,"description":"Scattered about 4.4× more than red: this light fills the sky."},{"label":"Green","value":2.7},{"label":"Yellow","value":1.9},{"label":"Red","value":1,"description":"The baseline: long waves mostly travel straight through."}]}/>
 

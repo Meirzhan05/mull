@@ -124,6 +124,17 @@ The server also serves `public/` and, read-only, `genui-lab/chatgpt-dil/src/*` a
 
 Claude can also use the DIL layout primitives (`box/row/col/grid/text/title/icon/badge/divider/math/…`), with icon names taken from `chatgpt-dil/src/icons.js`.
 
+## Math
+
+Formulas are typeset with [KaTeX](https://katex.org) (npm `katex`, served read-only from `node_modules/katex/dist` at `/vendor/katex/`).
+
+- **Syntax Claude may use:** `<math>…</math>` (display when alone on its line or with `display`), `$$…$$` and `\[…\]` (display), `\(…\)` and `$…$` (inline). The prompts ask for `$…$` / `$$…$$`, plain unescaped prices, and doubled backslashes inside JSON props.
+- **Compiler (`server/math-spans.js`).** Before the stock compiler runs, a fence- and code-span-aware pass replaces every math span with `<math>` + a placeholder and hoists the raw LaTeX into the constants byte for byte, so `\text{mean} = \frac{x_1 + … + x_n}{n}` keeps every brace, backslash and underscore. Tags, attributes and `<code>`/`<markdown>` bodies are never touched. An unclosed span at the tail of a stream is held back like a half-written tag, so `\frac` never flashes raw.
+- **Dollars.** `$…$` follows pandoc's rules, tightened for prices: the opener is not followed by whitespace, the closer is the next unescaped `$` on the same line and must not be preceded by whitespace or followed by a digit, and the content must look like math. `$40,000 … $3, $4`, `$6.` and `costs $5 and $10` stay text.
+- **JSON props (`server/lenient-json.js`).** A backslash followed by a known LaTeX command (261 names: `frac`, `text`, `theta`, `times`, `beta`, `nu`, `neq`, `nabla`, `rho`, `right`, …) stays literal instead of decoding as `\f`/`\t`/`\b`/`\n`/`\r`; other letter escapes that JSON does not define keep their backslash too. Genuine escapes (`\n` before a non-command word, `\"`, `\\`, `\uXXXX`) still decode, in double- and single-quoted strings. Any expression with a backslash skips the strict `JSON.parse` fast path.
+- **Catalog text.** The in-sandbox `inline()` markdown of the learning catalog splits out `\(…\)`, `\[…\]`, `$$…$$` and safe `$…$` (same rules) into `math` primitives, so LessonStepper steps, Quiz prompts and options, Reveal answers and the rest typeset too.
+- **Client (`public/math.js`, `public/math.css`).** A MutationObserver typesets every host `math` node (and the host's own inline markdown math) with `katex.render(latex, out, {displayMode, throwOnError:false, trust:false, output:"htmlAndMathml", strict:"ignore"})`. It runs synchronously in the observer callback, after the host's frame flush and before paint. The host's text spans stay in place, hidden, so streaming updates keep working; the output lives in a sibling `.wonder-math-out` and is re-rendered only when the LaTeX changes. If KaTeX fails to load, the same span gets the old Unicode rewrite.
+
 ## Teacher
 
 `#/teacher` (Home → Teacher) is Wondering's Teacher tab rebuilt on ChatGPT's resolved components. The left column holds the thread list (a drawer on phones); the right is the chat. Replies stream as DIL in a sandbox worker, like the tutor's, and end with follow-up chips.
@@ -160,7 +171,7 @@ The Teacher persona (`TEACHER_SYSTEM_PROMPT`) uses Wondering's dial values fixed
 ## Tests
 
 ```sh
-node --test genui-lab/wonder/test/index.js      # 155 tests, about 7 s, no network
+node --test genui-lab/wonder/test/index.js      # 166 tests, about 8 s, no network
 ```
 
 - **`compile.test.js`**
@@ -196,6 +207,12 @@ node --test genui-lab/wonder/test/index.js      # 155 tests, about 7 s, no netwo
 - **`memory.test.js`** covers the store (CRUD, atomic file, caps, de-duplication, corrupt file), `/api/memory` endpoints, Claude and demo extraction (effort low, json_schema, cap 3, de-dup), and memory injection into lesson and tutor prompts after the breakpoint (left out when `memoryEnabled:false`).
 - **`catalog.test.js`** also renders TeacherCard (approval/plan/memory/skeleton, desktop and 390 px) from `componentResults`, presses every button and checks the dispatched widget actions and the re-render with new state.
 - **`real-claude-teacher.test.js`** replays a recorded real Teacher turn (`test/fixtures/claude-teacher-statistics.ndjson`) through the browser client's `streamTurn` in uneven chunks, and renders every streamed revision and the final program.
+- **`math.test.js`**:
+  - The real Claude `<math>` example keeps every brace; `$$`, `\[ \]`, `\( \)` and `$…$` become math nodes; prices (`$40,000 … $3, $4`, `$6.`, `costs $5 and $10`) stay text; math in code fences and spans is untouched.
+  - Every prefix of a math-heavy sample compiles and runs, text outside math never holds raw LaTeX, and every math node is a complete formula.
+  - LaTeX-aware JSON escapes, with ordinary `\n`/`\t`/`\"` still decoding.
+  - Inline math in a LessonStepper step and Quiz options; every demo formula typesets with KaTeX (`throwOnError: true`); the Unicode fallback.
+  - `/vendor/katex/` serves css, js and fonts (200) and refuses traversal and other files (404).
 - **`deck.test.js`** covers practice grading, FSRS deck scheduling (learning steps, graduation, growing intervals, lapses), XP/streak rules, and localStorage persistence when storage is blocked or corrupted.
 
 ## Files
@@ -210,7 +227,8 @@ server/widget-actions.js  /api/widget_action
 server/teacher.js         Teacher tools, validation, loop, card store + actions
 server/teacher-demo.js    scripted demo "model"      server/memory.js       learner memory store
 server/memory-extract.js  post-lesson memory extraction
-public/index.html, styles.css, app.js (screens), ui.js, review.js, store.js, deck.js, practice-core.js, math.js
+public/index.html, styles.css, app.js (screens), ui.js, review.js, store.js, deck.js, practice-core.js, math.js + math.css (KaTeX)
+server/math-spans.js      math spans hoisted before the stock compiler
 public/teacher-screen.js, teacher-core.js (progress snapshot, history), memory-screen.js
 public/learning-catalog.js (in-sandbox components), learning-runtime.js, wonder-worker.js, dil-surface.js, stream-client.js
 test/*.test.js, test/index.js, test/helpers.js
@@ -219,7 +237,7 @@ test/*.test.js, test/index.js, test/helpers.js
 ## Limitations
 
 - **The Claude path is tested only against a fake client.** No real API calls were made while building this. The prompts are untested against the live model, so the first real lessons may need prompt tuning.
-- **Math is not typeset.** There is no KaTeX: `public/math.js` rewrites rendered LaTeX into Unicode (`\frac{1}{\lambda^4}` becomes `1⁄λ⁴`). Complex formulas stay readable but are not typeset.
+- **Math falls back to Unicode only when KaTeX cannot load.** Then `public/math.js` rewrites LaTeX into Unicode (`\frac{1}{\lambda^4}` becomes `1⁄λ⁴`), which reads fine but is not typeset. A web-search Cite can in principle land inside a `$…$` span (the grounding safe-point check knows `\(…\)` and `<math>`, not dollars); that span then shows as text.
 - **Server-side widget state is in memory** (quiz answers per resolution id). The client persists `componentResults` with each lesson, so reloads still restore it, but a server restart forgets its copy.
 - **One sandbox worker per surface**: the lesson plus each tutor reply. Very long tutor threads therefore start many workers. They are terminated when you leave the lesson.
 - **Tutor replies are not lesson-specific in demo mode.** They are templates that use the lesson's KeyTerms and Quiz. Any other topic streams one of the three sample lessons.

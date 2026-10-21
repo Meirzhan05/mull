@@ -1,6 +1,10 @@
-// Readable math without KaTeX. chatgpt-dil's host renders the `math` primitive as plain text
-// (README: "Math is a plain-text fallback with no KaTeX"); Wonder keeps the host unmodified
-// and post-processes rendered math nodes into Unicode: \frac{1}{\lambda^4} -> 1⁄λ⁴.
+// Math typesetting. chatgpt-dil's host renders the `math` primitive as plain text (README:
+// "Math is a plain-text fallback with no KaTeX"); Wonder keeps the host unmodified and
+// typesets rendered math nodes with KaTeX (served read-only from /vendor/katex/). The host's
+// own text spans stay in place (hidden by math.css) so its streaming updates keep working; the
+// typeset output lives in a sibling <span class="wonder-math-out"> and is re-rendered only when
+// the LaTeX text changes. If KaTeX cannot load, the same span shows a Unicode rewrite instead
+// (prettyLatex: \frac{1}{\lambda^4} -> 1⁄λ⁴), which is also what shows while KaTeX loads.
 
 const SYMBOLS = {
   alpha: 'α', beta: 'β', gamma: 'γ', delta: 'δ', epsilon: 'ε', varepsilon: 'ε', zeta: 'ζ', eta: 'η', theta: 'θ', iota: 'ι', kappa: 'κ',
@@ -37,27 +41,83 @@ export function prettyLatex(src) {
   return s.replace(/\s{2,}/g, ' ').trim();
 }
 
-/** Keep every rendered math node in `root` prettified (the host may rewrite text later). */
-export function observeMath(root = document.body) {
+export const KATEX_OPTIONS = Object.freeze({ throwOnError: false, trust: false, output: 'htmlAndMathml', strict: 'ignore' });
+const KATEX_SRC = '/vendor/katex/katex.min.js';
+const MATH_SELECTOR = '.dil-root [data-d-component="math"], .dil-root .d-math-inline';
+
+let katexPromise = null;
+/** Load KaTeX once (classic script -> window.katex). Resolves to the library, or null on failure. */
+export function loadKatex({ src = KATEX_SRC, timeoutMs = 5000, doc = globalThis.document } = {}) {
+  if (globalThis.katex?.render) return Promise.resolve(globalThis.katex);
+  if (katexPromise) return katexPromise;
+  katexPromise = new Promise((resolve) => {
+    if (!doc) return resolve(null);
+    const s = doc.createElement('script');
+    const done = (lib) => { clearTimeout(timer); resolve(lib); };
+    const timer = setTimeout(() => done(globalThis.katex?.render ? globalThis.katex : null), timeoutMs);
+    s.src = src;
+    s.async = true;
+    s.onload = () => done(globalThis.katex?.render ? globalThis.katex : null);
+    s.onerror = () => done(null);
+    doc.head.appendChild(s);
+  });
+  return katexPromise;
+}
+
+/** The LaTeX a host math node currently holds (its own text, never our typeset output). */
+export function mathSource(node) {
+  if (node.classList.contains('d-math-inline')) return node.__wonderLatex ?? node.textContent;
+  let s = '';
+  for (const c of node.childNodes) if (!(c.nodeType === 1 && c.classList.contains('wonder-math-out'))) s += c.textContent;
+  return s.trim();
+}
+
+/**
+ * Typeset one math node with `katex` (or the Unicode fallback when it is null). No-op when the
+ * LaTeX and the renderer are unchanged, so streaming re-renders only touch formulas that moved.
+ */
+export function typesetMath(node, katex) {
+  const latex = mathSource(node);
+  const mode = katex ? 'katex' : 'text';
+  if (node.__wonderLatex === latex && node.__wonderMode === mode) return false;
+  const inlineMd = node.classList.contains('d-math-inline'); // the host's own markdown inline math span
+  let out = inlineMd ? node : [...node.children].find((c) => c.classList.contains('wonder-math-out'));
+  if (!out) {
+    out = node.ownerDocument.createElement('span');
+    out.className = 'wonder-math-out';
+    node.appendChild(out);
+  }
+  const display = node.hasAttribute('data-display');
+  let rendered = false;
+  if (katex && latex) {
+    try { katex.render(latex, out, { ...KATEX_OPTIONS, displayMode: display }); rendered = true; } catch {}
+  }
+  if (!rendered) out.textContent = prettyLatex(latex);
+  node.__wonderLatex = latex;
+  node.__wonderMode = rendered ? 'katex' : mode;
+  node.setAttribute('data-wonder-math', rendered ? 'katex' : 'text');
+  if (!rendered) node.setAttribute('title', latex);
+  else node.removeAttribute('title');
+  return true;
+}
+
+/**
+ * Keep every rendered math node in `root` typeset. Runs synchronously in the MutationObserver
+ * callback (a microtask after the host's frame flush, before paint), so raw LaTeX never shows.
+ */
+export function observeMath(root = document.body, { load = loadKatex } = {}) {
+  let katex = null;
   const fix = () => {
-    for (const node of root.querySelectorAll('.dil-root [data-d-component="math"], .dil-root .d-math-inline')) {
-      const targets = node.matches('.d-math-inline') ? [node] : node.querySelectorAll('[data-d-text]');
-      for (const t of targets) {
-        const raw = t.textContent;
-        if (t.__wonderPretty === raw) continue;
-        const pretty = prettyLatex(raw);
-        t.__wonderPretty = pretty;
-        if (pretty !== raw) { t.textContent = pretty; node.setAttribute('title', raw); }
-      }
-    }
+    for (const node of root.querySelectorAll(MATH_SELECTOR)) typesetMath(node, katex);
   };
-  let queued = false;
-  const mo = new MutationObserver(() => {
-    if (queued) return;
-    queued = true;
-    requestAnimationFrame(() => { queued = false; fix(); });
+  root.ownerDocument?.documentElement?.classList.add('wonder-math-on');
+  const mo = new MutationObserver((records) => {
+    // ignore mutations made by our own output
+    if (records.every((r) => r.target.closest?.('.wonder-math-out') || r.target.parentElement?.closest('.wonder-math-out'))) return;
+    fix();
   });
   mo.observe(root, { childList: true, subtree: true, characterData: true });
   fix();
+  Promise.resolve(load()).then((lib) => { if (lib) { katex = lib; fix(); } }, () => {});
   return () => mo.disconnect();
 }
