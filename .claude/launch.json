@@ -6,6 +6,12 @@
       "runtimeExecutable": "python3",
       "runtimeArgs": ["-m", "http.server", "8740", "--directory", "genui-lab"],
       "port": 8740
+    },
+    {
+      "name": "wonder",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["--prefix", "genui-lab/wonder", "start"],
+      "port": 8750
     }
   ]
 }

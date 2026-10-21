@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Wonder</title>
+  <meta name="description" content="Learn anything with interactive AI lessons, a tutor, and spaced-repetition review.">
+  <meta name="theme-color" content="#FFFDF3" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#1B1511" media="(prefers-color-scheme: dark)">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='9' fill='%237CC8FF'/%3E%3Cpath d='M9 11l3 11 4-8 4 8 3-11' fill='none' stroke='%232A1E17' stroke-width='2.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="/chatgpt-dil/src/dil.css">
+  <link rel="stylesheet" href="/styles.css">
+  <script type="module" src="/app.js"></script>
+</head>
+<body>
+  <div id="demo-banner" class="demo-banner" hidden role="status">
+    <strong>Demo mode</strong> <span>— set <code>ANTHROPIC_API_KEY</code> to use Claude.</span> <span class="demo-more">Lessons are pre-written samples streamed through the same DIL pipeline.</span>
+  </div>
+  <header class="topbar">
+    <a class="brand" href="#/" aria-label="Wonder home">
+      <span class="brand-mark" aria-hidden="true">
+        <svg viewBox="0 0 32 32"><path d="M8 11l3.2 11 4.3-8.2L19.8 22 23 11"/></svg>
+      </span>
+      <span class="brand-name">Wonder</span>
+    </a>
+    <div class="topbar-right">
+      <span class="chip chip-streak" id="streak-chip" title="Day streak">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3c1 3 4 4.5 4 8.5a4 4 0 0 1-8 0c0-1.6.7-2.7 1.5-3.5.2 1.4 1 2 1.7 2C11 7.5 11 5 12 3z"/><path d="M12 21a6 6 0 0 0 6-6"/></svg>
+        <span id="streak-count">0</span>
+      </span>
+      <span class="chip chip-xp" id="xp-chip" title="Total XP">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M13 3L5 14h6l-1 7 8-11h-6z"/></svg>
+        <span id="xp-count">0</span><span class="chip-unit">XP</span>
+      </span>
+      <button class="icon-btn" id="theme-btn" type="button" aria-label="Switch color theme" title="Theme">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a9 9 0 1 0 9 9A7 7 0 0 1 12 3z"/></svg>
+      </button>
+    </div>
+  </header>
+  <main id="app" tabindex="-1"></main>
+  <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+</body>
+</html>

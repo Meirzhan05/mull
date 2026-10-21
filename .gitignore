@@ -16,3 +16,8 @@ re/screenshot-chatgpt-learn.png
 re/screenshot-chatgpt-weather.png
 .DS_Store
 node_modules/
+
+# Local secrets
+.env
+.env.*
+!.env.example
