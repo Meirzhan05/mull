@@ -3,11 +3,12 @@ import assert from 'node:assert/strict';
 import { compileWonder } from '../server/compile.js';
 import { LEARNING_COMPONENT_NAMES as SERVER_NAMES } from '../server/catalog-schema.js';
 import { LEARNING_COMPONENT_NAMES, LEARNING_PRELUDE } from '../public/learning-catalog.js';
+import { EXTRA_SCHEMA_NAMES, EXTRAS_PRELUDE } from '../public/catalog-extras.js';
 import { demo, DEMO_FILES, runProgram, catalogNodes, click } from './helpers.js';
 
 test('client catalog and server schema cover the same components', () => {
-  assert.deepEqual([...LEARNING_COMPONENT_NAMES].sort(), [...SERVER_NAMES].sort());
-  assert.doesNotThrow(() => new Function('__dil', 'DIL', 'GenUI', LEARNING_PRELUDE));
+  assert.deepEqual([...LEARNING_COMPONENT_NAMES, ...EXTRA_SCHEMA_NAMES].sort(), [...SERVER_NAMES].sort());
+  assert.doesNotThrow(() => new Function('__dil', 'DIL', 'GenUI', 'Cite', LEARNING_PRELUDE + EXTRAS_PRELUDE));
 });
 
 for (const file of DEMO_FILES) {

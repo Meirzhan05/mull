@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { createWonderServer } from '../server/app.js';
 import { parseConversationSource, ConversationTurn, CONTENT_TYPE } from '../../chatgpt-dil/src/stream.js';
 import { demo, runProgram, catalogNodes } from './helpers.js';
+import { stripGroundingTags } from '../server/grounding.js';
 
 let server;
 let base;
@@ -45,7 +46,7 @@ for (const [topic, file] of [['How transformers predict the next word', 'transfo
     const contents = records.filter((r) => r.type === 'content');
     assert.equal(contents[0].mode, 'replace');
     assert.ok(contents.slice(1).every((r) => r.mode === 'append' && r.baseRevision === r.revision - 1));
-    const deltas = contents.slice(1, -1).map((r) => r.markdown.length);
+    const deltas = contents.slice(1, -1).filter((r) => !r.markdown.includes('<Sources/>')).map((r) => r.markdown.length); // Sources list is appended separately
     assert.ok(Math.max(...deltas) <= 60 && Math.min(...deltas.slice(0, -1)) >= 20, 'demo chunks are 20-60 chars');
     const withDil = contents.filter((r) => r.dil);
     assert.ok(withDil.length >= 5 && withDil.length < contents.length, 'dil recompiled periodically, not on every record');
@@ -54,7 +55,7 @@ for (const [topic, file] of [['How transformers predict the next word', 'transfo
     for (const r of records) turn.apply(r);
     const msg = turn.primary;
     assert.equal(msg.status, 'complete');
-    assert.equal(msg.markdown, demo(file), 'final markdown is exactly the demo source');
+    assert.equal(stripGroundingTags(msg.markdown), demo(file), 'final markdown is exactly the demo source (+ Phase 3 demo citations)');
 
     const env = runProgram({ code: msg.dil.code, constants: msg.dil.constants, appData: msg.dil.appData });
     assert.deepEqual(env.errors, []);

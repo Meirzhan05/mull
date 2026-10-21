@@ -8,6 +8,7 @@ import { normalizePracticeItem } from './practice-core.js';
 import { renderReview } from './review.js';
 import { el, icon, toast, inlineMd, lessonTitleFrom } from './ui.js';
 import { observeMath } from './math.js';
+import { createSteerBar } from './steer-bar.js'; // Phase 4
 
 const store = createStore();
 const app = document.getElementById('app');
@@ -240,6 +241,7 @@ function renderLesson(lessonId) {
   const errorBox = el('div', { class: 'card error-card', hidden: true });
   const finishBtn = el('button', { class: 'btn btn-lg', type: 'button', disabled: true }, icon('sparkles'), 'Finish lesson');
   const finishHint = el('p', { class: 'muted small' }, 'Finish to collect knowledge cards for your review deck.');
+  const steerBar = createSteerBar(); // Phase 4: shown while the lesson streams
   const tutorToggle = el('button', { class: 'btn btn-secondary btn-sm tutor-toggle', type: 'button', 'aria-expanded': 'false' }, icon('chat'), el('span', null, 'Ask tutor'));
 
   const lessonMain = el('div', { class: 'lesson-main' },
@@ -248,6 +250,7 @@ function renderLesson(lessonId) {
       el('div', { class: 'lesson-bar-mid' }, titleEl, el('span', { class: 'progress', role: 'progressbar', 'aria-label': 'Lesson progress' }, progressFill)),
       tutorToggle),
     reasoning,
+    steerBar.el,
     el('article', { class: 'lesson-card card' }, mount),
     errorBox,
     el('div', { class: 'lesson-footer' }, finishBtn, finishHint));
@@ -323,9 +326,11 @@ function renderLesson(lessonId) {
     reasoning.querySelector('.reasoning-text').textContent = 'Planning the lesson…';
     progressFill.style.width = '4%';
     const l = store.data.lessons[lessonId];
+    steerBar.show();
     try {
       const r = await streamTurn('/api/lesson/stream', { topic: l.topic, level: l.level, lessonTitle: l.lessonTitle, lessonSummary: l.lessonSummary, course: l.course }, {
         signal: ac.signal,
+        onControl: (d) => steerBar.onControl(d),
         onReasoning: (s) => {
           if (s.active === false) { reasoning.hidden = true; return; }
           reasoning.hidden = false;
@@ -336,12 +341,13 @@ function renderLesson(lessonId) {
           progressFill.style.width = `${Math.min(92, 6 + pages * 18)}%`;
           if (rec.dil) {
             current.dil = rec.dil;
-            surface.render({ code: rec.dil.code, constants: rec.dil.constants, appData: appDataFor() }, { animated: rec.status !== 'complete' });
+            surface.render({ code: rec.dil.code, constants: rec.dil.constants, appData: appDataFor() }, { animated: rec.status !== 'complete' && rec.mode !== 'replace' }); // a steering replace keeps the kept pages still
           }
           const t = lessonTitleFrom(msg.markdown, '');
           if (t && titleEl.textContent !== t) titleEl.textContent = t;
         },
       });
+      steerBar.hide();
       if (r.failure) throw Object.assign(new Error(r.failure.message || 'Generation failed'), { code: r.failure.code });
       const msg = r.message;
       const dil = msg.dil ? { code: msg.dil.code, constants: msg.dil.constants, appData: msg.dil.appData, requiredComponents: msg.dil.requiredComponents || [] } : null;
@@ -351,6 +357,7 @@ function renderLesson(lessonId) {
       if (r.final?.debug?.truncated) toast('The lesson was cut short (length limit).');
       markComplete();
     } catch (e) {
+      steerBar.hide();
       if (ac.signal.aborted) { saveLesson(lessonId, { status: 'interrupted' }); return; }
       saveLesson(lessonId, { status: 'failed' });
       reasoning.hidden = true;
@@ -483,7 +490,8 @@ function createTutor(lessonId) {
       scrollDown();
       ac = new AbortController();
       try {
-        const r = await streamTurn('/api/tutor/stream', { message, history, lessonContext: { title: l.title, markdown: l.markdown } }, {
+        const useWebSearch = /\b(sources?|cite|citations?|latest|current(ly)?|recent(ly)?|news|today|this year|search|look (it )?up)\b/i.test(message); // Phase 3: tutor searches only when asked
+        const r = await streamTurn('/api/tutor/stream', { message, history, lessonContext: { title: l.title, markdown: l.markdown }, useWebSearch }, {
           signal: ac.signal,
           onContent: (msg, rec) => {
             if (rec.dil) { bot.typing.remove(); bot.render(rec.dil, rec.status !== 'complete'); }

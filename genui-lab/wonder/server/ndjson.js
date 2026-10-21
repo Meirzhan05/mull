@@ -13,7 +13,7 @@ import { compileWonder, toWonderDil } from './compile.js';
 
 export { CONTENT_TYPE };
 
-export function createTurnWriter({ write, messageId = randomUUID(), operationId = randomUUID(), now = () => Date.now(), dilIntervalMs = 150, appData } = {}) {
+export function createTurnWriter({ write, messageId = randomUUID(), operationId = randomUUID(), now = () => Date.now(), dilIntervalMs = 150, appData, appDataFor } = {}) {
   let revision = 0;
   let markdown = '';
   let lastDilAt = -Infinity;
@@ -30,7 +30,7 @@ export function createTurnWriter({ write, messageId = randomUUID(), operationId 
   function buildDil(partial) {
     try {
       const r = compileWonder(markdown, { partial, salt: messageId, fallback: !partial });
-      const dil = toWonderDil(r, appData);
+      const dil = toWonderDil(r, appDataFor ? appDataFor(r) : appData); // appDataFor: Phase 3 resolved citations
       if (Buffer.byteLength(JSON.stringify(dil)) > MAX_DIL_BYTES) return { dil: null, result: r };
       return { dil, result: r };
     } catch {
@@ -71,6 +71,18 @@ export function createTurnWriter({ write, messageId = randomUUID(), operationId 
         const { dil } = buildDil(true);
         if (dil) { rec.dil = dil; lastDilAt = now(); lastDilLen = markdown.length; }
       }
+      emit(rec);
+    },
+    // Phase 4 (steering): replace the whole message (kept pages) in one record. Same messageId,
+    // revision keeps increasing, so chatgpt-dil's ConversationTurn accepts it as a replace.
+    replace(next) {
+      if (finished) return;
+      if (revision === 0) api.start();
+      markdown = String(next ?? '');
+      revision++;
+      const rec = { type: 'content', messageId, revision, mode: 'replace', markdown, status: 'streaming' };
+      const { dil } = buildDil(true);
+      if (dil) { rec.dil = dil; lastDilAt = now(); lastDilLen = markdown.length; }
       emit(rec);
     },
     /** Final record + trailer. Returns the final compile result. */

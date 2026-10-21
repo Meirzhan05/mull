@@ -18,6 +18,10 @@ All of that collapses into one formula, where P is the principal, r the yearly r
 
 <math>A = P\,(1 + r)^{t}</math>
 
+Drag the rate below and watch the two curves split apart. The straight line is simple interest; the curve that bends upward is compounding.
+
+<FunctionGraph title="$1,000 over 40 years" fns={[{"fn":"1000*(1+r)^x","label":"compound"},{"fn":"1000*(1+r*x)","label":"simple"}]} params={[{"name":"r","min":0,"max":0.08,"step":0.01,"value":0.07,"label":"yearly rate (0.07 = 7%)"}]} xRange={[0,40]} yRange={[0,22000]} xLabel="years" yLabel="balance ($)" points={[{"x":10,"y":1967,"label":"10 years at 7%"},{"x":40,"y":14974,"label":"40 years at 7%"}]} caption="At 0% both lines stay flat at $1,000. Every extra point of interest bends the compound curve much more than it tilts the simple line."/>
+
 Check it: $1,000 × 1.10³ = $1,331. Now watch what time does at 7%:
 
 <BarChart title="$1,000 left alone at 7%" unit="$" bars={[{"label":"10 years","value":1967},{"label":"20 years","value":3870},{"label":"30 years","value":7612},{"label":"40 years","value":14974,"highlighted":true,"description":"Each decade roughly doubles the balance, so the last decade adds more than the first three combined."}]}/>

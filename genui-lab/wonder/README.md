@@ -78,6 +78,7 @@ All of this lives in `server/claude.js`. The client is dependency-injected, so t
 |---|---|
 | `GET /api/status` | `{mode, model}` |
 | `POST /api/lesson/stream {topic, level?, lessonTitle?, lessonSummary?, course?}` | NDJSON lesson |
+| `POST /api/lesson/steer {operationId, instruction}` | JSON `{ok, status: accepted\|rejected}`; the result streams on the lesson's own NDJSON (Phase 4) |
 | `POST /api/tutor/stream {lessonContext:{title, markdown}, history, message}` | NDJSON reply; the final content record carries `followupPrompts` |
 | `POST /api/course/plan {topic, level}` | JSON `{plan:{title, description, sections:[{title, lessons:[{title, summary}]}]}}`; the client renders it as a course path |
 | `POST /api/widget_action {componentName, action_type, payload, resolutionId}` | JSON `{componentResults?, issueTurn?, result?}` |
@@ -166,3 +167,124 @@ Verified against the live API (`claude-opus-5-5`), using an `sk-ant-usr-…` key
 - **Tutor:** the tutor answered with a LessonStepper and suggested follow-up questions.
 - **Practice:** the structured-output call extracted 5 knowledge cards and 7 practice items into the FSRS deck.
 - **Regression test:** the lesson is kept in `test/fixtures/claude-lesson-vaccines.md` and covered by `test/real-claude.test.js`.
+
+<!-- ===================== Phases 3-5 (grounding, steering, function graphs) ===================== -->
+
+## Phase 3: grounded lessons with sources
+
+Lessons can search the web, and Claude's citations show up as ChatGPT-style numbered pills plus a source list at the end.
+
+- **Request.** `POST /api/lesson/stream` takes `useWebSearch` (default `true`). `POST /api/tutor/stream` takes it too (default `false`). The client turns it on for the tutor only when the message asks for sources, recent facts or a search.
+- **Tool.** When search is on, the request adds `{type: "web_search_20260209", name: "web_search", max_uses: 5, allowed_callers: ["direct"]}`. There is no `code_execution` tool.
+  - `allowed_callers: ["direct"]` is required. With the default (dynamic filtering through code execution), the results reach Claude as encrypted code-execution stdout, and the answer carries **no** text-block citations. This was verified live.
+- **Streaming** (`server/grounding.js`, `streamGrounded`):
+  - **Text.** `text_delta` text goes through a `CiteAssembler`. Text blocks start with `citations: []`, and `citations_delta` events arrive before the text of a cited block, as seen live. When the block stops, the assembler adds `<Cite refs={["turn0search3"]}/>` right after the cited span. It holds back trailing whitespace, so the result reads "…1916<Cite/>." and the pill stays inside the paragraph.
+  - **Where cites can go.** A cite never lands inside a tag, a JSON prop, a code fence or span, or math. In those cases it waits for the next safe tag end or word boundary.
+  - **Searches.** `server_tool_use` queries become reasoning records ("Searching the web: “…”").
+  - **Search errors.** A `web_search_tool_result` error arrives as a result block. It is logged and narrated, and the lesson continues.
+  - **`pause_turn`.** The paused assistant content is appended, merged into one assistant turn, and the request is re-sent with no extra user message. At most 4 continuations.
+- **Source data.** Each distinct URL gets a stable ref `turn<T>search<N>`. `citeComponentResults` reads the compiled program, finds every `Cite`/`Sources` and its `__resolutionId`, and fills `appData.opGenui.componentResults[rid]` with ChatGPT's shape:
+  - Cite: `{status:"resolved", state:{items:[{ref, ref_id, index, url, title, domain, source_label, snippet, page_age?}], active_index, sources_title}}`
+  - Sources: the same items under `sources_title: "Sources (n)"`.
+
+  The turn writer runs this on every compiled revision (`createTurnWriter({appDataFor})`), so a pill is resolved as soon as it appears. `<Sources/>` is appended when anything was cited.
+- **Catalog** (`public/catalog-extras.js`, injected into the sandbox after the learning prelude):
+  - **`Cite`** is an inline numbered pill. Pressing it opens a popover card with the number, domain, title and snippet, plus "Open source" (an `open_url` client action). It overrides chatgpt-dil's stock `Cite` pill for Wonder programs only: the stock one is a parameter of the program Function, so the prelude reassigns it, and chatgpt-dil is unchanged.
+  - **`Sources`** is a numbered, pressable list with domains.
+  - A Cite whose refs don't resolve renders nothing.
+- **Prompt** (`server/prompts-extra.js`). Claude is told to search for real-world topics (1-3 focused searches), to cite in its own prose, and never to write Cite tags, `[1]` or URLs itself.
+  - Server-inserted tags are removed (`stripGroundingTags`) whenever a lesson is quoted back to Claude: tutor context, practice extraction and steering.
+- **Demo mode.** "Why the sky is blue" streams four deterministic citations (`server/demo-grounding.js`). With `useWebSearch:false` it streams the plain sample.
+
+## Phase 4: mid-turn steering
+
+- **UI.** While a lesson streams, a "Steer" bar sits under the reasoning line. It has chips (Simpler, More examples, Go deeper, Shorter) and a free-text input. The code is in `public/steer-bar.js`; `public/steering-core.js` holds the chips, `trimToLastPage` and the reducer.
+- **`POST /api/lesson/steer {operationId, instruction}`.** The operationId comes from the stream's control records. The endpoint aborts that operation's current upstream attempt (`server/steering.js`: one AbortController per attempt, linked to the response).
+  - Accepted: returns `{ok:true, status:"accepted"}`.
+  - Finished or unknown operation: 409 `{status:"rejected", reason:"not_streaming"}`.
+  - A second steer while one is still being applied: 409 `{status:"rejected", reason:"busy"}`, plus a `steering-status rejected` record on the stream.
+- **The same NDJSON response continues** with:
+  1. `control steering-status {status:"accepted", instruction}` and `control steering-message` (ChatGPT §1.5).
+  2. A reasoning record, "Steering: …".
+  3. A `content` record with `mode:"replace"`, the same messageId and a strictly higher revision. It carries the kept markdown, trimmed to the last complete `## ` page, and a recompiled dil.
+  4. Normal appends.
+
+  chatgpt-dil's `ConversationTurn` accepts this unchanged. The kept pages compile to the same program prefix with the same resolution ids, so their components keep their state. The client renders the replace without the word fade.
+- **Continuation request.** It reuses the cached system prompt and makes a single user turn with two text blocks:
+  1. The original lesson request.
+  2. `<lesson_so_far>` (cites stripped), the instruction, and "continue from the next `## ` page; don't repeat".
+
+  There is no assistant prefill. Web search stays on.
+- **Demo mode.** Steering rewrites the remaining sample pages deterministically (`steerDemoRemainder`). Each page keeps its heading, its first prose paragraph (two sentences at most) and every visual, and the quiz page is kept whole. A "Steered: Simpler" tip callout is added.
+
+## Phase 5: interactive function graphs
+
+```
+<FunctionGraph title="…" fn="a*sin(b*x)" params={[{"name":"a","min":0,"max":3,"step":0.1,"value":1,"label":"amplitude"}]}
+  xRange={[-6.28,6.28]} yRange={[-3,3]} caption="…" points={[{"x":0,"y":0,"label":"origin"}]}/>
+```
+
+- **Validation** (`server/function-graph.js`, registered in `catalog-schema.js`):
+  - **Curves.** `fn`, or `fns` with up to 3 curves (`{fn, label}`). Each must compile with `public/expr.js` using only `x` and the declared params. A leading `y =` is dropped.
+  - **Params.** At most 4. Names are short identifiers, not `x`, a function name or a constant. Each needs min < max and at most 400 steps; the value is clamped to the range.
+  - **Ranges.** Ranges must be sane. `yRange` is chosen automatically when it is missing.
+  - **Points.** At most 6.
+  - **Drawable.** The curve must be drawable somewhere in the window.
+  - **Fallback.** Invalid props become fallback markdown: the formula as code, the parameter ranges and the caption.
+- **Sandbox component** (`public/catalog-extras.js`). The expression compiler's source is injected into the prelude, so nothing the model writes is ever evaluated as JavaScript.
+  - **Plot.** Grid and axes are `path` elements. Curves are sampled with `sample()`, broken at asymptotes and clipped to the y window. Points are `circle` elements.
+  - **Labels.** There is no SVG `<text>`, so axis ranges and labels are DIL text rows around the plot.
+  - **Formula.** A readout shows live values, for example `y = 1.2·sin(1.1·x)`.
+  - **Controls.** Each param gets −/+ stepper buttons, an 11-stop segmented track and a Reset button. Everything re-renders through `DIL.useState`.
+  - **Size.** A 600×300 view on desktop, 320×220 on mobile (`useIsMobile`).
+- **Prompt.** For math, physics and economics lessons built on y = f(x), Claude includes exactly one graph. The tutor knows the component too.
+- **Demo.** The compound-interest sample graphs `1000*(1+r)^x` against simple interest `1000*(1+r*x)`, with an `r` slider.
+
+## Phase 3-5 tests and live verification
+
+`node --test genui-lab/wonder/test/index.js` now runs 127 tests, with no network:
+
+- **`grounding.test.js`:**
+  - The tool is added only when enabled.
+  - Cite placement after cited spans.
+  - `pause_turn` continuation shape and cap.
+  - Search narration and server-tool errors.
+  - The componentResults shape.
+  - Safe insertion points.
+  - The Cite popover and `open_url` action.
+  - Sources rendering.
+  - Demo citations.
+- **`steering.test.js`:**
+  - Abort and continuation request shape (kept pages, instruction, no prefill, same system prompt).
+  - Control records, and the replace record with increasing revisions.
+  - `ConversationTurn` tail replacement.
+  - Demo steering over HTTP.
+  - Rejections.
+- **`function-graph.test.js`:**
+  - Good and bad props: syntax, unknown variables and functions, too many params, points or curves, reserved names, ranges.
+  - Fallback.
+  - Sandbox render: path, peak height, slider and stepper presses, clamping, reset, asymptotes, mobile, multiple curves.
+  - The compound demo slider.
+  - Every prefix around the tag.
+- **`real-claude-cited.test.js`** replays `test/fixtures/claude-lesson-cited.ndjson`. It is a real web-searched lesson steered with "Simpler"; the intermediate dils were dropped to keep it at 177 KB, and it holds no secrets or encrypted payloads. The test checks:
+  - Every record validates.
+  - All 18 cites resolve.
+  - The Sources list renders.
+  - Recompiling gives byte-identical code.
+  - Every prefix runs.
+  - A Claude-written FunctionGraph works.
+
+Live check against `claude-opus-5-5`, using 5 requests:
+
+1. **"How the James Webb Space Telescope works".** Claude did not search, because the topic is stable knowledge. The grounding prompt was tightened after this.
+2. **"What the James Webb Space Telescope has discovered so far", with the default dynamic-filtering tool.** Claude ran 5 searches through code execution, but there were 0 citations. This led to `allowed_callers: ["direct"]`.
+3. **The same topic with direct search, in the browser, steered with "Simpler" after page 2 (two requests).**
+   - The first request made 4 searches. The steer was accepted, and the continuation searched twice more and wrote the remaining 4 pages in simpler language.
+   - The result has 18 Cite pills and 13 sources.
+   - The popover was checked at desktop and 390 px, with no console errors.
+4. **"Understanding sine waves".** Claude wrote a valid `FunctionGraph` (`a*sin(b*x)` with amplitude and frequency sliders). Pressing +/− re-rendered the curve at desktop and 390 px.
+
+Known gaps:
+- Steering works only while the original NDJSON connection is open. After a reload there is no operation to steer.
+- Graph slider values are not persisted.
+- Search slows lessons down. In the live runs a lesson took about 42 s without searches and about 68 s with them.

@@ -8,6 +8,7 @@
 // follow the lesson widget normalizers in findings §1.4.
 
 import { validateVoiceVisualPayload } from '../../wondering-genui/src/voice-visuals.js';
+import { validateFunctionGraph, functionGraphFallback } from './function-graph.js'; // Phase 5
 
 const isObj = (v) => typeof v === 'object' && v !== null && !Array.isArray(v);
 const text = (v) => (typeof v === 'string' ? v.trim() : typeof v === 'number' && Number.isFinite(v) ? String(v) : '');
@@ -244,6 +245,7 @@ export const LEARNING_COMPONENTS = Object.freeze({
   KeyTerm: { validate: KeyTerm, inline: true },
   Callout: { validate: Callout, children: true },
   Celebration: { validate: Celebration },
+  FunctionGraph: { validate: validateFunctionGraph }, // Phase 5 (server/function-graph.js)
 });
 export const LEARNING_COMPONENT_NAMES = Object.freeze(Object.keys(LEARNING_COMPONENTS));
 
@@ -268,6 +270,7 @@ const clean = (s) => String(s).replace(/</g, '‹').replace(/\s*\n\s*/g, ' ').tr
 /** Markdown rendition of a component whose props did not validate (or for fallbackMarkdown). */
 export function fallbackMarkdownFor(name, props, { inline = false } = {}) {
   const p = isObj(props) ? props : {};
+  if (name === 'FunctionGraph') return functionGraphFallback(p); // Phase 5
   if (name === 'KeyTerm' || inline) {
     const term = pick(p, 'term', 'title', 'label', 'name');
     const def = pick(p, 'definition', 'text');
