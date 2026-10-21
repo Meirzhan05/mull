@@ -156,3 +156,13 @@ test/*.test.js, test/index.js, test/helpers.js
 - **Tutor replies are not lesson-specific in demo mode.** They are templates that use the lesson's KeyTerms and Quiz. Any other topic streams one of the three sample lessons.
 - **No accounts or sync.** Courses, lessons, the deck and XP live in this browser's localStorage, and the app falls back to in-memory storage when localStorage is blocked.
 - **Inherited from chatgpt-dil:** a best-effort sandbox lockdown and no SVG `<text>`. Flowchart and ConceptMap are therefore laid out with boxes rather than drawn edges.
+
+## Credentials
+
+`npm start` reads `ANTHROPIC_API_KEY` from `genui-lab/wonder/.env`. If that isn't set, it falls back to `~/.config/wonder/.env`, which lives outside the repo. Set `ANTHROPIC_WORKSPACE_ID` as well when your key is not scoped to a workspace (for example `sk-ant-usr-…` keys). Wonder then sends it as the `anthropic-workspace-id` header.
+
+Verified against the live API (`claude-opus-5-5`), using an `sk-ant-usr-…` key with a workspace ID:
+- **Lesson:** a full lesson streamed in about 36 s across 543 content revisions. Every component validated: Quiz, LessonStepper, ConceptMap, BarChart, Reveal, Callout and KeyTerm.
+- **Tutor:** the tutor answered with a LessonStepper and suggested follow-up questions.
+- **Practice:** the structured-output call extracted 5 knowledge cards and 7 practice items into the FSRS deck.
+- **Regression test:** the lesson is kept in `test/fixtures/claude-lesson-vaccines.md` and covered by `test/real-claude.test.js`.
