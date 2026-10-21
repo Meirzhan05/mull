@@ -66,7 +66,7 @@ function quizQuestions(progress, topic) {
   const recent = progress?.recentLessons?.[0]?.title || topic;
   const pick = pickDemoLesson(recent || 'learning');
   const fromLesson = componentsOf(pick.markdown, 'Quiz')[0]?.questions || [];
-  const qs = fromLesson.slice(0, 3).map((q, i) => ({ id: `q${i + 1}`, prompt: q.prompt, question_type: q.question_type === 'true_false' ? 'true_false' : 'single_select', options: q.options, correct_values: q.correct_values, hint: q.hint || 'Think back to the lesson.', explanation: q.explanation || '' }));
+  const qs = fromLesson.slice(0, 3).map((q, i) => ({ id: `q${i + 1}`, prompt: q.prompt, question_type: q.question_type === 'true_false' ? 'true_false' : 'single_select', options: q.options, correct_values: q.correct_values, hint: q.hint || 'Think back to the lesson.', explanation: q.explanation || '', concept: q.concept || pick.title }));
   return { topic: pick.title, questions: qs };
 }
 

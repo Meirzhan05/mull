@@ -134,7 +134,7 @@ test('tool loop: tool_use blocks run, ALL results return in one user message, fu
 
 test('strict validation failure -> is_error tool_result, tool not run; quiz_me splices a normal Quiz', async () => {
   const badPlan = { goal: 'Stats', days: PLAN.days.slice(0, 2) }; // 2 days: outside 3-7
-  const quiz = { topic: 'Averages', questions: [{ id: 'q1', prompt: 'Median of 1, 2, 9?', question_type: 'single_select', options: [{ value: 'a', label: '2' }, { value: 'b', label: '4' }], correct_values: ['a'], hint: 'Middle value.', explanation: 'Sorted, the middle is 2.' }] };
+  const quiz = { topic: 'Averages', questions: [{ id: 'q1', prompt: 'Median of 1, 2, 9?', question_type: 'single_select', options: [{ value: 'a', label: '2' }, { value: 'b', label: '4' }], correct_values: ['a'], hint: 'Middle value.', explanation: 'Sorted, the middle is 2.', concept: 'Median' }] };
   const client = fakeToolClient([
     { content: [tool('p1', 'plan_study', badPlan), tool('p2', 'create_lesson', { topic: 'x', level: 'expert', reason: 'r' }), tool('p3', 'quiz_me', quiz)], stop_reason: 'tool_use' },
     { content: [{ type: 'text', text: 'Fixed.' }], stop_reason: 'end_turn' },
@@ -165,7 +165,7 @@ test('validateToolInput: schema (types, enums, required, additionalProperties) a
   assert.match(validateToolInput('remember', { fact: '   ', kind: 'goal' }).error, /fact must not be empty/);
   assert.equal(validateToolInput('remember', { fact: 'y'.repeat(500), kind: 'goal' }).value.fact.length <= 200, true);
   assert.match(validateToolInput('forget', { id: '../../etc' }).error, /memory item id/);
-  assert.match(validateToolInput('quiz_me', { topic: 't', questions: [{ id: 'q1', prompt: 'p', question_type: 'single_select', options: [{ value: 'a', label: 'A' }, { value: 'b', label: 'B' }], correct_values: ['z'], hint: '', explanation: '' }] }).error, /correct value "z"/);
+  assert.match(validateToolInput('quiz_me', { topic: 't', questions: [{ id: 'q1', prompt: 'p', question_type: 'single_select', options: [{ value: 'a', label: 'A' }, { value: 'b', label: 'B' }], correct_values: ['z'], hint: '', explanation: '', concept: 'c' }] }).error, /correct value "z"/);
   assert.match(validateToolInput('nope', {}).error, /Unknown tool/);
   assert.equal(validateToolInput('get_progress', {}).ok, true);
   assert.match(validateToolInput('get_progress', { x: 1 }).error, /not allowed/);

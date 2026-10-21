@@ -24,6 +24,7 @@ import { renderLibrary } from './library.js';
 import { renderYou, TEXT_SIZES } from './you.js';
 import { needsOnboarding, showOnboarding } from './onboarding.js';
 import { dailyProgress, courseProgress, roman, readingMinutes } from './progress-core.js';
+import { storeEvidence, quizEvidence, requestMastery } from './mastery-core.js'; // Phase 6
 
 const store = createStore();
 const PAGE_ID = uid('page'); // this page load: a 'streaming' lesson owned by another id was interrupted
@@ -681,7 +682,7 @@ function renderLesson(lessonId) {
     let r = null;
     try {
       r = await streamTurn('/api/lesson/stream', {
-        topic: l.topic, level: l.level, lessonTitle: l.lessonTitle, lessonSummary: l.lessonSummary, course: l.course, memoryEnabled: memoryEnabled(),
+        topic: l.topic, level: l.level, lessonTitle: l.lessonTitle, lessonSummary: l.lessonSummary, course: l.course, memoryEnabled: memoryEnabled(), mastery: requestMastery(store.data),
         ...(continueFrom ? { continueFrom } : {}),
       }, {
         signal: ac.signal,
@@ -774,6 +775,8 @@ function handleClientAction(a, { lessonId, openTutor, tutor }) {
       if (Array.isArray(p.results)) saveLesson(lessonId, { quizResults: p.results.slice(0, 12), quizScore: { score: Number(p.score) || 0, total: Number(p.total) || 0 } });
       if (store.data.awarded?.[key]) break;
       store.update((d) => { d.awarded = { ...(d.awarded || {}), [key]: true }; return d; });
+      // first attempt only: a retake right after seeing the answers is not evidence of mastery
+      if (memoryEnabled()) storeEvidence(store, quizEvidence(p.results, { topic: store.data.lessons[lessonId]?.title || '' }));
       giveXp((Number(p.score) || 0) * XP.quizCorrect, `${p.score}/${p.total} on the quiz`);
       break;
     }
@@ -934,7 +937,7 @@ function createTutor(lessonId) {
       ac = new AbortController();
       try {
         const useWebSearch = /\b(sources?|cite|citations?|latest|current(ly)?|recent(ly)?|news|today|this year|search|look (it )?up)\b/i.test(message); // Phase 3: tutor searches only when asked
-        const r = await streamTurn('/api/tutor/stream', { message, history, lessonContext: { title: l.title, markdown: l.markdown }, useWebSearch, memoryEnabled: memoryEnabled() }, {
+        const r = await streamTurn('/api/tutor/stream', { message, history, lessonContext: { title: l.title, markdown: l.markdown }, useWebSearch, memoryEnabled: memoryEnabled(), mastery: requestMastery(store.data) }, {
           signal: ac.signal,
           onContent: (msg, rec) => {
             if (rec.dil) { bot.typing.remove(); bot.render(rec.dil, rec.status !== 'complete'); }
@@ -1092,11 +1095,11 @@ function route() {
   else if (h === '#/review') { screen = 'review'; document.body.dataset.screen = screen; renderReviewScreen(); }
   else if ((m = /^#\/teacher(?:\/([\w-]+))?$/.exec(h))) { screen = 'teacher'; document.body.dataset.screen = screen; renderTeacher(screenCtx(), m[1] || null); }
   else if (h === '#/library') { screen = 'library'; document.body.dataset.screen = screen; renderLibrary(screenCtx()); }
-  else if (h === '#/you' || h === '#/memory') { screen = 'you'; document.body.dataset.screen = screen; renderYou(screenCtx()); }
+  else if (h === '#/you' || h === '#/memory' || h === '#/mastery') { screen = 'you'; document.body.dataset.screen = screen; renderYou(screenCtx()); }
   else { document.body.dataset.screen = screen; renderToday(screenCtx()); }
   shell.setActive(screen);
   refreshChrome();
-  if (h !== '#/memory') window.scrollTo(0, 0);
+  if (h !== '#/memory' && h !== '#/mastery') window.scrollTo(0, 0);
   const titles = { home: 'Today', library: 'Library', review: 'Review', teacher: 'Teacher', you: 'You', course: 'Course', lesson: 'Lesson' };
   document.title = screen === 'home' ? 'Wonder' : `${titles[screen]} · Wonder`;
 }

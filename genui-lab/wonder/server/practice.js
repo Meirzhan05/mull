@@ -30,20 +30,20 @@ export function extractPracticeDeterministic(markdown) {
   for (const quiz of quizzes) {
     for (const q of quiz.questions) {
       if (q.question_type === 'true_false') {
-        raw.push({ type: 'binary_choice', prompt: q.prompt, answer: q.correct_values[0] === 'true', explanation: q.explanation || '' });
+        raw.push({ type: 'binary_choice', prompt: q.prompt, answer: q.correct_values[0] === 'true', explanation: q.explanation || '', concept: q.concept });
       } else if (q.question_type === 'single_select') {
-        raw.push({ type: 'mcq', prompt: q.prompt, choices: q.options.map((o) => ({ id: o.value, text: o.label, isCorrect: q.correct_values.includes(o.value) })), explanation: q.explanation || '' });
+        raw.push({ type: 'mcq', prompt: q.prompt, choices: q.options.map((o) => ({ id: o.value, text: o.label, isCorrect: q.correct_values.includes(o.value) })), explanation: q.explanation || '', concept: q.concept });
       }
     }
   }
   terms.slice(0, 4).forEach((k) => {
-    raw.push({ type: 'cloze', prompt: `____: ${k.definition}`, answer: k.term, acceptableAnswers: k.term.endsWith('s') ? [k.term.slice(0, -1)] : [], explanation: `${k.term} means ${lowerFirst(k.definition)}` });
+    raw.push({ type: 'cloze', prompt: `____: ${k.definition}`, answer: k.term, acceptableAnswers: k.term.endsWith('s') ? [k.term.slice(0, -1)] : [], explanation: `${k.term} means ${lowerFirst(k.definition)}`, concept: k.term });
   });
   if (terms.length >= 2) {
     const [a, b] = terms;
-    raw.push({ type: 'binary_choice', prompt: `"${a.term}" means: ${lowerFirst(b.definition)}`, answer: false, explanation: `That describes ${b.term}. ${a.term} means ${lowerFirst(a.definition)}` });
+    raw.push({ type: 'binary_choice', prompt: `"${a.term}" means: ${lowerFirst(b.definition)}`, answer: false, explanation: `That describes ${b.term}. ${a.term} means ${lowerFirst(a.definition)}`, concept: a.term });
   }
-  terms.slice(0, 3).forEach((k) => raw.push({ type: 'flashcard', front: `What does "${k.term}" mean?`, back: k.definition }));
+  terms.slice(0, 3).forEach((k) => raw.push({ type: 'flashcard', front: `What does "${k.term}" mean?`, back: k.definition, concept: k.term }));
   const items = raw.map(normalizePracticeItem).filter(Boolean).slice(0, 12);
   return { title: lessonTitle(markdown), cards, items, source: 'lesson-components' };
 }
@@ -57,7 +57,7 @@ export function itemsFromStructured(data) {
     else if (it.type === 'cloze') raw = { type: 'cloze', prompt: it.prompt, answer: it.answer, explanation: it.explanation };
     else if (it.type === 'binary_choice') raw = { type: 'binary_choice', prompt: it.statement || it.prompt, answer: it.is_true, explanation: it.explanation };
     else if (it.type === 'flashcard') raw = { type: 'flashcard', front: it.front, back: it.back };
-    const n = raw && normalizePracticeItem(raw);
+    const n = raw && normalizePracticeItem({ ...raw, concept: it.concept });
     if (n) out.push(n);
   }
   return out;

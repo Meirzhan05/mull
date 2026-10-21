@@ -176,6 +176,7 @@ export function normalizeQuestion(q, index = 0) {
   const out = { id: pick(q, 'id') || `q${index + 1}`, prompt, question_type: type, options, correct_values };
   optional(out, 'hint', pick(q, 'hint'));
   optional(out, 'explanation', pick(q, 'explanation', 'rationale', 'feedback'));
+  optional(out, 'concept', pick(q, 'concept', 'skill').replace(/\s+/g, ' ').slice(0, 60).trim()); // Phase 6: mastery tag
   return ok(out);
 }
 

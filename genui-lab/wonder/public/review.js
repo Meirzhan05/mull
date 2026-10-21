@@ -5,6 +5,7 @@
 import { el, icon, inlineMd } from './ui.js';
 import { dueEntries, reviewEntry, previewDue, deckStats, awardXp, currentStreak, formatDue, XP, Rating } from './deck.js';
 import { gradePracticeItem } from './practice-core.js';
+import { recordEvidence, ratingScore } from './mastery-core.js';
 
 const SESSION_SIZE = 12;
 const TYPE_LABEL = { mcq: 'Multiple choice', cloze: 'Fill the blank', binary_choice: 'True or false', flashcard: 'Recall' };
@@ -115,6 +116,10 @@ export function renderReview(root, { store, onExit, onXp }) {
       const gained = correct ? XP.reviewCorrect : XP.reviewAttempt;
       d.stats = awardXp(d.stats, gained, t);
       session.xp += gained;
+      // Phase 6: a tagged review is mastery evidence (personalization follows the memory switch)
+      if (entry.item?.concept && d.settings?.memoryEnabled !== false) {
+        d.mastery = recordEvidence(d.mastery, [{ concept: entry.item.concept, score: ratingScore(rating), source: 'review', topic: entry.lessonTitle }], t);
+      }
       return d;
     });
     onXp?.();

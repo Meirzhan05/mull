@@ -35,6 +35,7 @@ import { createDemoTeacherClient } from './teacher-demo.js';
 import { withWebSearch, streamGrounded, createSourceRegistry, citationAppData, stripGroundingTags, SOURCES_TAG } from './grounding.js';
 import { createSteeringRegistry, cleanInstruction, steeringUserContent, steerDemoRemainder, trimToLastPage, normalizeContinueFrom, createContinuationSources, demoContinuation, createContinuationGuard } from './steering.js';
 import { groundDemoLesson } from './demo-grounding.js';
+import { masteryContext } from './learner-model.js'; // Phase 6
 import { pageCount } from '../public/steering-core.js';
 
 export const STATIC_ROOTS = [
@@ -165,6 +166,8 @@ export function createWonderCore(opts = {}) {
   const demoTeacher = opts.demoTeacherClient ?? createDemoTeacherClient({ delayMs: state.demoDelayMs });
   const recordDir = opts.recordDir ?? env.WONDER_RECORD_DIR ?? null;
   const memoryContext = (body, { withIds = false } = {}) => (body?.memoryEnabled === false ? '' : memory.promptBlock({ withIds }));
+  // Phase 6: the client's mastery summary (personalization, so it follows the memory switch)
+  const learnerKnows = (body, surface) => (body?.memoryEnabled === false ? '' : masteryContext(body?.mastery, surface));
   const steering = createSteeringRegistry(); // Phase 4: in-flight lesson operations
 
   function switchToDemo(reason) {
@@ -271,7 +274,7 @@ export function createWonderCore(opts = {}) {
         const request = lessonUserMessage({ topic, level, course: body.course, lessonTitle: clean(body.lessonTitle, 200), lessonSummary: clean(body.lessonSummary, 400) });
         const learner = memoryContext(body);
         if (learner) logger.info?.(`[wonder] lesson request personalized with ${Math.min(memory.size, 15)} memory items`);
-        const context = joinContext(learner && `${learner}\nUse this to pick examples and pacing that fit this learner; the lesson itself stays about the requested topic.`);
+        const context = joinContext(learner && `${learner}\nUse this to pick examples and pacing that fit this learner; the lesson itself stays about the requested topic.`, learnerKnows(body, 'lesson'));
         let messages = cont
           ? [{ role: 'user', content: steeringUserContent(request, cont.kept, cont.instruction, { mode: cont.mode, fromPage: cont.fromPage }) }]
           : [{ role: 'user', content: request }];
@@ -344,7 +347,7 @@ export function createWonderCore(opts = {}) {
     if (state.mode === 'claude') {
       const params = withWebSearch(buildStreamParams({
         system: TUTOR_SYSTEM_PROMPT,
-        context: joinContext(tutorLessonContext({ ...body.lessonContext, markdown: stripGroundingTags(body.lessonContext?.markdown) }), memoryContext(body)),
+        context: joinContext(tutorLessonContext({ ...body.lessonContext, markdown: stripGroundingTags(body.lessonContext?.markdown) }), memoryContext(body), learnerKnows(body, 'tutor')),
         messages: [...history, { role: 'user', content: message }],
         effort: 'medium',
       }), useWebSearch);
@@ -410,7 +413,7 @@ export function createWonderCore(opts = {}) {
     writer.reasoning('Thinking…');
     const params = buildStreamParams({
       system: TEACHER_SYSTEM_PROMPT,
-      context: joinContext(memoryEnabled ? memory.promptBlock({ withIds: true }) || 'The learner\'s memory is empty so far.' : MEMORY_OFF_CONTEXT),
+      context: joinContext(memoryEnabled ? memory.promptBlock({ withIds: true }) || 'The learner\'s memory is empty so far.' : MEMORY_OFF_CONTEXT, learnerKnows(body, 'teacher')),
       messages: [],
       effort: 'medium',
       maxTokens: 32000,
@@ -422,7 +425,7 @@ export function createWonderCore(opts = {}) {
       messages: withMessage(history, message),
       writer,
       signal,
-      execute: createTeacherToolkit({ memory, progress: body.progress, memoryEnabled }),
+      execute: createTeacherToolkit({ memory, progress: body.progress, mastery: body.mastery, memoryEnabled }),
       onCard: (cardState) => {
         const rid = newResolutionId();
         appData.opGenui.componentResults[rid] = resolved(teacherCards.set(rid, cardState));

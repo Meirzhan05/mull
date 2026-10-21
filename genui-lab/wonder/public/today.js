@@ -7,6 +7,7 @@ import { el, icon, toast, relTime } from './ui.js';
 import { currentStreak, deckStats, formatDue } from './deck.js';
 import { dailyProgress, weekStrip, upNext, suggestedTopics, greeting, courseProgress, learnerTotals, topicInterest, readingMinutes } from './progress-core.js';
 import { pageCount } from './steering-core.js';
+import { practiceConcepts } from './mastery-screen.js'; // Phase 6
 
 const MODES = [
   { id: 'lesson', label: 'Lesson', placeholder: 'What do you want to understand?', action: 'Begin' },
@@ -154,6 +155,11 @@ function queueRow(n, i, ctx) {
   if (n.kind === 'review') {
     return row({ kind: 'Review', title: `${n.due} card${n.due === 1 ? '' : 's'} due`, body: 'Recall each card just before you would forget it.',
       meta: `about ${Math.max(1, Math.round(Math.min(n.due, 12) * 0.4))} min`, cta: 'Review', href: '#/review' });
+  }
+  if (n.kind === 'strengthen') {
+    return row({ kind: 'Strengthen', title: `Firm up ${n.concepts.length === 1 ? n.concepts[0] : `${n.concepts.length} shaky concepts`}`,
+      body: `Your recent answers suggest these need another look: ${n.concepts.join(', ')}. Your Teacher will quiz you on them.`,
+      meta: n.concepts.length > 1 ? n.concepts.join(' · ') : 'shaky in your recent answers', cta: 'Quiz me', onclick: () => practiceConcepts(actions, n.concepts) });
   }
   if (n.kind === 'plan') {
     return row({ kind: `Study plan · day ${n.day}`, title: n.title, body: n.goal, cta: n.itemKind === 'quiz' ? 'Quiz' : 'Open', onclick: () => actions.openPlanItem(n.planId, n.dayIndex, n.itemIndex) });

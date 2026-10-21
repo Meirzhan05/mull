@@ -45,7 +45,7 @@ Use these sparingly for small custom cards, stat rows and side-by-side layouts. 
 - <BarChart title="..." unit="ms" bars={[{"label":"...","value":12,"description":"optional"}]}/>: 2-6 bars, numeric values, unit is required. One bar may set "highlighted":true.
 - <ConceptMap centerConcept="..." nodes={[{"id":"n1","label":"...","level":1}]} connections={[{"from":"center","to":"n1","relationship":"..."}]}/>: 3-8 nodes, 2-10 connections; use "center" as the id of the center concept.
 - <Cycle title="..." centerLabel="..." stages={[{"label":"...","description":"..."}]}/>: 3-6 stages of a loop.
-- <Quiz title="Check your understanding" questions={[{"id":"q1","prompt":"...","question_type":"single_select","options":[{"value":"a","label":"..."},{"value":"b","label":"..."}],"correct_values":["b"],"hint":"...","explanation":"..."}]}/>: 1-5 questions; question_type single_select (2-4 options) or true_false (options [{"value":"true","label":"True"},{"value":"false","label":"False"}]); exactly one correct value; always give a hint and an explanation. Make wrong options plausible misconceptions.
+- <Quiz title="Check your understanding" questions={[{"id":"q1","prompt":"...","question_type":"single_select","options":[{"value":"a","label":"..."},{"value":"b","label":"..."}],"correct_values":["b"],"hint":"...","explanation":"...","concept":"..."}]}/>: 1-5 questions; question_type single_select (2-4 options) or true_false (options [{"value":"true","label":"True"},{"value":"false","label":"False"}]); exactly one correct value; always give a hint and an explanation. Make wrong options plausible misconceptions. Tag every question with "concept": the one idea it tests in 1-4 words, reusing the KeyTerm wording when there is one (e.g. "Standard deviation"); Wonder tracks the learner's mastery per concept.
 - <Flashcards cards={[{"front":"...","back":"..."}]}/>: 1-12 cards.
 - <Celebration message="..."/>: a small confetti moment; at most once, at the very end.
 ${FUNCTION_GRAPH_VOCAB}
@@ -151,7 +151,7 @@ You design short self-paced courses. Given a topic and a level, plan a course of
 export const EXTRACT_SYSTEM_PROMPT = `
 You turn a finished lesson into spaced-repetition material.
 - cards: 3-6 knowledge cards for the most important concepts (term, a one-sentence definition in plain words, a short concrete example).
-- items: 4-8 practice items mixing types: "mcq" (prompt, 3-4 choices, correct_index), "cloze" (prompt containing exactly one "____" blank, answer is the missing word or short phrase), "binary_choice" (statement plus is_true), "flashcard" (front and back). Every item gets a one-sentence explanation. Fill fields that do not apply to an item's type with "" (strings), [] (choices), 0 (correct_index) or false (is_true).
+- items: 4-8 practice items mixing types (each tagged with "concept": the one idea it tests in 1-4 words, reusing a card term when it fits): "mcq" (prompt, 3-4 choices, correct_index), "cloze" (prompt containing exactly one "____" blank, answer is the missing word or short phrase), "binary_choice" (statement plus is_true), "flashcard" (front and back). Every item gets a one-sentence explanation. Fill fields that do not apply to an item's type with "" (strings), [] (choices), 0 (correct_index) or false (is_true).
 Test understanding, not trivia. Only use facts stated in the lesson.
 `.trim();
 
@@ -199,8 +199,9 @@ export const EXTRACT_SCHEMA = {
       items: {
         type: 'object',
         additionalProperties: false,
-        required: ['type', 'prompt', 'choices', 'correct_index', 'answer', 'statement', 'is_true', 'front', 'back', 'explanation'],
+        required: ['type', 'concept', 'prompt', 'choices', 'correct_index', 'answer', 'statement', 'is_true', 'front', 'back', 'explanation'],
         properties: {
+          concept: { type: 'string' },
           type: { type: 'string', enum: ['mcq', 'cloze', 'binary_choice', 'flashcard'] },
           prompt: { type: 'string' },
           choices: { type: 'array', items: { type: 'string' } },

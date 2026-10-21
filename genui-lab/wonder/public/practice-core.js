@@ -58,6 +58,8 @@ export function normalizePracticeItem(raw) {
   }
   if (!item) return null;
   item.id = t(raw.id) || `${type}-${hashId(JSON.stringify(item))}`;
+  const concept = t(raw.concept).replace(/\s+/g, ' ').slice(0, 60).trim(); // Phase 6: mastery tag (not part of the id)
+  if (concept) item.concept = concept;
   return item;
 }
 

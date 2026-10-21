@@ -4,6 +4,7 @@
 import { el, icon, toast } from './ui.js';
 import { learnerTotals, activityGrid, DAILY_GOALS, goalOf } from './progress-core.js';
 import { memoryPanel } from './memory-screen.js';
+import { masteryPanel } from './mastery-screen.js'; // Phase 6
 
 export const TEXT_SIZES = [['0.92', 'Small'], ['1', 'Default'], ['1.1', 'Large'], ['1.2', 'Larger']];
 
@@ -90,7 +91,7 @@ export function renderYou(ctx) {
         el('div', { style: { display: 'flex', gap: '8px', flexWrap: 'wrap' } }, exportBtn, resetBtn))));
 
   // settings-style layout: a section nav beside the content; the nav follows your scroll
-  const SECTIONS = [['profile', 'Profile'], ['activity', 'Activity'], ['preferences', 'Preferences'], ['memory', 'Memory'], ['data', 'Data']];
+  const SECTIONS = [['profile', 'Profile'], ['knowledge', 'What you know'], ['activity', 'Activity'], ['preferences', 'Preferences'], ['memory', 'Memory'], ['data', 'Data']];
   const sec = (id, ...kids) => el('section', { class: 'you-sec', id: `you-${id}` }, ...kids);
   const navLinks = SECTIONS.map(([id, label]) => el('a', { class: 'you-nav-link', href: `#/you`, dataset: { sec: id }, onclick: (e) => {
     e.preventDefault();
@@ -101,6 +102,7 @@ export function renderYou(ctx) {
   mark('profile');
   const content = el('div', { class: 'you-content' },
     sec('profile', head, stats),
+    sec('knowledge', masteryPanel(ctx)), // Phase 6
     sec('activity', heat),
     sec('preferences', settingsCard),
     sec('memory', memoryPanel(ctx)),
@@ -112,5 +114,6 @@ export function renderYou(ctx) {
   }, { rootMargin: '-15% 0px -70% 0px' });
   for (const n of content.children) io.observe(n);
   ctx.teardown?.push(() => io.disconnect());
+  if (location.hash === '#/mastery') requestAnimationFrame(() => document.getElementById('you-knowledge')?.scrollIntoView({ block: 'start' }));
   if (location.hash === '#/memory') requestAnimationFrame(() => document.getElementById('you-memory')?.scrollIntoView({ block: 'start' }));
 }

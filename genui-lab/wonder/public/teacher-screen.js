@@ -12,6 +12,7 @@ import { XP, deckStats, currentStreak } from './deck.js';
 import { dailyProgress, learnerTotals } from './progress-core.js';
 import { el, icon, toast } from './ui.js';
 import { progressSnapshot, historyForModel, threadTitle } from './teacher-core.js';
+import { storeEvidence, quizEvidence, requestMastery } from './mastery-core.js'; // Phase 6
 
 const STARTERS = [
   ['calendar', 'I want to get good at statistics in a week. I already know basic algebra.'],
@@ -183,6 +184,7 @@ export function renderTeacher(ctx, threadId) {
         const key = `teacher:${thread?.id}:${p.resolutionId}`;
         if (store.data.awarded?.[key]) break;
         store.update((d) => { d.awarded = { ...(d.awarded || {}), [key]: true }; return d; });
+        if (memoryOn()) storeEvidence(store, quizEvidence(p.results, { source: 'teacher_quiz' }));
         ctx.giveXp((Number(p.score) || 0) * XP.quizCorrect, `${p.score}/${p.total} on the quiz`);
         break;
       }
@@ -263,7 +265,7 @@ export function renderTeacher(ctx, threadId) {
     scrollDown();
     ac = new AbortController();
     try {
-      const r = await streamTurn('/api/teacher/stream', { threadId: thread.id, history: history2, message, progress: progressSnapshot(store.data), memoryEnabled: memoryOn() }, {
+      const r = await streamTurn('/api/teacher/stream', { threadId: thread.id, history: history2, message, progress: progressSnapshot(store.data), memoryEnabled: memoryOn(), mastery: requestMastery(store.data) }, {
         signal: ac.signal,
         onReasoning: (s) => bot.status(s.active === false ? '' : s.text),
         onContent: (msg, rec) => { if (rec.dil) bot.render(rec.dil, rec.status !== 'complete'); scrollDown(); },

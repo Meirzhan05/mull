@@ -15,6 +15,7 @@ import { randomUUID } from 'node:crypto';
 import { Anthropic } from './claude.js';
 import { validateComponentProps } from './catalog-schema.js';
 import { MEMORY_KINDS, cleanFact } from './memory.js';
+import { sanitizeMastery } from './learner-model.js';
 
 export const MAX_TEACHER_ITERATIONS = 6;
 const LEVELS = ['beginner', 'intermediate', 'advanced'];
@@ -96,9 +97,10 @@ export const TEACHER_TOOLS = Object.freeze([
           items: {
             type: 'object',
             additionalProperties: false,
-            required: ['id', 'prompt', 'question_type', 'options', 'correct_values', 'hint', 'explanation'],
+            required: ['id', 'prompt', 'question_type', 'options', 'correct_values', 'hint', 'explanation', 'concept'],
             properties: {
               id: S('q1, q2, ...'),
+              concept: S('The one concept this question tests, 1-4 words, e.g. "Standard deviation" (tracked in the learner model)'),
               prompt: S('The question'),
               question_type: { type: 'string', enum: ['single_select', 'true_false'] },
               options: {
@@ -134,7 +136,7 @@ export const TEACHER_TOOLS = Object.freeze([
   },
   {
     name: 'get_progress',
-    description: 'Read the learner\'s progress: review deck size and due cards, streak, XP, recent lessons (with quiz scores), courses, saved study plans and memory items. Call this before planning, or when they ask how they are doing or what to study next.',
+    description: 'Read the learner\'s progress: review deck size and due cards, streak, XP, recent lessons (with quiz scores), courses, saved study plans, memory items and per-concept mastery (shaky / fading / learning / mastered, estimated from graded answers). Call this before planning, or when they ask how they are doing or what to study next.',
     input_schema: { type: 'object', additionalProperties: false, required: [], properties: {} },
   },
 ].map((t) => ({ ...t, strict: true, eager_input_streaming: true })));
@@ -304,8 +306,9 @@ export const resolved = (state) => ({ status: 'resolved', state: clone(state) })
  * Tool executors for one Teacher turn.
  * Returns async (name, input) => {content, isError?, card?: {kind, state}, markup?}.
  */
-export function createTeacherToolkit({ memory, progress, memoryEnabled = true }) {
+export function createTeacherToolkit({ memory, progress, mastery, memoryEnabled = true }) {
   const snapshot = sanitizeProgress(progress);
+  const knows = memoryEnabled ? sanitizeMastery(mastery) : null; // Phase 6
   return async function execute(name, input) {
     switch (name) {
       case 'create_lesson': {
@@ -338,7 +341,7 @@ export function createTeacherToolkit({ memory, progress, memoryEnabled = true })
         return { content: `Removed ${item.id} ("${item.fact}") from memory.`, card: { kind: 'memory', state: { kind: 'memory', op: 'forget', status: 'forgotten', item } } };
       }
       case 'get_progress': {
-        const out = { ...snapshot, memory: memoryEnabled ? memory.list().slice(0, 15).map(({ id, fact, kind }) => ({ id, fact, kind })) : 'turned off by the learner' };
+        const out = { ...snapshot, memory: memoryEnabled ? memory.list().slice(0, 15).map(({ id, fact, kind }) => ({ id, fact, kind })) : 'turned off by the learner', mastery: knows || (memoryEnabled ? 'no graded answers yet' : 'turned off by the learner') };
         return { content: JSON.stringify(out) };
       }
       default:

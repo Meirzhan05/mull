@@ -53,7 +53,7 @@ export function sanitizeViewStates(data) {
 // else comes from `theirs`.
 
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
-const MAP_KEYS = new Set(['lessons', 'teacherLessons', 'awarded']);
+const MAP_KEYS = new Set(['lessons', 'teacherLessons', 'awarded', 'mastery']);
 const LIST_KEYS = new Set(['courses', 'teacherThreads', 'plans']);
 
 function mergeMap(base = {}, ours = {}, theirs = {}) {
@@ -94,7 +94,7 @@ export function mergeStates(base, ours, theirs) {
 }
 
 export function emptyState() {
-  return { version: 1, courses: [], lessons: {}, deck: emptyDeck(), stats: emptyStats(), awarded: {}, teacherThreads: [], teacherLessons: {}, plans: [], settings: { memoryEnabled: true } };
+  return { version: 1, courses: [], lessons: {}, deck: emptyDeck(), stats: emptyStats(), awarded: {}, teacherThreads: [], teacherLessons: {}, plans: [], mastery: {}, settings: { memoryEnabled: true } };
 }
 
 export function createStore({ storage } = {}) {

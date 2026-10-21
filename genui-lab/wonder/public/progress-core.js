@@ -3,6 +3,7 @@
 // the plain store state, so it is tested under node:test.
 
 import { dateKey, deckStats, currentStreak } from './deck.js';
+import { weakestConcepts } from './mastery-core.js';
 
 export const DAILY_GOALS = Object.freeze([
   { xp: 10, label: 'Casual', hint: 'A few minutes a day' },
@@ -142,6 +143,7 @@ export function courseProgress(data, course) {
  * What to do next, best first. Kinds:
  *   continue  an unfinished lesson (still being read, or interrupted)
  *   review    due practice cards
+ *   strengthen  shaky or fading concepts in the learner model (a Teacher quiz on them)
  *   plan      the next unopened item of the saved study plan
  *   course    the next lesson of a course in progress
  *   start     nothing in flight: start a first / new lesson
@@ -155,6 +157,9 @@ export function upNext(data, now = new Date()) {
   }
   const deck = deckStats(data?.deck || { items: [] }, now);
   if (deck.due > 0) out.push({ kind: 'review', due: deck.due });
+  // Phase 6: shaky / fading concepts from the learner model
+  const weak = data?.settings?.memoryEnabled === false ? [] : weakestConcepts(data?.mastery, now, 3);
+  if (weak.length) out.push({ kind: 'strengthen', concepts: weak });
   const plan = (data?.plans || [])[0];
   if (plan) {
     for (const [di, day] of (plan.days || []).entries()) {

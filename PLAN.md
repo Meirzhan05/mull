@@ -84,6 +84,69 @@ What each product does that Wonder doesn't yet, ranked by how much each item wou
 - **Teaching.** The prompt teaches it for math and physics lessons.
 - **Validation.** Server-side, using the same parser.
 
+### Phase 6: Adaptive learner model
+
+Memory holds free-text facts, but nothing tracks what the learner actually knows. Phase 6 adds a per-concept mastery estimate built from graded evidence.
+
+- **Concept tags.** Quiz questions, Teacher `quiz_me` questions and extracted practice items carry an optional `concept` (a short name such as "Standard deviation"). The prompts ask Claude to tag every question with the idea it tests.
+- **Model: `public/mastery-core.js`.** A pure module, stored in localStorage next to the deck.
+  - Each graded answer is an evidence event `{concept, at, score 0–1, weight, source: quiz|review|explain}`.
+  - A concept's mastery is the mean of a Beta posterior over its events, each decayed with a 21-day half-life. That means old evidence fades and the estimate tracks forgetting.
+  - Status is `mastered` (≥ 0.8 with enough evidence), `shaky` (< 0.55 with at least 2 events) or `learning`.
+- **Evidence sources:**
+  - lesson and Teacher quizzes (`quiz_complete` now carries each question's concept);
+  - FSRS reviews;
+  - free-response grades (phase 8).
+- **Prompts.** The client sends a compact mastery summary with lesson, tutor and Teacher requests. The server re-validates it and places a "What this learner knows" block after the cache breakpoint, next to memory:
+  - Lessons recap shaky prerequisites and skip what is mastered.
+  - The tutor connects answers to the learner's weak spots.
+  - The Teacher sees mastery in `get_progress` and targets shaky concepts with `quiz_me`.
+- **UI:**
+  - A "What you know" section on the You screen: concepts with mastery bars, grouped by status.
+  - A "Strengthen" item in Up next that asks the Teacher to quiz the shakiest concepts.
+
+### Phase 7: Lesson critic and eval harness
+
+Nothing checks generated content today. Phase 7 adds a verification pass and a way to measure prompt changes.
+
+- **Lint (`server/critic.js`, deterministic).** Checks the lesson shape against the prompt's own rules:
+  - title and hook;
+  - 3–4 pages plus the check page;
+  - a visual on every page;
+  - one Quiz with 3 tagged questions;
+  - 2–5 KeyTerms;
+  - page length.
+- **Critic (Claude, structured output).** After a Claude lesson finishes streaming, a second call reviews it. It is told to verify:
+  - quiz answer keys;
+  - factual claims, including against the cited text;
+  - level fit and widget sense.
+
+  It returns issues plus machine-applicable quiz fixes (`correct_values`, `explanation`). The server applies the fixes to the Quiz props and sends a `replace` record. A `qualityReport` goes into the turn's metadata, and the lesson menu shows "Checked: N fixes". Demo mode runs lint only. A `verify: false` request flag turns it off.
+- **Eval harness (`npm run eval`).** Generates lessons for a topic set through the real HTTP pipeline, then scores each one:
+  - lint score;
+  - critic issue counts;
+  - an LLM judge (structured rubric, 1–5 with a rationale): accuracy, clarity, level fit, interactivity, quiz quality.
+
+  It writes `evals/reports/<timestamp>.{json,md}` with per-topic and mean scores. `--demo` runs without a key (lint and pipeline only) and is covered by tests.
+
+### Phase 8: Free-response answers and a Socratic tutor
+
+All practice today is multiple choice or flashcards graded by code.
+
+- **Host primitive `text-input`.** A Wonder extension to the chatgpt-dil host: a `textarea` with `value`, `placeholder`, `rows`, `maxLength` and `onChange`. The host never overwrites the value while the field has focus.
+- **Catalog component `<ExplainBack prompt concept rubric={[…]} sampleAnswer/>`.** The learner explains an idea in their own words and submits, sending `explain_grade` to `/api/widget_action`. The server grades the answer:
+  - **Claude mode:** a structured call (effort low) returns a 0–3 score, each rubric criterion with met/missed and evidence, feedback, the misconception, and a follow-up question.
+  - **Demo mode:** a keyword grader.
+
+  The result comes back as `componentResults` and renders criteria checks, feedback, "Try again" and "Show a model answer". The grade becomes mastery evidence.
+- **Review deck.** A new `explain` practice item type, extracted from lessons and graded through the same grader. The score maps to an FSRS rating.
+- **Socratic tutor.** A "Guide me" switch in the tutor sends `mode: "socratic"`. The tutor then:
+  - asks one guiding question at a time;
+  - gives hints before answers;
+  - reveals the answer only after the learner has tried twice or asks outright.
+
+  The rules go in a context block after the cache breakpoint, so the cached system prompt is unchanged.
+
 ### Later (not in this pass)
 
 - Voice tutor with a DIL whiteboard (needs realtime audio).

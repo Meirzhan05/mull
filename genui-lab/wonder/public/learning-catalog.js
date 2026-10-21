@@ -396,7 +396,7 @@ export function learningCatalog(__dil, DIL, GenUI, useSavedImpl) {
       if (!done || st.reported) return;
       // report completion once per attempt (the host awards XP)
       setSt((s) => ({ ...s, reported: true }));
-      GenUI.dispatchAction({ handler: 'client', type: 'quiz_complete', payload: { score, total: n, resolutionId: rid, results: questions.map((q) => ({ prompt: q.prompt, correct: !!st.answers[q.id]?.correct })) } });
+      GenUI.dispatchAction({ handler: 'client', type: 'quiz_complete', payload: { score, total: n, resolutionId: rid, results: questions.map((q) => ({ prompt: q.prompt, correct: !!st.answers[q.id]?.correct, ...(q.concept ? { concept: q.concept } : {}) })) } });
     }, [done, st.attempt]);
     if (!n) return null;
     const send = (type, payload) => GenUI.dispatchWidgetAction({ type, componentName: 'Quiz', nativeWidgetResolutionId: rid, payload: { attempt: st.attempt, ...payload } });
