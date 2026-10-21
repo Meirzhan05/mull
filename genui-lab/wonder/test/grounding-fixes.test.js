@@ -84,3 +84,27 @@ test('repeat filter: a reworded hook after a search is dropped, new content kept
   assert.equal((out.text.match(/rewriting what we know/g) || []).length, 1);
   assert.match(out.text, /## Page 1: The first galaxies\n\nWebb found galaxies/);
 });
+
+test('a new text block starting with a heading gets the blank line it needs', () => {
+  const { out, asm } = sink();
+  const f = createRepeatFilter(asm);
+  f.blockStart(); f.text('…bulge on the far side.'); f.blockStop();
+  f.afterSearch();
+  f.blockStart(); f.text('## The Moon pulls unevenly\n\nGravity weakens with distance.'); f.blockStop(); f.flush();
+  assert.equal(out.text, '…bulge on the far side.\n\n## The Moon pulls unevenly\n\nGravity weakens with distance.');
+});
+
+test('block separation: existing newlines are reused, prose continuations are untouched', () => {
+  const run = (a, b) => {
+    const { out, asm } = sink();
+    const f = createRepeatFilter(asm);
+    f.blockStart(); f.text(a); f.blockStop();
+    f.blockStart(); for (const ch of b) f.text(ch); f.blockStop(); f.flush();
+    return out.text;
+  };
+  assert.equal(run('End.\n', '## Next'), 'End.\n\n## Next');
+  assert.equal(run('End.\n\n', '## Next'), 'End.\n\n## Next');
+  assert.equal(run('Mid sentence', ' and more prose.'), 'Mid sentence and more prose.');
+  assert.equal(run('Before.', '<Quiz questions={[]}/>'), 'Before.\n\n<Quiz questions={[]}/>');
+  assert.equal(run('Steps:', '\n- one'), 'Steps:\n\n- one');
+});

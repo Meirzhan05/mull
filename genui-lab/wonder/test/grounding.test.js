@@ -126,7 +126,7 @@ test('citations become <Cite/> after the cited span; pause_turn continues with t
     // cited spans get pills right after them, before the held-back punctuation/whitespace
     assert.match(msg.markdown, /fourth power<Cite refs=\{\["turn0search0"\]\}\/>\. That is why the sky looks blue<Cite refs=\{\["turn0search1","turn0search0"\]\}\/>\n\n/);
     assert.match(msg.markdown, /\n<Sources\/>\n$/, 'Sources list appended at the end');
-    assert.equal(stripGroundingTags(msg.markdown), '# Why the sky is blue\n\nYou look up. ## Scattering\n\nShort waves scatter far more: scattering grows as one over the wavelength to the fourth power. That is why the sky looks blue\n\n<KeyTerm term="wavelength" definition="Distance between crests."/> matters.\n');
+    assert.equal(stripGroundingTags(msg.markdown), '# Why the sky is blue\n\nYou look up. \n\n## Scattering\n\nShort waves scatter far more: scattering grows as one over the wavelength to the fourth power. That is why the sky looks blue\n\n<KeyTerm term="wavelength" definition="Distance between crests."/> matters.\n');
 
     // pause_turn: second request = same messages + the paused assistant content, no extra user turn
     assert.equal(client.calls.length, 2);

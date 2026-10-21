@@ -6,14 +6,24 @@
 // in front of every program (see learning-runtime.js), so it may not reference anything
 // outside its own body. Props arrive already validated by server/catalog-schema.js, but every
 // component still guards against missing fields (a stale persisted program, a partial tree).
+//
+// Widgets whose state should survive a reload use `useSaved(props, key, initial, restore)`
+// (view-state.js) instead of DIL.useState: LessonStepper, Reveal, CompareToggle,
+// InputOutputSlider, Quiz (local progress; server componentResults win) and Flashcards.
+// `restore` validates a saved value against the current props and returns undefined to fall
+// back to `initial`. Popovers and selections (KeyTerm, Flowchart, Timeline, ...) stay ephemeral.
+
+import { createUseSaved } from './view-state.js';
 
 export const LEARNING_COMPONENT_NAMES = Object.freeze([
   'LessonStepper', 'Reveal', 'CompareToggle', 'InputOutputSlider', 'Flowchart', 'Timeline', 'BarChart',
   'ConceptMap', 'Cycle', 'Quiz', 'Flashcards', 'KeyTerm', 'Callout', 'Celebration', 'TeacherCard',
 ]);
 
-export function learningCatalog(__dil, DIL, GenUI) {
+export function learningCatalog(__dil, DIL, GenUI, useSavedImpl) {
   const h = __dil.jsx;
+  const useSaved = useSavedImpl || ((_props, _key, initial) => DIL.useState(initial));
+  const isInt = (v, n) => Number.isInteger(v) && v >= 0 && v < n;
   const F = __dil.Fragment;
   const arr = (v) => (Array.isArray(v) ? v : []);
   const str = (v) => (typeof v === 'string' ? v : v == null ? '' : String(v));
@@ -127,7 +137,7 @@ export function learningCatalog(__dil, DIL, GenUI) {
   function LessonStepper(props) {
     const steps = arr(props.steps);
     const n = steps.length;
-    const [i, setI] = DIL.useState(0);
+    const [i, setI] = useSaved(props, 'i', 0, (v) => (isInt(v, n) ? v : undefined));
     if (!n) return null;
     const k = Math.min(i, n - 1);
     const s = steps[k];
@@ -149,7 +159,9 @@ export function learningCatalog(__dil, DIL, GenUI) {
   // ------------------------------------------------------------------ Reveal
   function Reveal(props) {
     const items = arr(props.items);
-    const [open, setOpen] = DIL.useState({});
+    const [open, setOpen] = useSaved(props, 'open', {}, (v) => (v && typeof v === 'object' && !Array.isArray(v)
+      ? Object.fromEntries(Object.entries(v).filter(([j, on]) => on === true && isInt(Number(j), items.length)))
+      : undefined));
     const all = items.length > 0 && items.every((_, j) => open[j]);
     return h(Card, { name: 'Reveal', gap: 3 },
       h(Header, { icon: 'search', title: str(props.title) || 'Predict, then check',
@@ -167,7 +179,8 @@ export function learningCatalog(__dil, DIL, GenUI) {
     const left = props.left || { label: 'A', points: [] };
     const right = props.right || { label: 'B', points: [] };
     const isMobile = DIL.useIsMobile();
-    const [view, setView] = DIL.useState('left');
+    const [saved, setView] = useSaved(props, 'view', 'left', (v) => (v === 'left' || v === 'right' || v === 'both' ? v : undefined));
+    const view = isMobile && saved === 'both' ? 'left' : saved; // no side-by-side on phones
     const seg = (key, label) => h('pressable', {
       key, flex: 1, padding: { x: 3, y: 2 }, radius: 'full', variant: view === key ? 'segment-on' : 'segment', ariaPressed: view === key, onClick: () => setView(key),
     }, h('text', { size: 'sm', weight: 'semibold', textAlign: 'center' }, label));
@@ -186,7 +199,7 @@ export function learningCatalog(__dil, DIL, GenUI) {
   function InputOutputSlider(props) {
     const stops = arr(props.stops);
     const n = stops.length;
-    const [i, setI] = DIL.useState(0);
+    const [i, setI] = useSaved(props, 'i', 0, (v) => (isInt(v, n) ? v : undefined));
     if (!n) return null;
     const k = Math.min(i, n - 1);
     const s = stops[k];
@@ -360,11 +373,21 @@ export function learningCatalog(__dil, DIL, GenUI) {
     const questions = arr(props.questions);
     const rid = props.__resolutionId;
     const server = DIL.useAppData((ad) => ad?.opGenui?.componentResults?.[rid]?.state || null);
-    const [st, setSt] = DIL.useState(() => {
+    // Local progress persists (useSaved); server-graded componentResults win when present.
+    const [st, setSt] = useSaved(props, 'quiz', () => {
       const answers = {};
       for (const [qid, a] of Object.entries(server?.answers || {})) answers[qid] = { selected: arr(a.selected_values), correct: !!a.is_correct };
       const firstOpen = questions.findIndex((q) => !answers[q.id]);
       return { i: firstOpen < 0 ? questions.length : firstOpen, answers, hint: false, picked: [], attempt: server?.attempt || 0, reported: firstOpen < 0 };
+    }, (v) => {
+      if (server || !v || typeof v !== 'object' || !v.answers || typeof v.answers !== 'object') return undefined;
+      const answers = {};
+      for (const q of questions) {
+        const a = v.answers[q.id];
+        if (a && Array.isArray(a.selected) && a.selected.every((x) => typeof x === 'string')) answers[q.id] = { selected: a.selected, correct: a.correct === true };
+      }
+      const i = Number.isInteger(v.i) ? Math.max(0, Math.min(v.i, questions.length)) : 0;
+      return { i, answers, hint: false, picked: [], attempt: Number.isInteger(v.attempt) && v.attempt >= 0 ? v.attempt : 0, reported: v.reported === true };
     });
     const n = questions.length;
     const score = questions.filter((q) => st.answers[q.id]?.correct).length;
@@ -454,7 +477,9 @@ export function learningCatalog(__dil, DIL, GenUI) {
   function Flashcards(props) {
     const cards = arr(props.cards);
     const n = cards.length;
-    const [st, setSt] = DIL.useState({ i: 0, flipped: false, saved: false });
+    const [st, setSt] = useSaved(props, 'card', { i: 0, flipped: false, saved: false }, (v) => (v && typeof v === 'object' && isInt(v.i, n)
+      ? { i: v.i, flipped: v.flipped === true, saved: v.saved === true }
+      : undefined));
     if (!n) return null;
     const k = Math.min(st.i, n - 1);
     const c = cards[k];
@@ -572,4 +597,4 @@ export function learningCatalog(__dil, DIL, GenUI) {
 }
 
 /** Program prelude that binds the learning components as free identifiers for compiled code. */
-export const LEARNING_PRELUDE = `const {${LEARNING_COMPONENT_NAMES.join(',')}}=(${learningCatalog.toString()})(__dil,DIL,GenUI);\n`;
+export const LEARNING_PRELUDE = `const __wonderUseSaved=(${createUseSaved.toString()})(DIL);\nconst {${LEARNING_COMPONENT_NAMES.join(',')}}=(${learningCatalog.toString()})(__dil,DIL,GenUI,__wonderUseSaved);\n`;

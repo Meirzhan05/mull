@@ -223,11 +223,13 @@ export function createRepeatFilter(asm) {
   let emitted = '';
   let checking = false;
   let buf = '';
+  let sep = ''; // blank lines held while checking (kept if the following text is new)
   let cites = [];
   const seen = () => emitted.split(/\n\s*\n|\n(?=#)/).filter((p) => normPara(p));
   const pass = (t) => { emitted += t; asm.text(t); };
   const release = () => {
-    if (buf) pass(buf);
+    if (sep || buf) pass(sep + buf);
+    sep = '';
     for (const c of cites) asm.citation(c);
     buf = ''; cites = []; checking = false;
   };
@@ -237,23 +239,43 @@ export function createRepeatFilter(asm) {
       const para = m ? buf.slice(0, m.index) : final ? buf : null;
       if (para === null) return;
       const n = normPara(para);
-      if (n && !seen().some((p) => isRepeat(para, p))) return release();
+      if (!n) { if (!m) return; sep += buf.slice(0, m.index + m[0].length); buf = buf.slice(m.index + m[0].length); continue; }
+      if (!seen().some((p) => isRepeat(para, p))) return release();
       buf = m ? buf.slice(m.index + m[0].length) : '';
       cites = [];
       if (!m) return;
     }
   };
+  // A new text block (e.g. after a search) can start with block markup without the blank
+  // line it needs: "…far side.## The Moon" would not render as a heading.
+  let blockHead = null; // leading text of the current block, until its first non-space char
+  const BLOCK_START = /^(#{1,6}\s|[-*+]\s|\d+[.)]\s|>|\||<[A-Z]|```|~~~|\$\$)/;
+  const separate = (t) => {
+    if (blockHead === null) return t;
+    blockHead += t;
+    const lead = /^\s*/.exec(blockHead)[0];
+    if (lead.length === blockHead.length) return ''; // only whitespace so far: hold it
+    const body = blockHead.slice(lead.length);
+    if (/^(#{1,6}|[-*+]|\d{1,3}[.)]?|<|`{1,2}|~{1,2}|\$)$/.test(body)) return ''; // could still open a block: wait
+    const prev = emitted + sep + buf;
+    blockHead = null;
+    if (!prev.trim() || !BLOCK_START.test(body)) return lead + body;
+    const have = (/\n*$/.exec(prev)[0] + (lead.match(/\n/g) || []).join('')).length;
+    return (have >= 2 ? lead : '\n'.repeat(2 - Math.min(have, 2)) + lead) + body;
+  };
   return {
     afterSearch() { if (emitted.trim()) checking = true; },
-    blockStart() { asm.blockStart(); },
-    text(t) {
+    blockStart() { blockHead = ''; asm.blockStart(); },
+    text(t0) {
+      const t = separate(t0);
+      if (!t) return;
       if (!checking) return pass(t);
       buf += t;
       if (/^\s*$/.test(buf)) return;
       drain(false);
     },
     citation(c) { if (checking) cites.push(c); else asm.citation(c); },
-    blockStop() { if (checking) { drain(true); if (checking) release(); } asm.blockStop(); },
+    blockStop() { if (blockHead) { const t = blockHead; blockHead = null; if (checking) buf += t; else pass(t); } if (checking) { drain(true); if (checking) release(); } asm.blockStop(); },
     flush() { if (checking) release(); },
   };
 }
