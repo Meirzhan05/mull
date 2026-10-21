@@ -139,7 +139,9 @@ export function createWonderServer(opts = {}) {
         return { status: 'demo' };
       }
       const f = friendlyError(err);
-      logger.error?.(`[wonder] Claude request failed: ${f.code}`);
+      // The API error body (type + message) never contains credentials; log it for diagnosis.
+      const detail = err?.status ? ` (HTTP ${err.status}: ${err?.error?.error?.message || err.message})` : '';
+      logger.error?.(`[wonder] Claude request failed: ${f.code}${detail}`);
       writer.fail(f.message, f.code);
       return { status: 'failed' };
     }

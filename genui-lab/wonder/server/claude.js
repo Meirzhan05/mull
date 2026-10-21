@@ -40,7 +40,10 @@ export function detectMode(env = process.env) {
 }
 
 export function createClaudeClient() {
-  try { return new Anthropic(); } catch { return null; }
+  // Keys that are not scoped to a workspace must name one on every request.
+  const workspace = process.env.ANTHROPIC_WORKSPACE_ID;
+  const options = workspace ? { defaultHeaders: { 'anthropic-workspace-id': workspace } } : {};
+  try { return new Anthropic(options); } catch { return null; }
 }
 
 /**
@@ -112,6 +115,7 @@ export function isCredentialError(err) {
 export function friendlyError(err) {
   if (err instanceof Anthropic.AuthenticationError) return { code: 'auth_failed', message: 'Claude rejected the credentials. Check ANTHROPIC_API_KEY in genui-lab/wonder/.env and restart the server.' };
   if (err instanceof Anthropic.RateLimitError) return { code: 'rate_limited', message: 'Claude is busy right now (rate limit). Wait a few seconds and try again.' };
+  if (err instanceof Anthropic.BadRequestError && /anthropic-workspace-id/.test(String(err?.error?.error?.message || err.message))) return { code: 'workspace_required', message: 'This API key is not scoped to a workspace. Add ANTHROPIC_WORKSPACE_ID=wrkspc_... to ~/.config/wonder/.env and restart.' };
   if (err instanceof Anthropic.BadRequestError) return { code: 'bad_request', message: 'Claude could not process this request. Try a shorter or simpler prompt.' };
   if (err instanceof Anthropic.APIError) return { code: 'api_error', message: `Claude had a problem${err.status ? ` (HTTP ${err.status})` : ''}. Please try again.` };
   if (err?.name === 'AbortError' || err?.code === 'aborted') return { code: 'aborted', message: 'Stopped.' };
