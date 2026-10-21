@@ -1,0 +1,4 @@
+https://chatgpt.com/unauth-mweb/conversation/prepare?lightweight_authenticated=0
+application/json; charset=utf-8
+
+{"conduit_token":"<redacted>","prepare_cadence_enabled":true}

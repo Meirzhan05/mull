@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GenUI Lab</title>
+<style>
+  :root { --bg:#f7f6f3; --fg:#1d1b18; --muted:#6b665e; --card:#fff; --line:#e4e0d8; --accent:#2f6fed; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#151412; --fg:#f1eee8; --muted:#a49e94; --card:#1f1d1a; --line:#34312c; --accent:#7ea6ff; } }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:16px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width: 860px; margin: 0 auto; padding: 48px 16px; }
+  h1 { font-size: 1.9rem; margin: 0 0 6px; letter-spacing: -0.01em; }
+  p.lede { color: var(--muted); margin: 0 0 32px; max-width: 62ch; }
+  .grid { display:grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; }
+  a.card { display:block; text-decoration:none; color:inherit; background:var(--card); border:1px solid var(--line); border-radius:14px; padding:20px; }
+  a.card:hover { border-color: var(--accent); }
+  a.card h2 { margin:0 0 6px; font-size:1.1rem; }
+  a.card p { margin:0; color:var(--muted); font-size:.95rem; }
+</style>
+</head>
+<body>
+<main>
+  <h1>GenUI Lab</h1>
+  <p class="lede">Working reconstructions of two AI "intelligent UI" systems, rebuilt from their shipped web clients.</p>
+  <div class="grid">
+    <a class="card" href="chatgpt-dil/index.html">
+      <h2>ChatGPT · DIL runtime</h2>
+      <p>The model writes JSX-like markup inside its markdown. It is compiled to a DIL program, run in a sandboxed worker and rendered from render ops. Replays a captured conversation stream.</p>
+    </a>
+    <a class="card" href="wondering-genui/index.html">
+      <h2>Wondering · interactive lessons</h2>
+      <p>Markdown with <code>{{interactive:…}}</code> markers swapped for registered widgets, a streaming lesson chat, a voice-tutor board and FSRS practice.</p>
+    </a>
+  </div>
+</main>
+</body>
+</html>

@@ -1,0 +1,18 @@
+# Raw captures: contain live session headers/tokens or full third-party evidence dumps
+re/evidence-*.json
+re/*-scenario*.json
+re/*-inspect.json
+re/*-bundle.json
+re/chatgpt-learn-final-dom.html
+re/chatgpt-weather-final-dom.html
+# Copied third-party JavaScript bundles (not ours to redistribute)
+re/chatgpt-scripts/
+re/chatgpt-turn-scripts/
+re/wondering-scripts/
+re/wondering-lazy/
+re/chatgpt-lazy/
+# Full-resolution duplicates
+re/screenshot-chatgpt-learn.png
+re/screenshot-chatgpt-weather.png
+.DS_Store
+node_modules/

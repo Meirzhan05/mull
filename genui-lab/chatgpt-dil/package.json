@@ -1,0 +1,9 @@
+{
+  "name": "chatgpt-dil-reconstruction",
+  "private": true,
+  "type": "module",
+  "description": "Dependency-free reconstruction of ChatGPT's DIL generative-UI runtime",
+  "scripts": {
+    "test": "node --test test/"
+  }
+}

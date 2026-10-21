@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Wondering GenUI Lab</title>
+    <meta name="description" content="Dependency-free reconstruction of wondering.app's AI-generated lesson UI: marker grammar, widget registry, chat SSE, voice board and FSRS." />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">Wondering <span class="muted">GenUI lab</span></div>
+      <nav class="tabs" role="tablist" aria-label="Demos">
+        <button class="tab" role="tab" data-view="lesson" aria-selected="true">Lesson</button>
+        <button class="tab" role="tab" data-view="chat" aria-selected="false">Lesson chat</button>
+        <button class="tab" role="tab" data-view="voice" aria-selected="false">Voice board</button>
+        <button class="tab" role="tab" data-view="practice" aria-selected="false">Practice</button>
+      </nav>
+      <span class="topbar__note">offline · no backend calls</span>
+    </header>
+
+    <main>
+      <section class="view" id="view-lesson" aria-label="Lesson"></section>
+      <section class="view" id="view-chat" aria-label="Lesson chat" hidden></section>
+      <section class="view" id="view-voice" aria-label="Voice tutor board" hidden></section>
+      <section class="view" id="view-practice" aria-label="Practice" hidden></section>
+    </main>
+
+    <noscript><p style="padding:16px">This demo needs JavaScript (plain ES modules, no build step).</p></noscript>
+    <script type="module" src="./src/app.js"></script>
+  </body>
+</html>
