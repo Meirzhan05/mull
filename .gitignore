@@ -21,3 +21,6 @@ node_modules/
 .env
 .env.*
 !.env.example
+
+# Wonder runtime data
+genui-lab/wonder/data/
