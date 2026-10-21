@@ -9,7 +9,7 @@ let base;
 const quiet = { warn() {}, error() {}, log() {} };
 
 before(async () => {
-  server = createWonderServer({ mode: 'demo', demoDelayMs: 0, logger: quiet });
+  server = createWonderServer({ mode: 'demo', demoDelayMs: 0, logger: quiet, memoryFile: null });
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   base = `http://127.0.0.1:${server.address().port}`;
 });

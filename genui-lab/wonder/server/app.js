@@ -6,6 +6,9 @@
 //   POST /api/course/plan       -> JSON course outline
 //   POST /api/widget_action     -> JSON (componentResults / issueTurn / grading result)
 //   POST /api/practice/extract  -> JSON knowledge cards + practice items
+//   POST /api/teacher/stream    -> conversation-source NDJSON (Teacher turn: tool loop, cards in componentResults)
+//   GET/POST/DELETE /api/memory -> learner memory items
+//   POST /api/memory/extract    -> 0-3 new memory facts from a finished lesson
 //   GET  /                      -> public/ ; /chatgpt-dil/src/* and /wondering-genui/src/* (read-only modules)
 
 import http from 'node:http';
@@ -17,10 +20,14 @@ import {
   MODEL, detectMode, createClaudeClient, buildStreamParams, buildStructuredParams, streamText, createStructured,
   isCredentialError, friendlyError, REFUSAL_MESSAGE,
 } from './claude.js';
-import { LESSON_SYSTEM_PROMPT, TUTOR_SYSTEM_PROMPT, COURSE_SYSTEM_PROMPT, COURSE_PLAN_SCHEMA, lessonUserMessage, tutorLessonContext } from './prompts.js';
+import { LESSON_SYSTEM_PROMPT, TUTOR_SYSTEM_PROMPT, TEACHER_SYSTEM_PROMPT, COURSE_SYSTEM_PROMPT, COURSE_PLAN_SCHEMA, lessonUserMessage, tutorLessonContext, joinContext } from './prompts.js';
 import { pickDemoLesson, streamDemoText, buildDemoTutorReply, demoCoursePlan } from './demo.js';
 import { extractPracticeDeterministic, extractPracticeWithClaude } from './practice.js';
 import { createWidgetActionHandler } from './widget-actions.js';
+import { createMemoryStore, DEFAULT_MEMORY_FILE } from './memory.js';
+import { normalizeExtractInput, extractMemoryDeterministic, extractMemoryWithClaude, filterNewFacts } from './memory-extract.js';
+import { TEACHER_TOOLS, createCardStore, createTeacherToolkit, runTeacherLoop, newResolutionId, resolved, stripCardMarkup } from './teacher.js';
+import { createDemoTeacherClient } from './teacher-demo.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const WONDER_ROOT = path.resolve(HERE, '..');
@@ -33,6 +40,32 @@ const STATIC_ROOTS = [
 const MIME = { '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.html': 'text/html; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon', '.json': 'application/json', '.webmanifest': 'application/manifest+json' };
 const MAX_BODY = 2 * 1024 * 1024;
 const DEFAULT_TUTOR_FOLLOWUPS = ['Quiz me on this lesson', 'Give me a real-world example', 'What should I learn next?'];
+const DEFAULT_TEACHER_FOLLOWUPS = ['What should I study today?', 'Make me a study plan', 'Quiz me'];
+const MEMORY_OFF_CONTEXT = 'The learner turned memory off for this conversation: do not save or forget memory items, and do not assume anything about them beyond this conversation.';
+
+/** History from the client: user/assistant strings, starting with a user turn. */
+function cleanHistory(raw, { max = 12, chars = 8000, map = (s) => s } = {}) {
+  const history = (Array.isArray(raw) ? raw : [])
+    .filter((m) => (m?.role === 'user' || m?.role === 'assistant') && typeof m.content === 'string' && m.content.trim())
+    .slice(-max)
+    .map((m) => ({ role: m.role, content: map(m.content).slice(0, chars) }));
+  while (history.length && history[0].role !== 'user') history.shift();
+  // the API needs alternating roles: merge accidental repeats
+  const out = [];
+  for (const m of history) {
+    if (out.length && out[out.length - 1].role === m.role) out[out.length - 1].content += `\n\n${m.content}`;
+    else out.push({ ...m });
+  }
+  return out;
+}
+
+/** Append the new learner message (merged into a trailing user turn left by a failed reply). */
+function withMessage(history, message) {
+  const out = history.map((m) => ({ ...m }));
+  if (out.length && out[out.length - 1].role === 'user') out[out.length - 1].content += `\n\n${message}`;
+  else out.push({ role: 'user', content: message });
+  return out;
+}
 
 const clean = (v, max) => String(v ?? '').replace(/\s+/g, ' ').trim().slice(0, max);
 
@@ -105,7 +138,12 @@ export function createWonderServer(opts = {}) {
   if (state.mode === 'claude' && !state.client) state.client = createClaudeClient();
   if (state.mode === 'claude' && !state.client) { state.mode = 'demo'; state.demoReason = 'no-credentials'; }
   if (state.mode === 'demo' && !state.demoReason) state.demoReason = 'no-credentials';
-  const widgetAction = createWidgetActionHandler();
+  const memory = opts.memory ?? createMemoryStore({ file: opts.memoryFile === undefined ? (env.WONDER_MEMORY_FILE || DEFAULT_MEMORY_FILE) : opts.memoryFile, logger });
+  const teacherCards = createCardStore();
+  const widgetAction = createWidgetActionHandler({ cards: teacherCards, memory });
+  const demoTeacher = opts.demoTeacherClient ?? createDemoTeacherClient({ delayMs: state.demoDelayMs });
+  const recordDir = opts.recordDir ?? env.WONDER_RECORD_DIR ?? null;
+  const memoryContext = (body, { withIds = false } = {}) => (body?.memoryEnabled === false ? '' : memory.promptBlock({ withIds }));
 
   function switchToDemo(reason) {
     state.mode = 'demo';
@@ -113,12 +151,17 @@ export function createWonderServer(opts = {}) {
     logger.warn?.(`[wonder] switching to demo mode (${reason})`);
   }
 
-  function startNdjson(req, res) {
+  function startNdjson(req, res, { appData, record } = {}) {
     res.writeHead(200, { 'Content-Type': CONTENT_TYPE, 'Cache-Control': 'no-store', 'X-Accel-Buffering': 'no', Connection: 'keep-alive' });
     res.flushHeaders?.();
     const ac = new AbortController();
     res.on('close', () => { if (!res.writableFinished) ac.abort(); });
-    const writer = createTurnWriter({ write: (s) => { if (!res.destroyed) res.write(s); } });
+    // WONDER_RECORD_DIR: tee the NDJSON of each stream to a file (fixture capture; records hold no credentials)
+    let tee = null;
+    if (recordDir && record) {
+      try { fs.mkdirSync(recordDir, { recursive: true }); tee = fs.createWriteStream(path.join(recordDir, `${record}-${new Date().toISOString().replace(/[:.]/g, '-')}.ndjson`)); res.on('close', () => tee.end()); } catch { tee = null; }
+    }
+    const writer = createTurnWriter({ appData, write: (s) => { if (!res.destroyed) res.write(s); tee?.write(s); } });
     return { writer, signal: ac.signal };
   }
 
@@ -151,15 +194,18 @@ export function createWonderServer(opts = {}) {
     const topic = clean(body.topic, 300);
     if (!topic) return sendJson(res, 400, { ok: false, error: 'topic is required' });
     const level = ['beginner', 'intermediate', 'advanced'].includes(body.level) ? body.level : 'beginner';
-    const { writer, signal } = startNdjson(req, res);
+    const { writer, signal } = startNdjson(req, res, { record: 'lesson' });
     writer.start();
     writer.reasoning('Planning the lesson…');
     const narrate = progressNarrator(writer);
     const onText = (t) => { writer.append(t); narrate(); };
     let result = { status: 'demo' };
     if (state.mode === 'claude') {
+      const learner = memoryContext(body);
+      if (learner) logger.info?.(`[wonder] lesson request personalized with ${Math.min(memory.size, 15)} memory items`);
       const params = buildStreamParams({
         system: LESSON_SYSTEM_PROMPT,
+        context: joinContext(learner && `${learner}\nUse this to pick examples and pacing that fit this learner; the lesson itself stays about the requested topic.`),
         messages: [{ role: 'user', content: lessonUserMessage({ topic, level, course: body.course, lessonTitle: clean(body.lessonTitle, 200), lessonSummary: clean(body.lessonSummary, 400) }) }],
         effort: 'medium',
       });
@@ -183,7 +229,7 @@ export function createWonderServer(opts = {}) {
       .slice(-12)
       .map((m) => ({ role: m.role, content: m.content.slice(0, 8000) }));
     while (history.length && history[0].role !== 'user') history.shift();
-    const { writer, signal } = startNdjson(req, res);
+    const { writer, signal } = startNdjson(req, res, { record: 'tutor' });
     writer.start();
     writer.reasoning('Thinking about your question…');
     const onText = (t) => writer.append(t);
@@ -191,7 +237,7 @@ export function createWonderServer(opts = {}) {
     if (state.mode === 'claude') {
       const params = buildStreamParams({
         system: TUTOR_SYSTEM_PROMPT,
-        context: tutorLessonContext(body.lessonContext),
+        context: joinContext(tutorLessonContext(body.lessonContext), memoryContext(body)),
         messages: [...history, { role: 'user', content: message }],
         effort: 'medium',
       });
@@ -243,11 +289,117 @@ export function createWonderServer(opts = {}) {
     return sendJson(res, 200, { ok: true, ...extractPracticeDeterministic(markdown) });
   }
 
+
+  async function teacherStream(req, res, body) {
+    const message = clean(body.message, 4000);
+    if (!message) return sendJson(res, 400, { ok: false, error: 'message is required' });
+    const memoryEnabled = body.memoryEnabled !== false;
+    const threadId = typeof body.threadId === 'string' && /^[\w-]{1,80}$/.test(body.threadId) ? body.threadId : undefined;
+    const history = cleanHistory(body.history, { map: stripCardMarkup });
+    const appData = { opGenui: { componentResults: {}, modelDataBindings: {} } };
+    const { writer, signal } = startNdjson(req, res, { appData, record: 'teacher' });
+    writer.start({ conversationId: threadId });
+    writer.reasoning('Thinking…');
+    const params = buildStreamParams({
+      system: TEACHER_SYSTEM_PROMPT,
+      context: joinContext(memoryEnabled ? memory.promptBlock({ withIds: true }) || 'The learner\'s memory is empty so far.' : MEMORY_OFF_CONTEXT),
+      messages: [],
+      effort: 'medium',
+      maxTokens: 32000,
+      tools: TEACHER_TOOLS,
+    });
+    const run = (client) => runTeacherLoop({
+      client,
+      params,
+      messages: withMessage(history, message),
+      writer,
+      signal,
+      execute: createTeacherToolkit({ memory, progress: body.progress, memoryEnabled }),
+      onCard: (cardState) => {
+        const rid = newResolutionId();
+        appData.opGenui.componentResults[rid] = resolved(teacherCards.set(rid, cardState));
+        return rid;
+      },
+      logger,
+    });
+    let result;
+    try {
+      result = await run(state.mode === 'claude' ? state.client : demoTeacher);
+    } catch (err) {
+      if (signal.aborted) return res.end();
+      if (state.mode === 'claude' && !writer.markdown && isCredentialError(err)) {
+        switchToDemo('credentials-failed');
+        writer.reasoning('Claude credentials were not accepted. Showing a demo reply…');
+        try { result = await run(demoTeacher); } catch { if (signal.aborted) return res.end(); }
+      }
+      if (!result) {
+        const f = friendlyError(err);
+        const detail = err?.status ? ` (HTTP ${err.status}: ${err?.error?.error?.message || err.message})` : '';
+        logger.error?.(`[wonder] Teacher request failed: ${f.code}${detail}`);
+        writer.fail(f.message, f.code);
+        return res.end();
+      }
+    }
+    if (result.refused) writer.append(REFUSAL_MESSAGE);
+    writer.complete({ truncated: result.truncated, defaultFollowups: result.refused ? [] : DEFAULT_TEACHER_FOLLOWUPS });
+    res.end();
+  }
+
+  // ---------------------------------------------------------------- memory
+
+  async function memoryList(req, res) {
+    sendJson(res, 200, { ok: true, items: memory.list() });
+  }
+
+  async function memoryAdd(req, res, body) {
+    const r = memory.add({ fact: body.fact, kind: body.kind, source: 'user' });
+    if (!r.ok) return sendJson(res, 400, { ok: false, error: r.error });
+    sendJson(res, 200, { ok: true, item: r.item, duplicate: r.duplicate, items: memory.list() });
+  }
+
+  async function memoryDelete(req, res, body) {
+    const id = new URL(req.url, 'http://localhost').searchParams.get('id') || body.id;
+    if (body.all === true) return sendJson(res, 200, { ok: true, removed: memory.clear(), items: [] });
+    if (typeof id !== 'string' || !id) return sendJson(res, 400, { ok: false, error: 'id (or all:true) is required' });
+    const item = memory.remove(id);
+    if (!item) return sendJson(res, 404, { ok: false, error: 'No such memory item' });
+    sendJson(res, 200, { ok: true, removed: 1, item, items: memory.list() });
+  }
+
+  async function memoryExtract(req, res, body) {
+    if (body.memoryEnabled === false) return sendJson(res, 200, { ok: true, added: [], source: 'disabled' });
+    const input = normalizeExtractInput(body);
+    const existing = memory.list();
+    let facts = null;
+    let source = 'quiz-results';
+    if (state.mode === 'claude') {
+      try {
+        facts = await extractMemoryWithClaude(state.client, input, existing);
+        source = 'claude';
+      } catch (err) {
+        if (isCredentialError(err)) switchToDemo('credentials-failed');
+        logger.warn?.(`[wonder] memory extraction failed (${err?.code === 'refusal' ? 'refusal' : friendlyError(err).code}); using quiz results`);
+      }
+    }
+    if (!facts) facts = extractMemoryDeterministic(input);
+    const added = [];
+    for (const f of filterNewFacts(facts, existing)) {
+      const r = memory.add({ ...f, source: 'lesson' });
+      if (r.ok && !r.duplicate) added.push(r.item);
+    }
+    sendJson(res, 200, { ok: true, added, source });
+  }
+
   const routes = {
     'POST /api/lesson/stream': lessonStream,
     'POST /api/tutor/stream': tutorStream,
     'POST /api/course/plan': coursePlan,
     'POST /api/practice/extract': practiceExtract,
+    'POST /api/teacher/stream': teacherStream,
+    'GET /api/memory': memoryList,
+    'POST /api/memory': memoryAdd,
+    'DELETE /api/memory': memoryDelete,
+    'POST /api/memory/extract': memoryExtract,
     'POST /api/widget_action': async (req, res, body) => { const r = widgetAction(body); sendJson(res, r.status, r.body); },
   };
 
@@ -259,7 +411,7 @@ export function createWonderServer(opts = {}) {
       }
       const route = routes[`${req.method} ${url.pathname}`];
       if (route) {
-        const body = await readJson(req);
+        const body = req.method === 'GET' ? {} : await readJson(req);
         return await route(req, res, body);
       }
       if (url.pathname.startsWith('/api/')) return sendJson(res, 404, { ok: false, error: 'Not found' });
@@ -273,5 +425,7 @@ export function createWonderServer(opts = {}) {
     }
   });
   server.wonder = state;
+  server.memory = memory;
+  server.teacherCards = teacherCards;
   return server;
 }

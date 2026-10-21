@@ -1,4 +1,5 @@
-// Wonder client: home, course map, streamed DIL lesson + tutor, pack opening, review.
+// Wonder client: home, course map, streamed DIL lesson + tutor, pack opening, review,
+// Teacher (agent chat with tool cards) and learner memory.
 
 import { createStore, uid } from './store.js';
 import { DilSurface, mergeComponentResults } from './dil-surface.js';
@@ -8,6 +9,8 @@ import { normalizePracticeItem } from './practice-core.js';
 import { renderReview } from './review.js';
 import { el, icon, toast, inlineMd, lessonTitleFrom } from './ui.js';
 import { observeMath } from './math.js';
+import { renderTeacher, queueTeacherMessage } from './teacher-screen.js';
+import { renderMemory } from './memory-screen.js';
 
 const store = createStore();
 const app = document.getElementById('app');
@@ -66,6 +69,11 @@ async function loadStatus() {
   } catch { status = { mode: 'demo', model: 'claude-opus-5-5' }; }
   document.getElementById('demo-banner').hidden = status.mode !== 'demo';
 }
+
+const memoryEnabled = () => store.data.settings?.memoryEnabled !== false;
+
+/** Shared context for the screens that live in their own modules. */
+const screenCtx = () => ({ app, store, status, teardown, createLesson, giveXp, reroute: route });
 
 function cleanupScreen() {
   for (const fn of teardown.splice(0)) { try { fn(); } catch {} }
@@ -150,6 +158,39 @@ function renderHome() {
       el('div', { class: 'composer-row' }, levels, el('div', { class: 'composer-actions' }, courseBtn, lessonBtn))),
     el('div', { class: 'chips', 'aria-label': 'Suggested topics' }, ...TOPIC_CHIPS.map((t) => el('button', { class: 'topic-chip', type: 'button', onclick: () => startLesson(t) }, t))));
 
+  const nav = el('nav', { class: 'home-nav', 'aria-label': 'More' },
+    el('a', { class: 'card nav-tile', href: '#/teacher' },
+      el('span', { class: 'course-icon', 'aria-hidden': 'true' }, icon('teacher')),
+      el('span', { class: 'nav-text' }, el('strong', null, 'Teacher'), el('span', { class: 'muted small' }, 'Plan your week, get the next lesson, get quizzed')),
+      icon('arrow-right')),
+    el('a', { class: 'card nav-tile', href: '#/memory' },
+      el('span', { class: 'course-icon', 'aria-hidden': 'true' }, icon('brain')),
+      el('span', { class: 'nav-text' }, el('strong', null, 'Memory'), el('span', { class: 'muted small' }, memoryEnabled() ? 'What Wonder knows about you' : 'Off: lessons are not personalized')),
+      icon('arrow-right')));
+
+  const plan = (d.plans || [])[0];
+  const openPlanItem = (di, ii) => {
+    const it = plan.days[di].items[ii];
+    store.update((dd) => { const pl = dd.plans.find((x) => x.id === plan.id); if (pl) pl.days[di].items[ii].opened = true; return dd; });
+    if (it.kind === 'review') { location.hash = '#/review'; return; }
+    if (it.kind === 'quiz') { queueTeacherMessage(`Quiz me on ${it.topic || it.title}.`); location.hash = plan.threadId ? `#/teacher/${plan.threadId}` : '#/teacher'; return; }
+    const known = store.data.teacherLessons?.[`${plan.id}:${it.id}`];
+    if (known && store.data.lessons[known]) { location.hash = `#/lesson/${known}`; return; }
+    const id = createLesson({ topic: it.topic || it.title, title: it.title, level: 'beginner', teacherThreadId: plan.threadId });
+    store.update((dd) => { dd.teacherLessons = { ...(dd.teacherLessons || {}), [`${plan.id}:${it.id}`]: id }; return dd; });
+    location.hash = `#/lesson/${id}`;
+  };
+  const planSection = plan ? el('section', { class: 'section' },
+    el('div', { class: 'section-head' }, el('h2', { class: 'h-md' }, 'Your study plan'), plan.threadId ? el('a', { class: 'small muted', href: `#/teacher/${plan.threadId}` }, 'Open chat') : null),
+    el('div', { class: 'card plan-card' },
+      el('strong', { class: 'plan-goal' }, plan.goal),
+      el('ol', { class: 'plan-days' }, ...plan.days.map((day, di) => el('li', { class: 'plan-day' },
+        el('span', { class: `plan-num ${day.items.every((i) => i.opened) ? 'done' : ''}` }, day.items.every((i) => i.opened) ? icon('check') : String(day.day || di + 1)),
+        el('div', { class: 'plan-body' },
+          el('span', { class: 'plan-focus' }, day.focus),
+          el('div', { class: 'plan-items' }, ...day.items.map((it, ii) => el('button', { class: `plan-item ${it.opened ? 'opened' : ''}`, type: 'button', onclick: () => openPlanItem(di, ii) },
+            it.opened ? icon('check') : icon(it.kind === 'review' ? 'repeat' : it.kind === 'quiz' ? 'sparkles' : 'book'), it.title))))))))) : null;
+
   const reviewCard = el('section', { class: 'card review-cta' },
     el('div', { class: 'review-cta-text' },
       el('h2', { class: 'h-md' }, 'Practice'),
@@ -181,7 +222,7 @@ function renderHome() {
       el('span', { class: 'muted small' }, l.finished ? 'Finished' : l.status === 'complete' ? 'Ready' : 'Unfinished'),
       icon('arrow-right')))))) : null;
 
-  app.replaceChildren(el('div', { class: 'home' }, hero, reviewCard, courseSection, lessonSection));
+  app.replaceChildren(el('div', { class: 'home' }, hero, nav, planSection, reviewCard, courseSection, lessonSection));
 }
 
 // ------------------------------------------------------------------ course
@@ -324,7 +365,7 @@ function renderLesson(lessonId) {
     progressFill.style.width = '4%';
     const l = store.data.lessons[lessonId];
     try {
-      const r = await streamTurn('/api/lesson/stream', { topic: l.topic, level: l.level, lessonTitle: l.lessonTitle, lessonSummary: l.lessonSummary, course: l.course }, {
+      const r = await streamTurn('/api/lesson/stream', { topic: l.topic, level: l.level, lessonTitle: l.lessonTitle, lessonSummary: l.lessonSummary, course: l.course, memoryEnabled: memoryEnabled() }, {
         signal: ac.signal,
         onReasoning: (s) => {
           if (s.active === false) { reasoning.hidden = true; return; }
@@ -371,6 +412,7 @@ function handleClientAction(a, { lessonId, openTutor, tutor }) {
       break;
     case 'quiz_complete': {
       const key = `${lessonId}:${p.resolutionId}`;
+      if (Array.isArray(p.results)) saveLesson(lessonId, { quizResults: p.results.slice(0, 12), quizScore: { score: Number(p.score) || 0, total: Number(p.total) || 0 } });
       if (store.data.awarded?.[key]) break;
       store.update((d) => { d.awarded = { ...(d.awarded || {}), [key]: true }; return d; });
       giveXp((Number(p.score) || 0) * XP.quizCorrect, `${p.score}/${p.total} on the quiz`);
@@ -483,7 +525,7 @@ function createTutor(lessonId) {
       scrollDown();
       ac = new AbortController();
       try {
-        const r = await streamTurn('/api/tutor/stream', { message, history, lessonContext: { title: l.title, markdown: l.markdown } }, {
+        const r = await streamTurn('/api/tutor/stream', { message, history, lessonContext: { title: l.title, markdown: l.markdown }, memoryEnabled: memoryEnabled() }, {
           signal: ac.signal,
           onContent: (msg, rec) => {
             if (rec.dil) { bot.typing.remove(); bot.render(rec.dil, rec.status !== 'complete'); }
@@ -522,6 +564,13 @@ async function finishLesson(lessonId, btn) {
   try {
     const data = await postJson('/api/practice/extract', { lessonMarkdown: lesson.markdown });
     showPack(lesson, data);
+    if (memoryEnabled() && !lesson.memoryExtracted) {
+      saveLesson(lessonId, { memoryExtracted: true });
+      const tutorThread = (lesson.tutor || []).filter((m) => m.role === 'user').map((m) => m.content);
+      postJson('/api/memory/extract', { lessonTitle: lesson.title, quizResults: lesson.quizResults || [], tutorThread, memoryEnabled: true })
+        .then((r) => { if (r.added?.length) setTimeout(() => toast(`Wonder will remember: ${r.added[0].fact}`, 4200), 900); })
+        .catch(() => {});
+    }
   } catch (e) {
     toast(e.message || 'Could not create practice cards');
   } finally {
@@ -599,6 +648,8 @@ function route() {
   if ((m = /^#\/lesson\/([\w-]+)$/.exec(h))) { document.body.dataset.screen = 'lesson'; renderLesson(m[1]); }
   else if ((m = /^#\/course\/([\w-]+)$/.exec(h))) { document.body.dataset.screen = 'course'; renderCourse(m[1]); }
   else if (h === '#/review') { document.body.dataset.screen = 'review'; renderReviewScreen(); }
+  else if ((m = /^#\/teacher(?:\/([\w-]+))?$/.exec(h))) { document.body.dataset.screen = 'teacher'; renderTeacher(screenCtx(), m[1] || null); }
+  else if (h === '#/memory') { document.body.dataset.screen = 'memory'; renderMemory(screenCtx()); }
   else renderHome();
   refreshChrome();
   window.scrollTo(0, 0);

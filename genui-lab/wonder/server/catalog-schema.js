@@ -226,6 +226,24 @@ function Celebration(p) {
   return ok(optional({}, 'message', pick(p, 'message', 'title', 'text')));
 }
 
+// ---------------------------------------------------------------- Teacher tool cards
+
+export const TEACHER_CARD_KINDS = Object.freeze(['approval', 'plan', 'quiz', 'memory']);
+export const RESOLUTION_ID_RE = /^[\w-]{8,64}$/;
+
+/**
+ * <TeacherCard kind="plan" __resolutionId="…"/> is spliced in by the server at the point of a
+ * Teacher tool call (never written by the model). Its data lives in
+ * appData.opGenui.componentResults[__resolutionId], like ChatGPT's server-resolved components.
+ */
+function TeacherCard(p) {
+  const kind = text(p.kind).toLowerCase();
+  if (!TEACHER_CARD_KINDS.includes(kind)) return fail(`TeacherCard kind must be one of ${TEACHER_CARD_KINDS.join(', ')}`);
+  const rid = text(p.__resolutionId);
+  if (!RESOLUTION_ID_RE.test(rid)) return fail('TeacherCard needs a server-assigned __resolutionId');
+  return ok({ kind, __resolutionId: rid });
+}
+
 // ---------------------------------------------------------------- registry
 
 /** inline: may sit inside a paragraph. children: takes markdown children. */
@@ -244,6 +262,7 @@ export const LEARNING_COMPONENTS = Object.freeze({
   KeyTerm: { validate: KeyTerm, inline: true },
   Callout: { validate: Callout, children: true },
   Celebration: { validate: Celebration },
+  TeacherCard: { validate: TeacherCard, resolved: true },
 });
 export const LEARNING_COMPONENT_NAMES = Object.freeze(Object.keys(LEARNING_COMPONENTS));
 
@@ -268,6 +287,7 @@ const clean = (s) => String(s).replace(/</g, '‹').replace(/\s*\n\s*/g, ' ').tr
 /** Markdown rendition of a component whose props did not validate (or for fallbackMarkdown). */
 export function fallbackMarkdownFor(name, props, { inline = false } = {}) {
   const p = isObj(props) ? props : {};
+  if (name === 'TeacherCard') return '';
   if (name === 'KeyTerm' || inline) {
     const term = pick(p, 'term', 'title', 'label', 'name');
     const def = pick(p, 'definition', 'text');

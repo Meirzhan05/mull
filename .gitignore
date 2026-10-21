@@ -24,3 +24,6 @@ node_modules/
 
 # Wonder runtime data
 genui-lab/wonder/data/
+
+# Agent worktrees
+.claude/worktrees/

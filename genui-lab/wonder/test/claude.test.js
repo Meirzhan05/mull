@@ -13,7 +13,7 @@ import { fakeClient, demo, runProgram, catalogNodes } from './helpers.js';
 const quiet = { warn() {}, error() {}, log() {} };
 
 async function withServer(client, fn) {
-  const server = createWonderServer({ mode: 'claude', client, demoDelayMs: 0, logger: quiet });
+  const server = createWonderServer({ mode: 'claude', client, demoDelayMs: 0, logger: quiet, memoryFile: null });
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   const base = `http://127.0.0.1:${server.address().port}`;
   try { return await fn(base, server); } finally { server.closeAllConnections?.(); await new Promise((r) => server.close(r)); }

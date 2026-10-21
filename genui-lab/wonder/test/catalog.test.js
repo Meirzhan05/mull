@@ -142,3 +142,81 @@ test('widget text renders inline markdown as primitives and keeps dollar amounts
   assert.equal(env.mirror.findAll((n) => n.type === 'code').length, 1);
   assert.match(env.mirror.text(), /Interest: \$1,000 × 10% = \$100, then more and code/);
 });
+
+// ---------------------------------------------------------------- TeacherCard (server-resolved)
+
+const teacherAppData = (entries) => ({ opGenui: { componentResults: Object.fromEntries(entries.map(([rid, state]) => [rid, { status: 'resolved', state }])) } });
+
+test('TeacherCard: binds to componentResults by the server-assigned __resolutionId and renders each kind', () => {
+  const md = [
+    'Intro.',
+    '<TeacherCard kind="memory" __resolutionId="tc-mem-00000001"/>',
+    '<TeacherCard kind="plan" __resolutionId="tc-plan-0000001"/>',
+    '<TeacherCard kind="approval" __resolutionId="tc-appr-0000001"/>',
+    '<TeacherCard kind="approval" __resolutionId="tc-missing-00001"/>',
+  ].join('\n\n');
+  const r = compileWonder(md, { salt: 'tc' });
+  assert.deepEqual(r.components.map((c) => [c.name, c.status, c.resolutionId]), [
+    ['TeacherCard', 'valid', 'tc-mem-00000001'], ['TeacherCard', 'valid', 'tc-plan-0000001'], ['TeacherCard', 'valid', 'tc-appr-0000001'], ['TeacherCard', 'valid', 'tc-missing-00001'],
+  ]);
+  for (const id of ['tc-mem-00000001', 'tc-plan-0000001', 'tc-appr-0000001']) assert.ok(Object.values(r.constants).includes(id), `${id} hoisted as the resolution id`);
+  const plan = { kind: 'plan', goal: 'Stats in a week', saved: false, days: [
+    { day: 1, focus: 'Averages', items: [{ id: 'd1i1', kind: 'lesson', title: 'Mean and median', topic: 'mean', opened: true }] },
+    { day: 2, focus: 'Spread', items: [{ id: 'd2i1', kind: 'review', title: 'Review cards', topic: '', opened: false }, { id: 'd2i2', kind: 'quiz', title: 'Quick check', topic: 'spread', opened: false }] },
+    { day: 3, focus: 'Practice', items: [{ id: 'd3i1', kind: 'lesson', title: 'Variance', topic: 'variance', opened: false }] },
+  ] };
+  const appData = teacherAppData([
+    ['tc-mem-00000001', { kind: 'memory', op: 'remember', status: 'saved', item: { id: 'mem-1', fact: 'Knows basic algebra.', kind: 'background' } }],
+    ['tc-plan-0000001', plan],
+    ['tc-appr-0000001', { kind: 'approval', status: 'pending', topic: 'Mean, median and mode', level: 'beginner', reason: 'Averages first.' }],
+  ]);
+  const env = runProgram({ ...r, appData });
+  assert.deepEqual(env.errors, []);
+  const cards = catalogNodes(env.mirror, 'TeacherCard');
+  assert.equal(cards.length, 4);
+  const text = env.mirror.text();
+  assert.match(text, /Remembered: Knows basic algebra\.[\s\S]*Undo/);
+  assert.match(text, /STUDY PLAN[\s\S]*3 days · 1\/4 done[\s\S]*Stats in a week[\s\S]*Averages[\s\S]*Mean and median[\s\S]*Save plan/);
+  assert.match(text, /SUGGESTED LESSON[\s\S]*beginner[\s\S]*Mean, median and mode[\s\S]*Averages first\.[\s\S]*Start lesson[\s\S]*Not now/);
+  assert.doesNotMatch(env.mirror.text(cards[3]), /\w/, 'unresolved card shows a skeleton, not text');
+
+  // buttons dispatch server widget actions scoped to the card, carrying its state
+  click(env, 'Start lesson');
+  click(env, 'Not now');
+  click(env, 'Quick check');
+  click(env, 'Save plan');
+  click(env, 'Undo', cards[0]);
+  const acts = env.actions.map((a) => [a.type, a.handler, a.componentName, a.nativeWidgetResolutionId, a.payload.itemId]);
+  assert.deepEqual(acts, [
+    ['teacher_accept', 'server', 'TeacherCard', 'tc-appr-0000001', undefined],
+    ['teacher_dismiss', 'server', 'TeacherCard', 'tc-appr-0000001', undefined],
+    ['teacher_open_item', 'server', 'TeacherCard', 'tc-plan-0000001', 'd2i2'],
+    ['teacher_accept', 'server', 'TeacherCard', 'tc-plan-0000001', undefined],
+    ['teacher_undo', 'server', 'TeacherCard', 'tc-mem-00000001', undefined],
+  ]);
+  assert.equal(env.actions[0].payload.state.topic, 'Mean, median and mode', 'the card state travels with the action (restart-safe)');
+
+  // new componentResults (the server's answer) re-render the same cards
+  const next = teacherAppData([
+    ['tc-mem-00000001', { kind: 'memory', op: 'remember', status: 'undone', item: { id: 'mem-1', fact: 'Knows basic algebra.', kind: 'background' } }],
+    ['tc-plan-0000001', { ...plan, saved: true }],
+    ['tc-appr-0000001', { kind: 'approval', status: 'accepted', topic: 'Mean, median and mode', level: 'beginner', reason: '' }],
+  ]);
+  env.rt.render({ source: r.code, constants: r.constants, appData: next });
+  const t2 = env.mirror.text();
+  assert.match(t2, /Not remembered: Knows basic algebra\.[\s\S]*Redo/);
+  assert.match(t2, /Saved to your home screen[\s\S]*Unsave/);
+  assert.match(t2, /Started[\s\S]*Open lesson/);
+  assert.doesNotMatch(t2, /Not now/);
+  assert.deepEqual(env.errors, []);
+});
+
+test('TeacherCard without a valid server id is dropped by the compiler; mobile layout renders without errors', () => {
+  const bad = compileWonder('<TeacherCard kind="approval"/>\n\n<TeacherCard kind="weird" __resolutionId="tc-12345678"/>');
+  assert.deepEqual(bad.components.map((c) => c.status), ['invalid', 'invalid']);
+  assert.deepEqual(bad.requiredComponents, []);
+  const r = compileWonder('Hi\n\n<TeacherCard kind="approval" __resolutionId="tc-appr-0000001"/>');
+  const env = runProgram({ ...r, appData: teacherAppData([['tc-appr-0000001', { kind: 'approval', status: 'dismissed', topic: 'T', level: 'advanced', reason: '' }]]) }, { viewportWidth: 390 });
+  assert.deepEqual(env.errors, []);
+  assert.match(env.mirror.text(), /Skipped for now[\s\S]*Undo/);
+});

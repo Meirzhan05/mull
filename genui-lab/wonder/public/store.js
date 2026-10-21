@@ -1,11 +1,13 @@
 // localStorage persistence for courses, lessons (markdown + compiled dil + widget state),
-// the practice deck and XP/streak. Every storage access is wrapped: private windows and
+// Teacher threads (messages + compiled dil + card componentResults), saved study plans,
+// settings (memoryEnabled), the practice deck and XP/streak. Every storage access is wrapped: private windows and
 // blocked storage fall back to an in-memory store, and quota errors prune old lessons.
 
 import { emptyDeck, emptyStats } from './deck.js';
 
 const KEY = 'wonder.v1';
 const MAX_LESSONS = 40;
+const MAX_THREADS = 30;
 
 function memoryStorage() {
   const m = new Map();
@@ -24,7 +26,7 @@ function safeStorage() {
 }
 
 export function emptyState() {
-  return { version: 1, courses: [], lessons: {}, deck: emptyDeck(), stats: emptyStats(), awarded: {} };
+  return { version: 1, courses: [], lessons: {}, deck: emptyDeck(), stats: emptyStats(), awarded: {}, teacherThreads: [], teacherLessons: {}, plans: [], settings: { memoryEnabled: true } };
 }
 
 export function createStore({ storage } = {}) {
@@ -35,7 +37,12 @@ export function createStore({ storage } = {}) {
     const raw = st.getItem(KEY);
     if (raw) {
       const parsed = JSON.parse(raw);
-      if (parsed && parsed.version === 1) data = { ...emptyState(), ...parsed };
+      if (parsed && parsed.version === 1) {
+        data = { ...emptyState(), ...parsed };
+        data.settings = { ...emptyState().settings, ...(parsed.settings || {}) };
+        if (!Array.isArray(data.teacherThreads)) data.teacherThreads = [];
+        if (!Array.isArray(data.plans)) data.plans = [];
+      }
     }
   } catch { /* corrupted or unavailable: start fresh */ }
 
@@ -47,6 +54,9 @@ export function createStore({ storage } = {}) {
     for (const l of lessons.slice(MAX_LESSONS)) delete data.lessons[l.id];
     // drop tutor transcripts of the oldest half first
     for (const l of lessons.slice(Math.floor(lessons.length / 2))) if (data.lessons[l.id]) data.lessons[l.id].tutor = [];
+    // keep the newest Teacher threads; old ones lose their compiled programs (text stays)
+    data.teacherThreads = (data.teacherThreads || []).sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || '')).slice(0, MAX_THREADS);
+    for (const t of data.teacherThreads.slice(Math.floor(data.teacherThreads.length / 2))) for (const m of t.messages || []) if (m.role === 'assistant') m.dil = null;
   }
 
   function writeNow() {

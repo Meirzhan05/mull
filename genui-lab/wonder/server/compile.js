@@ -304,8 +304,11 @@ export function preprocess(src) {
       if (closeIdx >= 0) drop.add(closeIdx);
       continue;
     }
-    components.push({ name: tag.name, status: 'valid', props: r.props });
-    const attrs = Object.entries(r.props).map(([k, v]) => {
+    // Server-resolved components (TeacherCard) carry their resolution id in the markup; it is
+    // handed to the stock compiler's resolutionIdFor instead of becoming a prop.
+    const { __resolutionId: explicitId, ...props2 } = r.props;
+    components.push({ name: tag.name, status: 'valid', props: r.props, ...(spec.resolved ? { resolutionId: explicitId } : {}) });
+    const attrs = Object.entries(props2).map(([k, v]) => {
       if (v === null || typeof v === 'number' || typeof v === 'boolean') return `${k}={${JSON.stringify(v)}}`;
       hoisted.push(v);
       return `${k}={"${PLACEHOLDER(hoisted.length - 1)}"}`;
@@ -329,7 +332,9 @@ export function compileWonder(markdown, opts = {}) {
   pre.fallbackSource = sanitizePrimitiveExpressions(pre.fallbackSource);
   const salt = opts.salt || '';
   // ids depend only on (name, ordinal, salt): stable across streamed revisions of one message
-  const resolutionIdFor = (name, _props, ordinal) => defaultResolutionId(name, { __salt: salt }, ordinal);
+  const explicit = {};
+  for (const c of pre.components) if (c.status === 'valid') (explicit[c.name] ||= []).push(c.resolutionId);
+  const resolutionIdFor = (name, _props, ordinal) => explicit[name]?.[ordinal] || defaultResolutionId(name, { __salt: salt }, ordinal);
   const result = compile(pre.source, { partial: !!opts.partial, resolutionIdFor });
   let next = Object.keys(result.constants).reduce((m, k) => Math.max(m, Number(k) + 1), 0);
   const constants = result.constants;

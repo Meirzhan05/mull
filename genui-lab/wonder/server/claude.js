@@ -47,10 +47,12 @@ export function createClaudeClient() {
 }
 
 /**
- * Streaming request for lessons and tutor turns. `system` is the static (cached) prompt;
- * `context` is per-request system text placed after the cache breakpoint.
+ * Streaming request for lessons, tutor and Teacher turns. `system` is the static (cached)
+ * prompt; `context` is per-request system text (learner memory, lesson context) placed after
+ * the cache breakpoint. `tools` must be static too: they render before the system prompt, so
+ * the breakpoint caches tools + system. No tool_choice: forcing a tool is a 400 on this model.
  */
-export function buildStreamParams({ system, context, messages, effort = 'medium', maxTokens = 64000 }) {
+export function buildStreamParams({ system, context, messages, effort = 'medium', maxTokens = 64000, tools }) {
   const sys = [{ type: 'text', text: system, cache_control: { type: 'ephemeral' } }];
   if (context) sys.push({ type: 'text', text: context });
   return {
@@ -61,6 +63,7 @@ export function buildStreamParams({ system, context, messages, effort = 'medium'
     thinking: { type: 'adaptive' },
     output_config: { effort },
     system: sys,
+    ...(tools?.length ? { tools } : {}),
     messages,
   };
 }

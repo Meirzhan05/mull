@@ -9,7 +9,7 @@
 
 export const LEARNING_COMPONENT_NAMES = Object.freeze([
   'LessonStepper', 'Reveal', 'CompareToggle', 'InputOutputSlider', 'Flowchart', 'Timeline', 'BarChart',
-  'ConceptMap', 'Cycle', 'Quiz', 'Flashcards', 'KeyTerm', 'Callout', 'Celebration',
+  'ConceptMap', 'Cycle', 'Quiz', 'Flashcards', 'KeyTerm', 'Callout', 'Celebration', 'TeacherCard',
 ]);
 
 export function learningCatalog(__dil, DIL, GenUI) {
@@ -332,7 +332,7 @@ export function learningCatalog(__dil, DIL, GenUI) {
       if (!done || st.reported) return;
       // report completion once per attempt (the host awards XP)
       setSt((s) => ({ ...s, reported: true }));
-      GenUI.dispatchAction({ handler: 'client', type: 'quiz_complete', payload: { score, total: n, resolutionId: rid } });
+      GenUI.dispatchAction({ handler: 'client', type: 'quiz_complete', payload: { score, total: n, resolutionId: rid, results: questions.map((q) => ({ prompt: q.prompt, correct: !!st.answers[q.id]?.correct })) } });
     }, [done, st.attempt]);
     if (!n) return null;
     const send = (type, payload) => GenUI.dispatchWidgetAction({ type, componentName: 'Quiz', nativeWidgetResolutionId: rid, payload: { attempt: st.attempt, ...payload } });
@@ -439,7 +439,95 @@ export function learningCatalog(__dil, DIL, GenUI) {
       h('title', { size: 'lg', textAlign: 'center' }, str(props.message) || 'Nice work!'));
   }
 
-  return { LessonStepper, Reveal, CompareToggle, InputOutputSlider, Flowchart, Timeline, BarChart, ConceptMap, Cycle, Quiz, Flashcards, KeyTerm, Callout, Celebration };
+
+  // ------------------------------------------------------------------ TeacherCard (server-resolved)
+  // Teacher tool results (wondering-findings §2.3 card types) as ChatGPT-style resolved
+  // components: the props carry only kind + __resolutionId; the data is
+  // appData.opGenui.componentResults[__resolutionId] = {status, state}. Buttons dispatch
+  // widget actions (teacher_accept / teacher_dismiss / teacher_undo / teacher_open_item) and
+  // the server answers with the card's new state.
+  const ITEM_ICON = { lesson: 'book', review: 'clock', quiz: 'star' };
+  const ITEM_VERB = { lesson: 'Start', review: 'Review', quiz: 'Quiz me' };
+  function TeacherCard(props) {
+    const rid = props.__resolutionId;
+    const res = DIL.useAppData((ad) => (rid ? ad?.opGenui?.componentResults?.[rid] : null) || null);
+    if (!res || res.status === 'pending') {
+      return h('col', { __component: 'TeacherCard', gap: 2, padding: 4, radius: '2xl', border: { size: 1, color: 'default' }, background: 'surface' },
+        h('box', { height: 12, width: '40%', radius: 'full', background: 'surface-tertiary' }),
+        h('box', { height: 12, width: '75%', radius: 'full', background: 'surface-tertiary' }));
+    }
+    const s = res.state;
+    if (res.status !== 'resolved' || !s || typeof s !== 'object') {
+      return h('text', { __component: 'TeacherCard', size: 'sm', color: 'tertiary' }, 'This card is no longer available.');
+    }
+    const act = (type, extra) => GenUI.dispatchWidgetAction({ type, componentName: 'TeacherCard', nativeWidgetResolutionId: rid, payload: { state: s, ...(extra || {}) } });
+
+    if (s.kind === 'approval') {
+      const status = s.status || 'pending';
+      return h('col', { __component: 'TeacherCard', gap: 3, padding: 4, radius: '2xl', border: { size: 1, color: status === 'pending' ? 'brand' : 'default' }, background: status === 'dismissed' ? 'surface-secondary' : 'surface' },
+        h('row', { gap: 2, align: 'center', justify: 'between', wrap: true },
+          h('row', { gap: 2, align: 'center' },
+            h('icon', { name: 'sparkles', size: 'sm', color: 'brand-strong' }),
+            h('text', { size: 'xs', weight: 'bold', color: 'brand-strong' }, 'SUGGESTED LESSON')),
+          h('badge', { color: 'info' }, str(s.level || 'beginner'))),
+        h('title', { size: 'md' }, str(s.topic)),
+        s.reason ? md(s.reason, { size: 'sm', color: 'secondary' }) : null,
+        status === 'pending'
+          ? h('row', { gap: 2, wrap: true },
+            h('button', { size: 'md', onClick: () => act('teacher_accept') }, 'Start lesson'),
+            h('button', { size: 'md', variant: 'outline', onClick: () => act('teacher_dismiss') }, 'Not now'))
+          : status === 'accepted'
+            ? h('row', { gap: 2, align: 'center', wrap: true },
+              h('badge', { color: 'success' }, 'Started'),
+              h('button', { size: 'sm', variant: 'ghost', onClick: () => act('teacher_accept') }, 'Open lesson'))
+            : h('row', { gap: 2, align: 'center', wrap: true },
+              h('text', { size: 'sm', color: 'tertiary' }, 'Skipped for now'),
+              h('button', { size: 'sm', variant: 'ghost', onClick: () => act('teacher_undo') }, 'Undo')));
+    }
+
+    if (s.kind === 'plan') {
+      const days = arr(s.days);
+      const items = days.flatMap((d) => arr(d.items));
+      const opened = items.filter((i) => i.opened).length;
+      return h('col', { __component: 'TeacherCard', gap: 3, padding: 4, radius: '2xl', border: { size: 1, color: 'default' }, background: 'surface' },
+        h('row', { gap: 2, align: 'center', justify: 'between', wrap: true },
+          h('row', { gap: 2, align: 'center' },
+            h('icon', { name: 'calendar', size: 'sm', color: 'brand-strong' }),
+            h('text', { size: 'xs', weight: 'bold', color: 'brand-strong' }, 'STUDY PLAN')),
+          h('badge', { color: opened === items.length && items.length ? 'success' : 'info' }, `${days.length} days · ${opened}/${items.length} done`)),
+        h('title', { size: 'md' }, str(s.goal)),
+        h('col', { gap: 2 }, ...days.map((d, di) => h('col', { key: `d${di}`, gap: 1 },
+          h('row', { gap: 2, align: 'center' },
+            h('box', { size: 24, radius: 'full', align: 'center', justify: 'center', background: arr(d.items).every((i) => i.opened) ? 'success' : 'brand-subtle', flex: '0 0 auto' },
+              h('text', { size: 'xs', weight: 'bold' }, String(d.day || di + 1))),
+            h('text', { size: 'sm', weight: 'semibold' }, str(d.focus))),
+          h('col', { gap: 1, padding: { left: 8 } }, ...arr(d.items).map((it) => h('pressable', {
+            key: `i${it.id}`, padding: { x: 3, y: 2 }, radius: 'lg', variant: it.opened ? 'plan-item-done' : 'plan-item', ariaLabel: `${ITEM_VERB[it.kind] || 'Open'}: ${str(it.title)}`,
+            onClick: () => act('teacher_open_item', { itemId: it.id }),
+          }, h('row', { gap: 2, align: 'center', width: '100%' },
+            h('icon', { name: it.opened ? 'check' : ITEM_ICON[it.kind] || 'book', size: 'sm', color: it.opened ? 'success' : 'secondary' }),
+            h('text', { size: 'sm', flex: 1 }, str(it.title)),
+            h('text', { size: 'xs', weight: 'semibold', color: 'brand-strong' }, it.opened ? 'Again' : ITEM_VERB[it.kind] || 'Open')))))))),
+        s.saved
+          ? h('row', { gap: 2, align: 'center', wrap: true },
+            h('badge', { color: 'success' }, 'Saved to your home screen'),
+            h('button', { size: 'sm', variant: 'ghost', onClick: () => act('teacher_undo') }, 'Unsave'))
+          : h('row', { gap: 2, wrap: true }, h('button', { size: 'md', onClick: () => act('teacher_accept') }, 'Save plan')));
+    }
+
+    if (s.kind === 'memory') {
+      const it = s.item || {};
+      const label = s.status === 'off' ? 'Not saved (memory is off)' : s.status === 'undone' ? (s.op === 'forget' ? 'Kept' : 'Not remembered') : s.op === 'forget' ? 'Forgot' : 'Remembered';
+      return h('row', { __component: 'TeacherCard', gap: 2, align: 'center', padding: { x: 3, y: 2 }, radius: 'xl', background: 'surface-secondary', border: { size: 1, color: 'subtle' }, wrap: true },
+        h('icon', { name: s.op === 'forget' ? 'x' : 'lightbulb', size: 'sm', color: s.status === 'undone' || s.status === 'off' ? 'tertiary' : 'brand-strong' }),
+        h('text', { size: 'sm', flex: 1, color: s.status === 'undone' ? 'tertiary' : 'default' }, h('bold', null, `${label}: `), str(it.fact)),
+        s.status === 'off' ? null : h('button', { size: 'sm', variant: 'ghost', onClick: () => act('teacher_undo') }, s.status === 'undone' ? 'Redo' : 'Undo'));
+    }
+
+    return h('text', { __component: 'TeacherCard', size: 'sm', color: 'secondary' }, str(s.summary || s.kind));
+  }
+
+  return { LessonStepper, Reveal, CompareToggle, InputOutputSlider, Flowchart, Timeline, BarChart, ConceptMap, Cycle, Quiz, Flashcards, KeyTerm, Callout, Celebration, TeacherCard };
 }
 
 /** Program prelude that binds the learning components as free identifiers for compiled code. */

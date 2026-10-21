@@ -2,7 +2,7 @@
 
 Wonder is a working learning app that combines the two systems reverse-engineered in this lab:
 
-- **wondering.app's product loop.** You pick a topic or plan a course. You get a short paged lesson with interactive widgets and a tutor you can ask about it. When you finish, knowledge cards are revealed in a "pack opening", and spaced-repetition review is scheduled with FSRS. XP and streaks are tracked throughout.
+- **wondering.app's product loop.** You pick a topic or plan a course. You get a short paged lesson with interactive widgets and a tutor you can ask about it. When you finish, knowledge cards are revealed in a "pack opening", and spaced-repetition review is scheduled with FSRS. XP and streaks are tracked throughout. A **Teacher** agent plans your study, proposes lessons, quizzes you and remembers what matters, and a **learner memory** personalizes every lesson, tutor reply and Teacher turn.
 - **ChatGPT's "intelligent UI" (DIL).** The model writes JSX-like UI tags inline in its markdown. The server recompiles the growing message into a DIL program on every revision and streams it as `conversation-source` NDJSON. The browser runs the program in a sandboxed Web Worker and applies the resulting render ops to the DOM.
 
 The model is Claude (`claude-opus-5-5`). Without credentials the app runs in **demo mode**, streaming pre-written lessons through exactly the same pipeline.
@@ -31,7 +31,7 @@ cp .env.example .env        # then put your key after ANTHROPIC_API_KEY=
 npm start                   # node --env-file-if-exists=.env server/index.js → http://localhost:8750
 ```
 
-`ANTHROPIC_API_KEY=... npm start` also works, as does an `ant auth login` profile. The server never reads, prints or logs the key. `GET /api/status` returns only `{mode: "claude"|"demo", model}`. `PORT` changes the port. `WONDER_MODE=demo` forces demo mode even when credentials exist.
+`ANTHROPIC_API_KEY=... npm start` also works, as does an `ant auth login` profile. The server never reads, prints or logs the key. `GET /api/status` returns only `{mode: "claude"|"demo", model}`. `PORT` changes the port. `WONDER_MODE=demo` forces demo mode even when credentials exist. `WONDER_MEMORY_FILE` moves the learner memory file. `WONDER_RECORD_DIR=<dir>` writes each lesson, tutor and Teacher stream's NDJSON to a file there; that is how the fixtures were captured, and the records contain no credentials.
 
 ### Demo mode
 
@@ -42,7 +42,9 @@ Demo mode streams these through the real compile + NDJSON pipeline in 20–60 ch
 - **Lessons** in `server/demo/`: *How transformers predict the next word*, *Why the sky is blue* and *Compound interest*. The topic is matched by keyword, and any other topic falls back to one of the three.
 - **Tutor replies.** `tutor-explain.md` and `tutor-quiz.md` are templates. The quiz reply is a `<Quiz>` built from the lesson's own `<KeyTerm>`s. "Explain this" on a missed quiz question gets a reply built from that question's explanation and hint.
 
-Practice extraction in demo mode is deterministic, built from the lesson's `<KeyTerm>` and `<Quiz>` components.
+- **Teacher turns.** `server/teacher-demo.js` is a scripted stand-in for Claude that speaks the Messages streaming event protocol (text deltas, `tool_use` blocks with `input_json_delta`, stop reasons). The real tool loop drives it, so demo turns go through the same validation, tool execution, card splicing and NDJSON path. It answers goals/plans (remember → get_progress → plan_study + create_lesson), "quiz me" (a Quiz from your last lesson), "how am I doing", "forget that", facts about yourself, and anything else with a lesson suggestion.
+
+Practice extraction in demo mode is deterministic, built from the lesson's `<KeyTerm>` and `<Quiz>` components. Memory extraction in demo mode notes a struggle when you miss at least a third of a lesson's quiz.
 
 ## How the two systems map into Wonder
 
@@ -59,6 +61,8 @@ Practice extraction in demo mode is deterministic, built from the lesson's `<Key
 | Tutor | Follow-ups via `followupPrompts` | `course-chat`, `quick_replies` | `/api/tutor/stream` with the lesson as context. Replies are DIL (they can include a Quiz or a visual). `<Followups items={[…]}/>` is lifted out of the program into `followupPrompts` chips |
 | Practice | n/a | `generate-knowledge-cards`, practice types mcq/cloze/binary_choice/flashcard, FSRS v5 via ts-fsrs, pack opening (§1.6, §5) | `/api/practice/extract` uses Claude structured output (`json_schema`, effort low) with a deterministic fallback. FSRS scheduling uses wondering-genui's `fsrs.js` port with shipped defaults. Deck and review logs live in localStorage |
 | Gamification | n/a | XP events, streaks with local-date keys (§7) | `public/deck.js`: XP for lessons, quiz answers, reviews and collected cards, plus a streak that counts consecutive local days |
+| Agent with tool cards | Server-resolved catalog components: `componentResults[__resolutionId]` (§3.4, §8.2); widget server actions (§3.6) | `teacher-chat`: SSE `tool_start`/`tool_result`, cards `plan`/`approval`/`quiz`/`memory`, `resolve_action`/`undo_action` (wondering §2.3) | `/api/teacher/stream`: Claude's tool calls run on the server; each result is a resolved `<TeacherCard>` spliced into the streamed DIL, with `reasoning` records as the tool status line. Card buttons → `/api/widget_action` (`teacher_accept`/`teacher_dismiss`/`teacher_undo`/`teacher_open_item`) |
+| Memory | Memory cites | `learner_memory_items`, `extract-learner-memory`, `forget_me`, `noMemory` (wondering §5) | `server/memory.js` (JSON file), Teacher `remember`/`forget`, post-lesson extraction, "About this learner" system block after the cache breakpoint, `#/memory` screen and a "Use memory" switch (`memoryEnabled`) |
 
 ## Claude usage
 
@@ -70,6 +74,11 @@ All of this lives in `server/claude.js`. The client is dependency-injected, so t
   - Text comes from `content_block_delta`/`text_delta` events, followed by `await stream.finalMessage()`.
   - `stop_reason === "refusal"` produces a graceful message. `"max_tokens"` marks the turn as truncated (`debug.truncated`).
 - **Course plans and practice extraction** use `client.messages.create` with `output_config: {effort: "low", format: {type: "json_schema", schema}}`. The JSON is parsed and every item is validated.
+- **Teacher turns** (`server/teacher.js`) run a manual streaming tool loop, at most 6 requests per turn:
+  - Six client tools, all `strict: true` with `additionalProperties: false` and `required` on every object, and `eager_input_streaming: true` (the request is streamed): `create_lesson`, `plan_study`, `quiz_me`, `remember`, `forget`, `get_progress`. They are static and render before the system prompt, so the one `cache_control` breakpoint on the system prompt caches tools + system. Learner memory goes in a second system block after it. There is no `tool_choice` (forcing a tool is a 400 on this model).
+  - Because eager streaming skips server-side validation, every parsed input is checked against its schema plus semantic bounds (3–7 plan days, Quiz props through the catalog validator, fact ≤ 200 chars) before anything runs. A failure becomes an `is_error` tool_result echoing the JSON-encoded input. An SDK `AnthropicError` that is not an `APIError` (unparseable tool JSON) re-issues the turn, at most twice.
+  - `refusal` and `max_tokens` stop the loop without running that turn's tools. `pause_turn` appends the paused content and re-sends with no extra user message. Every `tool_result` of one assistant turn goes back in one user message, and the full `message.content` (thinking, text and tool_use) is appended to the history.
+  - Card markup is server-only: a streaming filter strips any `<TeacherCard>` the model writes, even when it is split across deltas. In later turns the client sends cards back as `[Card: <summary of its current state>]` notes.
 - **Errors** are caught most specific first: `AuthenticationError` → `RateLimitError` → `BadRequestError` → `APIError`. Each becomes a `control failed` record with a friendly message. Raw API text is never forwarded.
 
 ## Endpoints
@@ -82,6 +91,13 @@ All of this lives in `server/claude.js`. The client is dependency-injected, so t
 | `POST /api/course/plan {topic, level}` | JSON `{plan:{title, description, sections:[{title, lessons:[{title, summary}]}]}}`; the client renders it as a course path |
 | `POST /api/widget_action {componentName, action_type, payload, resolutionId}` | JSON `{componentResults?, issueTurn?, result?}` |
 | `POST /api/practice/extract {lessonMarkdown}` | JSON `{cards:[{term, definition, example}], items:[…]}` |
+| `POST /api/teacher/stream {threadId, history, message, progress, memoryEnabled}` | NDJSON Teacher turn. Cards live in the final `dil.appData.opGenui.componentResults`; `followupPrompts` on the final record |
+| `GET /api/memory` | `{items:[{id, fact, kind, source, createdAt}]}` (newest first) |
+| `POST /api/memory {fact, kind}` | Adds a user fact (de-duplicated) |
+| `DELETE /api/memory?id=…` or `DELETE /api/memory {all:true}` | Removes one item, or forgets everything |
+| `POST /api/memory/extract {lessonTitle, quizResults, tutorThread, memoryEnabled}` | `{added:[…], source}`: 0–3 new facts from a finished lesson |
+
+`memoryEnabled: false` on lesson, tutor, Teacher and extraction requests leaves memory out of the prompt (and the Teacher's `remember`/`forget` return an error result instead of writing).
 
 The server also serves `public/` and, read-only, `genui-lab/chatgpt-dil/src/*` and `genui-lab/wondering-genui/src/*`. Client modules import those through relative paths such as `../../chatgpt-dil/src/host.js`, which resolve the same way under Node and in the browser.
 
@@ -103,13 +119,47 @@ The server also serves `public/` and, read-only, `genui-lab/chatgpt-dil/src/*` a
 | `Quiz` | Hints, feedback, explanations, "Explain this" → tutor, results with confetti, retry, server-graded state restore |
 | `Flashcards` | Flip cards; "Save to review deck" |
 | `Celebration` | Confetti moment |
+| `TeacherCard` | **Server-only**: spliced in by `/api/teacher/stream`, never written by the model. Props are just `kind` and the server-assigned `__resolutionId`; the data is `componentResults[__resolutionId].state`. `approval` (Start lesson / Not now / Undo), `plan` (per-item open buttons, Save plan / Unsave), `memory` (Remembered/Forgot chip with Undo/Redo). Shows a skeleton until resolved |
 
 Claude can also use the DIL layout primitives (`box/row/col/grid/text/title/icon/badge/divider/math/…`), with icon names taken from `chatgpt-dil/src/icons.js`.
+
+## Teacher
+
+`#/teacher` (Home → Teacher) is Wondering's Teacher tab rebuilt on ChatGPT's resolved components. The left column holds the thread list (a drawer on phones); the right is the chat. Replies stream as DIL in a sandbox worker, like the tutor's, and end with follow-up chips.
+
+What happens in one turn:
+
+1. The client sends the message, a text history (cards as `[Card: …]` notes), a **progress snapshot** assembled from localStorage (`public/teacher-core.js`: deck size, due cards, mastered, streak, XP, recent lessons with quiz scores, courses, saved plans) and `memoryEnabled`.
+2. Claude streams text and calls tools. When a `tool_use` block starts, a `reasoning` record shows the tool status ("Checking your progress…", "Drafting a study plan…"). This is Wondering's `tool_start`.
+3. The server validates and runs the tool. Results that need UI get a resolution id (`tc-<uuid>`) and are stored as `{status:"resolved", state}` in the turn's `appData.opGenui.componentResults` and in a server-side card store. Then `<TeacherCard kind="…" __resolutionId="…"/>` is spliced into the markdown at that point. The compiler hands that id to the stock chatgpt-dil compiler instead of the default salted id. `quiz_me` splices a normal `<Quiz>`, graded by the existing `quiz_answer` action; `get_progress` returns JSON only.
+4. Card buttons dispatch widget actions to `/api/widget_action`. The response has the card's new `componentResults` entry plus `clientActions` for the host:
+
+| Card | Action | New state | Client action |
+|---|---|---|---|
+| approval | `teacher_accept` (Start lesson / Open lesson) | `accepted` | `start_lesson` → creates the lesson and opens `#/lesson/<id>` (or reopens the same one) |
+| approval | `teacher_dismiss` (Not now) → `teacher_undo` | `dismissed` → `pending` | none |
+| plan | `teacher_open_item {itemId}` | item `opened` | `start_lesson`, `open_review` or `issue_new_turn` ("Quiz me on …") |
+| plan | `teacher_accept` (Save plan) / `teacher_undo` (Unsave) | `saved` | `save_plan` / `unsave_plan` → the plan appears on Home under "Your study plan" |
+| memory | `teacher_undo` (Undo / Redo) | `undone` ↔ `saved`/`forgotten` | none; the memory store itself is updated |
+
+Every action also carries the card's state, so a card still works after a server restart; the server rebuilds it from that copy after normalizing it. Threads, compiled programs and the latest `componentResults` persist in localStorage, so a reload restores every card in its last state.
+
+The Teacher persona (`TEACHER_SYSTEM_PROMPT`) uses Wondering's dial values fixed to tone warm, challenge balanced and hints first.
+
+## Learner memory
+
+- **Store.** `server/memory.js` keeps `genui-lab/wonder/data/memory.json` (git-ignored; `WONDER_MEMORY_FILE` overrides it). Items are `{id, fact, kind: goal|preference|struggle|background, source: teacher|lesson|user, createdAt}`. Writes are atomic (temp file + rename). The store holds at most 100 items (oldest dropped) and each fact at most 200 characters. Near-duplicates are not stored twice.
+- **Writes** come from three places:
+  - The Teacher's `remember`/`forget`, with an Undo chip.
+  - Post-lesson extraction. "Finish lesson" sends the quiz results and the learner's tutor questions to `/api/memory/extract`: a structured-output call at effort low, giving 0–3 facts that are de-duplicated against memory. A toast says what Wonder will remember.
+  - The Memory screen.
+- **Reads.** A compact "About this learner" block with the newest 15 items goes into the lesson, tutor and Teacher system prompts as a system block after the cache breakpoint. The Teacher's copy includes item ids so it can `forget` them.
+- **UI.** `#/memory` lists items by kind, with add, delete and "Forget everything", plus the persisted **Use memory** switch that sets `memoryEnabled` on every request.
 
 ## Tests
 
 ```sh
-node --test genui-lab/wonder/test/index.js      # 56 tests, about 5 s, no network
+node --test genui-lab/wonder/test/index.js      # 125 tests, about 6 s, no network
 ```
 
 - **`compile.test.js`**
@@ -131,6 +181,20 @@ node --test genui-lab/wonder/test/index.js      # 56 tests, about 5 s, no networ
   - Refusal and max_tokens handling.
   - Rate-limit, bad-request and API errors, plus the switch to demo on auth failure.
   - Structured extraction and the course plan.
+- **`teacher.test.js`** drives the Teacher loop with a scripted streaming fake (`fakeToolClient` in `helpers.js`):
+  - Request params: model, adaptive thinking, effort, `fallbacks` + beta, `cache_control` with memory after it, every tool strict + `eager_input_streaming` with `additionalProperties:false` everywhere, no `tool_choice`, static tools.
+  - Tool loop: tools run, all results come back in one user message, the full content (with thinking) is appended, and cards are spliced at the right point with matching `componentResults`.
+  - Validation failures become `is_error`; `quiz_me` splices a Quiz.
+  - `pause_turn` continuation; `refusal` and `max_tokens` never run tools.
+  - Model-written TeacherCards are stripped, even split across deltas.
+  - Unparseable-JSON retry, API errors, and the 6-request cap.
+  - History cleaning; memory off.
+  - All card widget actions, including after a restart.
+  - The demo Teacher end to end over HTTP.
+  - Client history and progress helpers.
+- **`memory.test.js`** covers the store (CRUD, atomic file, caps, de-duplication, corrupt file), `/api/memory` endpoints, Claude and demo extraction (effort low, json_schema, cap 3, de-dup), and memory injection into lesson and tutor prompts after the breakpoint (left out when `memoryEnabled:false`).
+- **`catalog.test.js`** also renders TeacherCard (approval/plan/memory/skeleton, desktop and 390 px) from `componentResults`, presses every button and checks the dispatched widget actions and the re-render with new state.
+- **`real-claude-teacher.test.js`** replays a recorded real Teacher turn (`test/fixtures/claude-teacher-statistics.ndjson`) through the browser client's `streamTurn` in uneven chunks, and renders every streamed revision and the final program.
 - **`deck.test.js`** covers practice grading, FSRS deck scheduling (learning steps, graduation, growing intervals, lapses), XP/streak rules, and localStorage persistence when storage is blocked or corrupted.
 
 ## Files
@@ -142,7 +206,11 @@ server/compile.js         compiler extension         server/lenient-json.js JSON
 server/catalog-schema.js  prop validators/fallbacks  server/ndjson.js       conversation-source writer
 server/demo.js, demo/*.md demo mode                  server/practice.js     practice extraction
 server/widget-actions.js  /api/widget_action
+server/teacher.js         Teacher tools, validation, loop, card store + actions
+server/teacher-demo.js    scripted demo "model"      server/memory.js       learner memory store
+server/memory-extract.js  post-lesson memory extraction
 public/index.html, styles.css, app.js (screens), ui.js, review.js, store.js, deck.js, practice-core.js, math.js
+public/teacher-screen.js, teacher-core.js (progress snapshot, history), memory-screen.js
 public/learning-catalog.js (in-sandbox components), learning-runtime.js, wonder-worker.js, dil-surface.js, stream-client.js
 test/*.test.js, test/index.js, test/helpers.js
 ```
@@ -155,6 +223,8 @@ test/*.test.js, test/index.js, test/helpers.js
 - **One sandbox worker per surface**: the lesson plus each tutor reply. Very long tutor threads therefore start many workers. They are terminated when you leave the lesson.
 - **Tutor replies are not lesson-specific in demo mode.** They are templates that use the lesson's KeyTerms and Quiz. Any other topic streams one of the three sample lessons.
 - **No accounts or sync.** Courses, lessons, the deck and XP live in this browser's localStorage, and the app falls back to in-memory storage when localStorage is blocked.
+- **Teacher history is text.** Earlier turns go back to Claude as markdown with `[Card: …]` notes, not as the original tool_use/tool_result blocks. Card state on the server is in memory, but cards carry their state, so they survive restarts.
+- **Memory is one file for one local learner.** There are no accounts. It is not encrypted; "Forget everything" deletes it.
 - **Inherited from chatgpt-dil:** a best-effort sandbox lockdown and no SVG `<text>`. Flowchart and ConceptMap are therefore laid out with boxes rather than drawn edges.
 
 ## Credentials
@@ -166,3 +236,9 @@ Verified against the live API (`claude-opus-5-5`), using an `sk-ant-usr-…` key
 - **Tutor:** the tutor answered with a LessonStepper and suggested follow-up questions.
 - **Practice:** the structured-output call extracted 5 knowledge cards and 7 practice items into the FSRS deck.
 - **Regression test:** the lesson is kept in `test/fixtures/claude-lesson-vaccines.md` and covered by `test/real-claude.test.js`.
+- **Teacher (phases 1–2):** "I want to get good at statistics in a week, I already know basic algebra" took 3 requests.
+  1. `remember` ×2 (goal; "Knows basic algebra.") + `get_progress`.
+  2. `plan_study` (7 days, 15 items) + `create_lesson` ("Mean, median and mode").
+  3. The reply, with a tip Callout and 3 follow-ups.
+
+  Save plan put it on Home. Start opened the lesson, which was generated with the 2 memory items ("You already know the algebra here…"). After a 1/3 quiz, Finish extracted 2 struggle facts ("Struggles to find the median, especially with unsorted or even-sized data sets."), which then showed on the Memory screen. This was checked at desktop and 390 px with no console errors. The turn is kept in `test/fixtures/claude-teacher-statistics.ndjson`.

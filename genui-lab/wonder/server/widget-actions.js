@@ -5,10 +5,16 @@
 
 import { normalizeQuestion } from './catalog-schema.js';
 import { normalizePracticeItem, gradePracticeItem } from '../public/practice-core.js';
+import { TEACHER_ACTIONS, handleTeacherAction, createCardStore } from './teacher.js';
+import { createMemoryStore } from './memory.js';
 
 const MAX_TRACKED = 2000;
 
-export function createWidgetActionHandler() {
+/**
+ * @param {{cards?: ReturnType<typeof createCardStore>, memory?: ReturnType<typeof createMemoryStore>}} [deps]
+ *   Teacher card state (per resolution id) and the learner memory store, shared with /api/teacher/stream.
+ */
+export function createWidgetActionHandler({ cards = createCardStore(), memory = createMemoryStore({ file: null }) } = {}) {
   const states = new Map(); // resolutionId -> quiz state
 
   function quizState(rid, attempt) {
@@ -61,6 +67,8 @@ export function createWidgetActionHandler() {
       const message = String(payload.query || `Can you explain ${topic} in more detail, with an example?`).slice(0, 2000);
       return { status: 200, body: { ok: true, issueTurn: { message } } };
     }
+
+    if (TEACHER_ACTIONS.has(type)) return handleTeacherAction({ cards, memory }, { action_type: type, payload, resolutionId });
 
     if (type === 'practice_grade') {
       const item = normalizePracticeItem(payload.item);

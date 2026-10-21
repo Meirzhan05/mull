@@ -74,3 +74,55 @@ export function fakeClient({ text = '', chunks, stopReason = 'end_turn', error, 
     },
   };
 }
+
+/**
+ * Fake streaming client for tool loops. `turns[i]` scripts the i-th stream call:
+ *   {content:[{type:'thinking'|'text'|'tool_use', ...}], stop_reason, textChunks?} or {error}.
+ * Text blocks stream as text_delta pieces (split with `|` in the text, or 25-char pieces);
+ * tool_use blocks stream content_block_start + input_json_delta. Records a deep copy of
+ * every request's params so later mutations of the message list don't leak into assertions.
+ */
+export function fakeToolClient(turns) {
+  const calls = [];
+  return {
+    calls,
+    beta: {
+      messages: {
+        stream(params, opts) {
+          calls.push({ params: structuredClone(params), opts });
+          const turn = turns[Math.min(calls.length - 1, turns.length - 1)];
+          const content = (turn.content || []).map((b) => (b.type === 'text' ? { type: 'text', text: b.text.replaceAll('|', '') } : b));
+          return {
+            async *[Symbol.asyncIterator]() {
+              if (turn.error && turn.errorAt == null) throw turn.error;
+              yield { type: 'message_start', message: { id: `msg_${calls.length}`, content: [] } };
+              for (const [index, b] of (turn.content || []).entries()) {
+                if (b.type === 'text') {
+                  yield { type: 'content_block_start', index, content_block: { type: 'text', text: '' } };
+                  const pieces = b.text.includes('|') ? b.text.split('|') : b.text.match(/[\s\S]{1,25}/g) || [];
+                  for (const p of pieces) yield { type: 'content_block_delta', index, delta: { type: 'text_delta', text: p } };
+                } else if (b.type === 'tool_use') {
+                  yield { type: 'content_block_start', index, content_block: { type: 'tool_use', id: b.id, name: b.name, input: {} } };
+                  yield { type: 'content_block_delta', index, delta: { type: 'input_json_delta', partial_json: JSON.stringify(b.input) } };
+                } else {
+                  yield { type: 'content_block_start', index, content_block: b };
+                }
+                yield { type: 'content_block_stop', index };
+              }
+              if (turn.error) throw turn.error;
+              yield { type: 'message_delta', delta: { stop_reason: turn.stop_reason || 'end_turn' } };
+            },
+            async finalMessage() {
+              if (turn.error) throw turn.error;
+              return { id: `msg_${calls.length}`, role: 'assistant', stop_reason: turn.stop_reason || 'end_turn', content: structuredClone(content) };
+            },
+          };
+        },
+      },
+    },
+    messages: { async create() { throw new Error('not scripted'); } },
+  };
+}
+
+/** Collect every TeacherCard in a mirror. */
+export const teacherCards = (mirror) => mirror.findAll((n) => n.props?.__component === 'TeacherCard');
