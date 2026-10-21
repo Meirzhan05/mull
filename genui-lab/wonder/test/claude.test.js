@@ -9,6 +9,7 @@ import { buildStreamParams, buildStructuredParams, detectMode, isCredentialError
 import { LESSON_SYSTEM_PROMPT, TUTOR_SYSTEM_PROMPT } from '../server/prompts.js';
 import { parseConversationSource, ConversationTurn } from '../../chatgpt-dil/src/stream.js';
 import { fakeClient, demo, runProgram, catalogNodes } from './helpers.js';
+import { stripGroundingTags } from '../server/grounding.js';
 
 const quiet = { warn() {}, error() {}, log() {} };
 
@@ -130,7 +131,7 @@ test('AuthenticationError before any text -> switches to demo mode and streams d
   const client = fakeClient({ error: apiError(Anthropic.AuthenticationError, 401, 'invalid x-api-key') });
   await withServer(client, async (base, server) => {
     const recs = await records(await post(base, '/api/lesson/stream', { topic: 'why is the sky blue' }));
-    assert.equal(fold(recs).markdown, demo('sky-blue.md'));
+    assert.equal(stripGroundingTags(fold(recs).markdown), demo('sky-blue.md')); // demo citations (Phase 3) stripped
     assert.equal(server.wonder.mode, 'demo');
     const status = await (await fetch(`${base}/api/status`)).json();
     assert.equal(status.mode, 'demo');

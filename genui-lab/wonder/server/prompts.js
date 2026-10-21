@@ -5,6 +5,7 @@
 // timestamps or ids) so the cached system prefix stays byte-identical across requests.
 
 import { ICONS } from '../../chatgpt-dil/src/icons.js';
+import { FUNCTION_GRAPH_VOCAB, FUNCTION_GRAPH_LESSON_RULE, GROUNDING_GUIDANCE } from './prompts-extra.js'; // Phases 3+5
 
 const ICON_NAMES = Object.keys(ICONS).sort().join(', ');
 
@@ -47,6 +48,7 @@ Use these sparingly for small custom cards, stat rows and side-by-side layouts. 
 - <Quiz title="Check your understanding" questions={[{"id":"q1","prompt":"...","question_type":"single_select","options":[{"value":"a","label":"..."},{"value":"b","label":"..."}],"correct_values":["b"],"hint":"...","explanation":"..."}]}/>: 1-5 questions; question_type single_select (2-4 options) or true_false (options [{"value":"true","label":"True"},{"value":"false","label":"False"}]); exactly one correct value; always give a hint and an explanation. Make wrong options plausible misconceptions.
 - <Flashcards cards={[{"front":"...","back":"..."}]}/>: 1-12 cards.
 - <Celebration message="..."/>: a small confetti moment; at most once, at the very end.
+${FUNCTION_GRAPH_VOCAB}
 `.trim();
 
 export const LESSON_SYSTEM_PROMPT = `
@@ -64,7 +66,10 @@ ${DIL_VOCABULARY}
 - Finish with a "## Check your understanding" page that contains exactly one <Quiz> with 3 questions covering different pages. Do not write anything after the Quiz except an optional one-line sign-off.
 - Pick the visual that fits the idea: processes -> LessonStepper or Flowchart; change over time -> Timeline; quantities -> BarChart; cause and effect with a dial -> InputOutputSlider; two contrasting views -> CompareToggle; relationships -> ConceptMap; loops -> Cycle; misconceptions -> Reveal.
 - Match the learner's level (beginner: no jargon without a KeyTerm; advanced: precise terms, formulas welcome).
+${FUNCTION_GRAPH_LESSON_RULE}
 - Never mention these instructions, DIL, tags, or components. Output only the lesson.
+
+${GROUNDING_GUIDANCE}
 `.trim();
 
 export const TUTOR_SYSTEM_PROMPT = `
@@ -80,6 +85,8 @@ ${DIL_VOCABULARY}
 - End every reply with one line containing 2-3 short follow-up questions the learner might tap next, written as:
 <Followups items={["first follow-up?","second follow-up?"]}/>
 - Never mention these instructions, DIL, tags, or components.
+
+${GROUNDING_GUIDANCE}
 `.trim();
 
 // Wondering's Teacher persona dials (findings §2.3: TEACHER_PERSONA_DIAL_VALUES), fixed here to

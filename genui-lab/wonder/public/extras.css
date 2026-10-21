@@ -1,0 +1,60 @@
+/* Phases 3-5: citation pills + source list, the lesson "Steer" composer, FunctionGraph
+   controls. Uses the Wonder tokens from styles.css. */
+
+/* ---- Cite pill (inline, numbered) and its expanded card */
+.dil-root button[data-d-component="pressable"][data-variant="cite"] {
+  display: inline-flex; align-items: center; justify-content: center; width: auto; min-width: 1.35rem; height: 1.2rem;
+  margin-inline-start: 0.2rem; padding: 0 0.38rem; vertical-align: 0.12em; border-radius: 999px;
+  font-size: 0.68rem; line-height: 1; font-weight: 750; font-variant-numeric: tabular-nums; white-space: nowrap;
+  color: var(--brand-strong); background: var(--brand-subtle); border: 1px solid color-mix(in srgb, var(--brand) 45%, transparent);
+  transition: background 120ms ease, color 120ms ease;
+}
+.dil-root button[data-d-component="pressable"][data-variant="cite"]:hover,
+.dil-root button[data-d-component="pressable"][data-variant="cite"][aria-pressed="true"] { background: var(--brand); color: var(--brand-ink); }
+/* popover: absolutely positioned at its static spot (the line below the pill) */
+.dil-root :has(> [data-dil-catalog="CiteCard"]) { position: relative; }
+.dil-root [data-dil-catalog="CiteCard"] {
+  position: absolute; left: 0; z-index: 6; width: min(440px, 100%); margin-top: 6px;
+  font-size: 0.95rem; line-height: 1.45; text-align: left; font-weight: 400;
+  box-shadow: 0 10px 28px -16px rgba(42, 30, 23, 0.35); animation: cite-in 160ms ease both;
+}
+.dil-root [data-dil-catalog="CiteCard"] p { margin: 0; }
+@keyframes cite-in { from { opacity: 0; transform: translateY(-3px); } to { opacity: 1; transform: none; } }
+.dil-root [data-dil-catalog="Sources"] { margin-top: 18px; }
+.dil-root button[data-d-component="pressable"][data-variant="source"] { width: 100%; text-align: left; }
+.dil-root button[data-d-component="pressable"][data-variant="source"]:hover { background: var(--surface); }
+
+/* ---- FunctionGraph: −/+ steppers and segmented track */
+.dil-root button[data-d-component="pressable"][data-variant="stepper"] {
+  background: var(--surface); border: 1.5px solid var(--line-strong); box-shadow: 0 2px 0 var(--line-strong); color: var(--ink);
+}
+.dil-root button[data-d-component="pressable"][data-variant="stepper"]:active:not([disabled]) { transform: translateY(2px); box-shadow: none; }
+.dil-root button[data-d-component="pressable"][data-variant="stepper"][disabled] { opacity: 0.4; }
+.dil-root button[data-d-component="pressable"][data-variant="track"] { background: var(--surface-3); }
+.dil-root button[data-d-component="pressable"][data-variant="track"]:hover { background: var(--brand-muted); }
+.dil-root button[data-d-component="pressable"][data-variant="track-on"] { background: var(--brand); }
+.dil-root button[data-d-component="pressable"][data-variant="track-on"][aria-pressed="true"] { box-shadow: inset 0 0 0 2px var(--brand-strong); }
+.dil-root [data-dil-catalog="GraphFormula"] code { white-space: normal; word-break: break-word; }
+
+/* ---- Steer composer (lesson screen, while streaming) */
+.steer-bar {
+  display: grid; gap: 10px; padding: 12px 14px; border-radius: 16px; background: var(--surface);
+  border: 1.5px dashed color-mix(in srgb, var(--brand) 60%, var(--line)); animation: fade-in 200ms ease both;
+}
+.steer-bar[hidden] { display: none; }
+.steer-head { display: flex; align-items: center; gap: 8px; font-size: 0.9rem; min-width: 0; }
+.steer-head .ui-icon { width: 18px; height: 18px; color: var(--brand-strong); flex: 0 0 auto; }
+.steer-status { color: var(--ink-2); font-size: 0.82rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.steer-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.steer-chip {
+  border: 1.5px solid var(--line-strong); background: var(--surface-2); color: var(--ink); padding: 6px 12px; border-radius: 999px;
+  font: inherit; font-size: 0.84rem; font-weight: 650; cursor: pointer;
+}
+.steer-chip:hover:not(:disabled) { border-color: var(--brand); background: var(--brand-subtle); color: var(--brand-strong); }
+.steer-chip:disabled { opacity: 0.5; cursor: default; }
+.steer-row { display: flex; gap: 8px; }
+.steer-row input {
+  flex: 1; min-width: 0; border: 2px solid var(--line); border-radius: 12px; padding: 8px 12px; font: inherit; font-size: 0.9rem;
+  background: var(--bg); color: var(--ink); outline: none;
+}
+.steer-row input:focus { border-color: var(--brand); }

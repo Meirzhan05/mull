@@ -3,6 +3,7 @@
 //   GET  /api/status            -> {mode:"claude"|"demo", model}
 //   POST /api/lesson/stream     -> conversation-source NDJSON (lesson in markdown + DIL)
 //   POST /api/tutor/stream      -> conversation-source NDJSON (tutor reply + followupPrompts)
+//   POST /api/lesson/steer      -> JSON {ok, status: accepted|rejected} (Phase 4 mid-turn steering)
 //   POST /api/course/plan       -> JSON course outline
 //   POST /api/widget_action     -> JSON (componentResults / issueTurn / grading result)
 //   POST /api/practice/extract  -> JSON knowledge cards + practice items
@@ -28,6 +29,10 @@ import { createMemoryStore, DEFAULT_MEMORY_FILE } from './memory.js';
 import { normalizeExtractInput, extractMemoryDeterministic, extractMemoryWithClaude, filterNewFacts } from './memory-extract.js';
 import { TEACHER_TOOLS, createCardStore, createTeacherToolkit, runTeacherLoop, newResolutionId, resolved, stripCardMarkup } from './teacher.js';
 import { createDemoTeacherClient } from './teacher-demo.js';
+// Phase 3 (grounded lessons) + Phase 4 (steering)
+import { withWebSearch, streamGrounded, createSourceRegistry, citationAppData, stripGroundingTags, SOURCES_TAG } from './grounding.js';
+import { createSteeringRegistry, cleanInstruction, steeringUserContent, steerDemoRemainder, trimToLastPage } from './steering.js';
+import { groundDemoLesson } from './demo-grounding.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const WONDER_ROOT = path.resolve(HERE, '..');
@@ -119,6 +124,7 @@ function progressNarrator(writer, { first = 'Writing the introduction…' } = {}
   return () => {
     if (!started) { started = true; writer.reasoning(first); }
     const n = (('\n' + writer.markdown).match(/\n## /g) || []).length;
+    if (n < pages) pages = n; // a steering replace dropped the unfinished page
     for (; pages < n; ) writer.reasoning(`Writing page ${++pages}…`);
   };
 }
@@ -144,6 +150,7 @@ export function createWonderServer(opts = {}) {
   const demoTeacher = opts.demoTeacherClient ?? createDemoTeacherClient({ delayMs: state.demoDelayMs });
   const recordDir = opts.recordDir ?? env.WONDER_RECORD_DIR ?? null;
   const memoryContext = (body, { withIds = false } = {}) => (body?.memoryEnabled === false ? '' : memory.promptBlock({ withIds }));
+  const steering = createSteeringRegistry(); // Phase 4: in-flight lesson operations
 
   function switchToDemo(reason) {
     state.mode = 'demo';
@@ -151,7 +158,7 @@ export function createWonderServer(opts = {}) {
     logger.warn?.(`[wonder] switching to demo mode (${reason})`);
   }
 
-  function startNdjson(req, res, { appData, record } = {}) {
+  function startNdjson(req, res, { record, ...writerOpts } = {}) {
     res.writeHead(200, { 'Content-Type': CONTENT_TYPE, 'Cache-Control': 'no-store', 'X-Accel-Buffering': 'no', Connection: 'keep-alive' });
     res.flushHeaders?.();
     const ac = new AbortController();
@@ -161,14 +168,14 @@ export function createWonderServer(opts = {}) {
     if (recordDir && record) {
       try { fs.mkdirSync(recordDir, { recursive: true }); tee = fs.createWriteStream(path.join(recordDir, `${record}-${new Date().toISOString().replace(/[:.]/g, '-')}.ndjson`)); res.on('close', () => tee.end()); } catch { tee = null; }
     }
-    const writer = createTurnWriter({ appData, write: (s) => { if (!res.destroyed) res.write(s); tee?.write(s); } });
+    const writer = createTurnWriter({ write: (s) => { if (!res.destroyed) res.write(s); tee?.write(s); }, ...writerOpts });
     return { writer, signal: ac.signal };
   }
 
   /** Run Claude, falling back to demo on missing credentials. Returns 'done' | 'demo' | 'failed'. */
-  async function runClaude(writer, params, onText, signal) {
+  async function runClaude(writer, params, onText, signal, stream = (p, o) => streamText(state.client, p, o)) {
     try {
-      const { stopReason } = await streamText(state.client, params, { onText, signal });
+      const { stopReason } = await stream(params, { onText, signal });
       if (stopReason === 'refusal') {
         onText(REFUSAL_MESSAGE);
         return { status: 'done', truncated: false, refused: true };
@@ -190,35 +197,87 @@ export function createWonderServer(opts = {}) {
     }
   }
 
+  // ---- Phase 3: web search with citations -> Cite pills + Sources (server/grounding.js)
+  function groundedStream(writer, sources) {
+    return (p, o) => streamGrounded(state.client, p, {
+      ...o,
+      registry: sources,
+      onSearch: (q) => writer.reasoning(q ? `Searching the web: “${String(q).slice(0, 80)}”` : 'Searching the web…', { icon: 'globe' }),
+      onSearchError: (code) => { logger.warn?.(`[wonder] web search error: ${code}`); writer.reasoning('Search is unavailable, writing from what I know…'); },
+    });
+  }
+  function finishGrounded(writer, sources) {
+    if (sources.size) writer.append(`${writer.markdown.endsWith('\n') ? '\n' : '\n\n'}${SOURCES_TAG}\n`);
+  }
+  // ---- Phase 4: steering. Keep the complete pages, replace the tail, continue.
+  function applySteer(writer, instruction) {
+    const kept = trimToLastPage(writer.markdown);
+    writer.control('steering-status', { status: 'accepted', instruction });
+    writer.control('steering-message', { message: { role: 'user', content: instruction } });
+    writer.reasoning(`Steering: ${instruction}`);
+    writer.replace(kept);
+    return kept;
+  }
+
   async function lessonStream(req, res, body) {
     const topic = clean(body.topic, 300);
     if (!topic) return sendJson(res, 400, { ok: false, error: 'topic is required' });
     const level = ['beginner', 'intermediate', 'advanced'].includes(body.level) ? body.level : 'beginner';
-    const { writer, signal } = startNdjson(req, res, { record: 'lesson' });
+    const useWebSearch = body.useWebSearch !== false; // Phase 3: on by default for lessons
+    const sources = createSourceRegistry({ turnIndex: 0 });
+    const { writer, signal } = startNdjson(req, res, { record: 'lesson', appDataFor: citationAppData(sources) });
     writer.start();
     writer.reasoning('Planning the lesson…');
     const narrate = progressNarrator(writer);
     const onText = (t) => { writer.append(t); narrate(); };
+    const op = steering.open(writer.operationId, signal, { onReject: (reason, instruction) => writer.control('steering-status', { status: 'rejected', reason, instruction }) });
     let result = { status: 'demo' };
-    if (state.mode === 'claude') {
-      const learner = memoryContext(body);
-      if (learner) logger.info?.(`[wonder] lesson request personalized with ${Math.min(memory.size, 15)} memory items`);
-      const params = buildStreamParams({
-        system: LESSON_SYSTEM_PROMPT,
-        context: joinContext(learner && `${learner}\nUse this to pick examples and pacing that fit this learner; the lesson itself stays about the requested topic.`),
-        messages: [{ role: 'user', content: lessonUserMessage({ topic, level, course: body.course, lessonTitle: clean(body.lessonTitle, 200), lessonSummary: clean(body.lessonSummary, 400) }) }],
-        effort: 'medium',
-      });
-      result = await runClaude(writer, params, onText, signal);
+    try {
+      if (state.mode === 'claude') {
+        const request = lessonUserMessage({ topic, level, course: body.course, lessonTitle: clean(body.lessonTitle, 200), lessonSummary: clean(body.lessonSummary, 400) });
+        const learner = memoryContext(body);
+        if (learner) logger.info?.(`[wonder] lesson request personalized with ${Math.min(memory.size, 15)} memory items`);
+        const context = joinContext(learner && `${learner}\nUse this to pick examples and pacing that fit this learner; the lesson itself stays about the requested topic.`);
+        let messages = [{ role: 'user', content: request }];
+        for (;;) {
+          const params = withWebSearch(buildStreamParams({ system: LESSON_SYSTEM_PROMPT, context, messages, effort: 'medium' }), useWebSearch);
+          result = await runClaude(writer, params, onText, op.attempt(), useWebSearch ? groundedStream(writer, sources) : undefined);
+          if (result.status !== 'aborted' || !op.hasSteer) break;
+          const instruction = op.takeSteer();
+          const kept = applySteer(writer, instruction);
+          messages = [{ role: 'user', content: steeringUserContent(request, kept, instruction) }];
+        }
+      }
+      if (result.status === 'demo') {
+        const pick = pickDemoLesson(body.lessonTitle || topic);
+        if (!pick.matched) writer.reasoning(`Demo mode: no sample for "${topic}", showing "${pick.title}"`);
+        let text = useWebSearch ? groundDemoLesson(pick.id, pick.markdown, sources) : pick.markdown;
+        let r = await streamDemoText(text, { onText, delayMs: state.demoDelayMs, signal: op.attempt(), seed: topic.length });
+        while (r.aborted && op.hasSteer) {
+          const instruction = op.takeSteer();
+          const kept = applySteer(writer, instruction);
+          text = kept + steerDemoRemainder(text.startsWith(kept) ? text.slice(kept.length) : '', instruction);
+          r = await streamDemoText(text.slice(kept.length), { onText, delayMs: state.demoDelayMs, signal: op.attempt(), seed: topic.length });
+        }
+        result = { status: r.aborted ? 'aborted' : 'done', truncated: false };
+      }
+    } finally {
+      op.close();
     }
-    if (result.status === 'demo') {
-      const pick = pickDemoLesson(body.lessonTitle || topic);
-      if (!pick.matched) writer.reasoning(`Demo mode: no sample for "${topic}", showing "${pick.title}"`);
-      const r = await streamDemoText(pick.markdown, { onText, delayMs: state.demoDelayMs, signal, seed: topic.length });
-      result = { status: r.aborted ? 'aborted' : 'done', truncated: false };
+    if (result.status === 'done') {
+      finishGrounded(writer, sources);
+      writer.complete({ truncated: result.truncated });
     }
-    if (result.status === 'done') writer.complete({ truncated: result.truncated });
     res.end();
+  }
+
+  async function lessonSteer(req, res, body) {
+    const instruction = cleanInstruction(body.instruction);
+    if (!instruction) return sendJson(res, 400, { ok: false, error: 'instruction is required' });
+    const op = steering.get(String(body.operationId || ''));
+    if (!op) return sendJson(res, 409, { ok: false, status: 'rejected', reason: 'not_streaming', error: 'This lesson has finished streaming.' });
+    if (!op.steer(instruction)) return sendJson(res, 409, { ok: false, status: 'rejected', reason: 'busy', error: 'Still applying your last change.' });
+    return sendJson(res, 200, { ok: true, status: 'accepted', operationId: op.operationId });
   }
 
   async function tutorStream(req, res, body) {
@@ -229,25 +288,28 @@ export function createWonderServer(opts = {}) {
       .slice(-12)
       .map((m) => ({ role: m.role, content: m.content.slice(0, 8000) }));
     while (history.length && history[0].role !== 'user') history.shift();
-    const { writer, signal } = startNdjson(req, res, { record: 'tutor' });
+    const useWebSearch = body.useWebSearch === true; // Phase 3: off for the tutor unless asked
+    const sources = createSourceRegistry({ turnIndex: Math.floor(history.length / 2) + 1 });
+    const { writer, signal } = startNdjson(req, res, { record: 'tutor', appDataFor: citationAppData(sources) });
     writer.start();
     writer.reasoning('Thinking about your question…');
     const onText = (t) => writer.append(t);
     let result = { status: 'demo' };
     if (state.mode === 'claude') {
-      const params = buildStreamParams({
+      const params = withWebSearch(buildStreamParams({
         system: TUTOR_SYSTEM_PROMPT,
-        context: joinContext(tutorLessonContext(body.lessonContext), memoryContext(body)),
+        context: joinContext(tutorLessonContext({ ...body.lessonContext, markdown: stripGroundingTags(body.lessonContext?.markdown) }), memoryContext(body)),
         messages: [...history, { role: 'user', content: message }],
         effort: 'medium',
-      });
-      result = await runClaude(writer, params, onText, signal);
+      }), useWebSearch);
+      result = await runClaude(writer, params, onText, signal, useWebSearch ? groundedStream(writer, sources) : undefined);
     }
     if (result.status === 'demo') {
       const reply = buildDemoTutorReply({ lessonContext: body.lessonContext, message });
       const r = await streamDemoText(reply, { onText, delayMs: state.demoDelayMs, signal, seed: message.length });
       result = { status: r.aborted ? 'aborted' : 'done', truncated: false };
     }
+    if (result.status === 'done') finishGrounded(writer, sources);
     if (result.status === 'done') writer.complete({ truncated: result.truncated, defaultFollowups: result.refused ? [] : DEFAULT_TUTOR_FOLLOWUPS });
     res.end();
   }
@@ -276,7 +338,7 @@ export function createWonderServer(opts = {}) {
   }
 
   async function practiceExtract(req, res, body) {
-    const markdown = String(body.lessonMarkdown ?? '');
+    const markdown = stripGroundingTags(String(body.lessonMarkdown ?? ''));
     if (!markdown.trim()) return sendJson(res, 400, { ok: false, error: 'lessonMarkdown is required' });
     if (state.mode === 'claude') {
       try {
@@ -393,6 +455,7 @@ export function createWonderServer(opts = {}) {
   const routes = {
     'POST /api/lesson/stream': lessonStream,
     'POST /api/tutor/stream': tutorStream,
+    'POST /api/lesson/steer': lessonSteer, // Phase 4
     'POST /api/course/plan': coursePlan,
     'POST /api/practice/extract': practiceExtract,
     'POST /api/teacher/stream': teacherStream,
