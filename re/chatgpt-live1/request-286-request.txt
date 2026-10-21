@@ -1,0 +1,28 @@
+https://chatgpt.com/unauth-mweb/conversation/updates?lightweight_authenticated=0&operationId=45e5ef7f-02c7-45b5-b6f4-7e6e2e18c684
+application/x-www-form-urlencoded;charset=UTF-8
+
+{
+ "conversationState": "{\"messages\":[],\"parentMessageId\":\"client-created-root\",\"safety\":{\"dismissedInterventionIds\":[]},\"userMessageCount\":0}",
+ "messageMetadata": "",
+ "oai-session-id": "<redacted len=36>",
+ "imageAttachments": "[]",
+ "pendingImageUploads": "[]",
+ "prompt": "What's the weather in Paris this week?",
+ "clientContextualInfo": "{\"app_name\":\"chatgpt.com\",\"has_web_push_capabilities\":true,\"is_dark_mode\":false,\"web_push_notification_permission\":\"default\",\"page_height\":720,\"page_width\":1280,\"pixel_ratio\":1,\"screen_height\":1117,\"screen_width\":1728,\"time_since_loaded\":1}",
+ "imageSaveData": "off",
+ "imageEffectiveType": "4g",
+ "timezone": "UTC",
+ "timezoneOffsetMinutes": "0",
+ "conversationRetryOwner": "{\"mode\":\"anonymous\",\"sessionEpoch\":null}",
+ "workOrigin": "",
+ "workModel": "",
+ "workEffort": "",
+ "workTier": "",
+ "assistantMessageId": "pending-ca4a0a05-6c9f-4bf8-841b-44feb18f93d9",
+ "userMessageId": "d7dca144-2fbc-4ad9-b7ac-42c141b995e9",
+ "chatRequirementsToken": "<redacted len=2808>",
+ "proofToken": "<redacted len=741>",
+ "turnstileToken": "<redacted len=1644>",
+ "telemetryToken": "<redacted len=0>",
+ "timingToken": "<redacted len=8>"
+}

@@ -1,0 +1,58 @@
+// Pure helpers for the Teacher screen (no DOM): the progress snapshot sent with each request,
+// and the text history sent back to the model (cards become short "[Card: …]" notes so the
+// model knows what it showed and what the learner did, without ever seeing card markup).
+
+import { deckStats, currentStreak, dateKey } from './deck.js';
+
+function courseProgress(data, course) {
+  let done = 0;
+  let total = 0;
+  for (const s of course.sections || []) for (const l of s.lessons || []) { total++; if (l.lessonId && data.lessons?.[l.lessonId]?.finished) done++; }
+  return { done, total };
+}
+
+/** Snapshot of the learner's progress, assembled from the local store (deck, lessons, courses, plans). */
+export function progressSnapshot(data, now = new Date()) {
+  const st = deckStats(data.deck || { items: [] }, now);
+  const lessons = Object.values(data.lessons || {}).sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || '')).slice(0, 6);
+  const plans = (data.plans || []).slice(0, 3).map((p) => {
+    const items = (p.days || []).flatMap((d) => d.items || []);
+    return { goal: p.goal, days: (p.days || []).length, opened: items.filter((i) => i.opened).length, total: items.length };
+  });
+  return {
+    today: dateKey(now),
+    xp: data.stats?.xp || 0,
+    streak: currentStreak(data.stats || {}, now),
+    deck: { total: st.total, due: st.due, mastered: st.review, nextDue: st.nextDue },
+    recentLessons: lessons.map((l) => ({
+      title: l.title || l.topic,
+      finished: !!l.finished,
+      ...(l.quizScore ? { quiz: { score: l.quizScore.score, total: l.quizScore.total } } : {}),
+      when: l.updatedAt || '',
+    })),
+    courses: (data.courses || []).slice(0, 5).map((c) => ({ title: c.title, ...courseProgress(data, c) })),
+    plans,
+  };
+}
+
+const CARD_RE = /<TeacherCard\b[^>]*?__resolutionId="([^"]+)"[^>]*\/>/g;
+
+/** Assistant markdown with each TeacherCard replaced by a note built from its latest state. */
+export function cardNotes(markdown, componentResults = {}) {
+  return String(markdown || '')
+    .replace(CARD_RE, (_, rid) => `[Card: ${componentResults?.[rid]?.state?.summary || 'an interactive card'}]`)
+    .replace(/<\/?TeacherCard\b[^>]*>/g, '');
+}
+
+/** Thread messages -> [{role, content}] for /api/teacher/stream (last `max`). */
+export function historyForModel(messages, max = 12) {
+  return (messages || [])
+    .filter((m) => (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string' && m.content.trim())
+    .slice(-max)
+    .map((m) => ({ role: m.role, content: m.role === 'assistant' ? cardNotes(m.content, m.componentResults) : m.content }));
+}
+
+export function threadTitle(text) {
+  const t = String(text || '').replace(/\s+/g, ' ').trim();
+  return t.length > 60 ? `${t.slice(0, 57).replace(/\s+\S*$/, '')}…` : t || 'New chat';
+}

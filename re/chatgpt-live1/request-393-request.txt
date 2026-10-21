@@ -1,0 +1,10 @@
+https://chatgpt.com/unauth-mweb/conversation/prepare?lightweight_authenticated=0
+application/x-www-form-urlencoded;charset=UTF-8
+
+{
+ "conversationRetryOwner": "{\"mode\":\"anonymous\",\"sessionEpoch\":null}",
+ "conversationState": "{\"backendConversationId\":\"6ad82833-ab6c-83ea-9a4f-895051953dbb\",\"messages\":[],\"parentMessageId\":\"8a72c20f-fc6a-4ed9-9418-0888f7853d2a\",\"userMessageCount\":1}",
+ "clientContextualInfo": "{\"app_name\":\"chatgpt.com\",\"has_web_push_capabilities\":true,\"is_dark_mode\":false,\"web_push_notification_permission\":\"default\",\"page_height\":720,\"page_width\":1280,\"pixel_ratio\":1,\"screen_height\":1117,\"screen_width\":1728,\"time_since_loaded\":18}",
+ "timezone": "UTC",
+ "timezoneOffsetMinutes": "0"
+}

@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>DIL Runtime Lab</title>
+  <meta name="description" content="Dependency-free reconstruction of ChatGPT's DIL generative-UI runtime: compiler, sandbox worker, host renderer, conversation-source stream replay.">
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="src/dil.css">
+  <link rel="stylesheet" href="src/app.css">
+</head>
+<body>
+  <header class="top">
+    <div class="top-inner">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true">DIL</span>
+        <div>
+          <h1>DIL runtime lab</h1>
+          <p>Reconstruction of ChatGPT's generative-UI pipeline: markup compiler, worker sandbox, op-buffer host.</p>
+        </div>
+      </div>
+      <nav class="tabs" role="tablist" aria-label="Demos">
+        <button role="tab" id="tab-replay" aria-controls="panel-replay" aria-selected="true">Stream replay</button>
+        <button role="tab" id="tab-playground" aria-controls="panel-playground" aria-selected="false">Playground</button>
+        <button role="tab" id="tab-quiz" aria-controls="panel-quiz" aria-selected="false">LearningQuiz</button>
+      </nav>
+    </div>
+  </header>
+
+  <main>
+    <!-- (a) captured stream replay -->
+    <section id="panel-replay" role="tabpanel" aria-labelledby="tab-replay" class="panel">
+      <div class="toolbar">
+        <button id="replay-btn" class="btn primary">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 5l12 7-12 7z"/></svg>
+          Replay captured stream
+        </button>
+        <button id="stop-btn" class="btn" disabled>Stop</button>
+        <div class="seg" role="radiogroup" aria-label="Program source">
+          <label><input type="radio" name="mode" value="server" checked><span>Server <code>dil.code</code></span></label>
+          <label><input type="radio" name="mode" value="local"><span>Local compiler</span></label>
+        </div>
+        <label class="field">
+          <span>Speed</span>
+          <select id="speed">
+            <option value="12">Fast</option>
+            <option value="45" selected>Realistic</option>
+            <option value="140">Slow</option>
+            <option value="0">Instant</option>
+          </select>
+        </label>
+        <label class="check" title="Images in the capture are hosted remotely. Off by default so the demo makes no third-party requests.">
+          <input type="checkbox" id="remote-images"> <span>Load remote images</span>
+        </label>
+      </div>
+
+      <div class="replay-grid">
+        <article class="turn" aria-label="Assistant turn">
+          <div class="turn-head">
+            <span class="avatar" aria-hidden="true"></span>
+            <div class="turn-meta">
+              <strong>Captured assistant turn</strong>
+              <span id="turn-sub">87-record conversation-source stream (v2) · Tokyo weather + AAPL</span>
+            </div>
+            <span id="status-chip" class="chip" hidden></span>
+          </div>
+          <div id="replay-empty" class="empty">
+            <p>Press <b>Replay captured stream</b> to feed the 87 recorded NDJSON records through the parser, re-render every revision in the sandbox worker and watch the cards stream in.</p>
+          </div>
+          <div id="replay-surface" class="surface"></div>
+        </article>
+
+        <aside class="side" aria-label="Pipeline state">
+          <div class="card">
+            <h2>Pipeline</h2>
+            <dl class="stats">
+              <div><dt>Record</dt><dd id="st-record">0 / 87</dd></div>
+              <div><dt>Revision</dt><dd id="st-rev">-</dd></div>
+              <div><dt>Markdown</dt><dd id="st-md">0 chars</dd></div>
+              <div><dt>Program</dt><dd id="st-code">-</dd></div>
+              <div><dt>Ops applied</dt><dd id="st-ops">0</dd></div>
+              <div><dt>Frames</dt><dd id="st-frames">0</dd></div>
+            </dl>
+            <p class="hint" id="mode-hint">Running the <code>dil.code</code> the server sent in each content record.</p>
+          </div>
+          <div class="card">
+            <h2>Records</h2>
+            <ol id="record-log" class="log" aria-live="off"></ol>
+          </div>
+          <div class="card">
+            <h2>Host actions</h2>
+            <ol id="action-log-replay" class="log actions"><li class="muted">Click the entity, a citation, an image or a chart range.</li></ol>
+          </div>
+        </aside>
+      </div>
+    </section>
+
+    <!-- (b) live markup playground -->
+    <section id="panel-playground" role="tabpanel" aria-labelledby="tab-playground" class="panel" hidden>
+      <div class="toolbar">
+        <button id="type-btn" class="btn primary">Simulate streaming</button>
+        <button id="reset-btn" class="btn">Reset sample</button>
+        <span class="hint" id="pg-status"></span>
+      </div>
+      <div class="pg-grid">
+        <div class="card editor">
+          <label for="markup" class="label">Model output: markdown + DIL markup</label>
+          <textarea id="markup" spellcheck="false" autocomplete="off"></textarea>
+        </div>
+        <div class="card preview">
+          <div class="label">Rendered in the sandbox worker</div>
+          <div id="pg-surface" class="surface"></div>
+        </div>
+      </div>
+      <details class="card code-details">
+        <summary>Compiled program <span id="pg-code-meta" class="muted"></span></summary>
+        <pre id="pg-code"></pre>
+        <div class="label">constants</div>
+        <pre id="pg-constants"></pre>
+      </details>
+      <div class="card">
+        <h2>Host actions</h2>
+        <ol id="action-log-pg" class="log actions"><li class="muted">None yet.</li></ol>
+      </div>
+    </section>
+
+    <!-- (c) LearningQuiz -->
+    <section id="panel-quiz" role="tabpanel" aria-labelledby="tab-quiz" class="panel" hidden>
+      <div class="quiz-grid">
+        <div class="quiz-main">
+          <div id="quiz-surface" class="surface"></div>
+        </div>
+        <aside class="side">
+          <div class="card">
+            <h2>How this runs</h2>
+            <p class="hint">The markup below is compiled to a DIL program; <code>&lt;LearningQuiz/&gt;</code> becomes a catalog component bound to <code>appData.opGenui.componentResults</code>. Progress lives in <code>DIL.useState</code> inside the worker. <code>nativeServerActions.ready</code> is false (as for logged-out users), so answers stay local; "Next quiz" sends an <code>issue_new_turn</code> host action.</p>
+            <pre id="quiz-markup" class="mini"></pre>
+            <button id="quiz-reset" class="btn">Restart demo</button>
+          </div>
+          <div class="card">
+            <h2>Host actions</h2>
+            <ol id="action-log-quiz" class="log actions"><li class="muted">None yet.</li></ol>
+          </div>
+        </aside>
+      </div>
+    </section>
+  </main>
+
+  <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+  <script type="module" src="src/app.js"></script>
+</body>
+</html>
