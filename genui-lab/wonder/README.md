@@ -237,7 +237,7 @@ test/*.test.js, test/index.js, test/helpers.js
 ## Limitations
 
 - **The Claude path is tested only against a fake client.** No real API calls were made while building this. The prompts are untested against the live model, so the first real lessons may need prompt tuning.
-- **Math falls back to Unicode only when KaTeX cannot load.** Then `public/math.js` rewrites LaTeX into Unicode (`\frac{1}{\lambda^4}` becomes `1⁄λ⁴`), which reads fine but is not typeset. A web-search Cite can in principle land inside a `$…$` span (the grounding safe-point check knows `\(…\)` and `<math>`, not dollars); that span then shows as text.
+- **Math falls back to Unicode only when KaTeX cannot load.** Then `public/math.js` rewrites LaTeX into Unicode (`\frac{1}{\lambda^4}` becomes `1⁄λ⁴`), which reads fine but is not typeset. Citation pills are never inserted inside an unfinished math span: the grounding safe-point check reuses `math-spans.js`, including its price rules.
 - **Server-side widget state is in memory** (quiz answers per resolution id). The client persists `componentResults` with each lesson, so reloads still restore it, but a server restart forgets its copy.
 - **One sandbox worker per surface**: the lesson plus each tutor reply. Very long tutor threads therefore start many workers. They are terminated when you leave the lesson.
 - **Tutor replies are not lesson-specific in demo mode.** They are templates that use the lesson's KeyTerms and Quiz. Any other topic streams one of the three sample lessons.
@@ -423,4 +423,4 @@ Known gaps:
 - Revising or resuming rewrites from a page boundary. It can't edit one paragraph inside a page, and an interrupted page is always rewritten from its heading.
 - A continuation drops widget state (such as quiz answers) for the rewritten pages, and a steer that lands after the last page has been written only rewrites the last page.
 - Graph slider values are not persisted.
-- Search slows lessons down. In the live runs a lesson took about 42 s without searches and about 68 s with them.
+- **Search latency is tuned.** Claude writes the title and hook before searching and makes 1–2 focused searches (`max_uses: 3`). On the same JWST topic, live: first text went from 34.2 s to 1.6 s and the whole lesson from 59.5 s to 44.1 s, with 9 sources still cited. Every stream has an idle watchdog (`WONDER_STREAM_IDLE_MS`, default 120 s), so a stalled connection fails fast as a resumable `stalled`/`network` error instead of hanging. After a search, an exact repeat of an already-written paragraph (e.g. the hook) is dropped.

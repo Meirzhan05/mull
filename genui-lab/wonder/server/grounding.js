@@ -14,6 +14,7 @@
 
 import { scanComponentTags } from './compile.js';
 import { idleWatch } from './claude.js';
+import { protectMath } from './math-spans.js';
 
 // allowed_callers ["direct"]: with the default (dynamic filtering through code execution) the
 // results reach Claude as encrypted code-execution stdout and the answer carries NO text-block
@@ -98,6 +99,8 @@ export function isSafeInsertionPoint(md) {
   if (((para.match(/`/g) || []).length % 2) === 1) return false; // inline code span
   if ((para.match(/\\\(/g) || []).length > (para.match(/\\\)/g) || []).length) return false; // inline math
   if ((src.match(/<math\b/g) || []).length > (src.match(/<\/math>/g) || []).length) return false;
+  // an unfinished $…$ / $$…$$ / \[…\] span: streaming mode holds it back, so the two passes differ
+  if (protectMath(src, { partial: true }).source !== protectMath(src).source) return false;
   // a known catalog tag still being written (string/brace aware)
   const tags = scanComponentTags(src);
   if (tags.length && tags[tags.length - 1].kind === 'incomplete') return false;
@@ -182,9 +185,57 @@ const queryOf = (input) => (input && typeof input === 'object' && typeof input.q
  * (append the paused assistant content and re-send; no extra user message).
  * Throws SDK errors to the caller like streamText.
  */
+const normPara = (t) => String(t).replace(/<Cite\b[^>]*\/>/g, '').replace(/\s+/g, ' ').trim().toLowerCase();
+
+/**
+ * After a web search Claude sometimes starts over, re-writing the title and hook it already
+ * streamed. This filter sits in front of the cite assembler: right after a search it buffers
+ * text paragraph by paragraph and drops any paragraph (heading included) identical to one
+ * already emitted, then passes everything through once new text appears.
+ */
+export function createRepeatFilter(asm) {
+  let emitted = '';
+  let checking = false;
+  let buf = '';
+  let cites = [];
+  const seen = () => new Set(emitted.split(/\n\s*\n|\n(?=#)/).map(normPara).filter(Boolean));
+  const pass = (t) => { emitted += t; asm.text(t); };
+  const release = () => {
+    if (buf) pass(buf);
+    for (const c of cites) asm.citation(c);
+    buf = ''; cites = []; checking = false;
+  };
+  const drain = (final) => {
+    for (;;) {
+      const m = /\n\s*\n|\n(?=#)/.exec(buf);
+      const para = m ? buf.slice(0, m.index) : final ? buf : null;
+      if (para === null) return;
+      const n = normPara(para);
+      if (n && !seen().has(n)) return release();
+      buf = m ? buf.slice(m.index + m[0].length) : '';
+      cites = [];
+      if (!m) return;
+    }
+  };
+  return {
+    afterSearch() { if (emitted.trim()) checking = true; },
+    blockStart() { asm.blockStart(); },
+    text(t) {
+      if (!checking) return pass(t);
+      buf += t;
+      if (/^\s*$/.test(buf)) return;
+      drain(false);
+    },
+    citation(c) { if (checking) cites.push(c); else asm.citation(c); },
+    blockStop() { if (checking) { drain(true); if (checking) release(); } asm.blockStop(); },
+    flush() { if (checking) release(); },
+  };
+}
+
 export async function streamGrounded(client, params, { onText, onSearch, onSearchError, signal, registry, maxContinuations = MAX_PAUSE_CONTINUATIONS, idleMs } = {}) {
   const sources = registry || createSourceRegistry();
-  const asm = createCiteAssembler({ emit: (s) => onText?.(s), registry: sources });
+  const asm0 = createCiteAssembler({ emit: (s) => onText?.(s), registry: sources });
+  const asm = createRepeatFilter(asm0); // drops a re-written title/hook after a search
   let p = params;
   let message = null;
   let continuations = 0;
@@ -204,6 +255,7 @@ export async function streamGrounded(client, params, { onText, onSearch, onSearc
           if (b.text) asm.text(b.text);
         } else if (b.type === 'server_tool_use') {
           const q = queryOf(b.input);
+          asm.afterSearch();
           if (q || b.name !== 'web_search') { blocks.get(ev.index).reported = true; onSearch?.(q, b.name); }
         } else if (b.type === 'web_search_tool_result') {
           if (b.content && !Array.isArray(b.content)) onSearchError?.(b.content.error_code || 'unavailable');
@@ -242,6 +294,7 @@ export async function streamGrounded(client, params, { onText, onSearch, onSearc
     break;
   }
   asm.flush();
+  asm0.flush();
   return { stopReason: message.stop_reason, message, continuations, sources };
 }
 
