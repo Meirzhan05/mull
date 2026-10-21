@@ -140,6 +140,84 @@ export function scanComponentTags(src) {
   return out;
 }
 
+/**
+ * Primitive tags (<box padding={4}>) go straight to the stock compiler, which turns any
+ * non-literal {expression} into a string prop. Model output can contain real JS there
+ * (onClick={() => ...}), so keep only expressions that parse as a JSON scalar and drop the rest.
+ * Fence- and code-span-aware, like scanComponentTags.
+ */
+export function sanitizePrimitiveExpressions(src) {
+  let out = '';
+  let i = 0;
+  let atLineStart = true;
+  while (i < src.length) {
+    const c = src[i];
+    if (atLineStart) {
+      const fm = /^[ \t]*(`{3,}|~{3,})/.exec(src.slice(i, i + 64));
+      if (fm) {
+        const fence = fm[1];
+        const startBody = src.indexOf('\n', i);
+        let endIdx = src.length;
+        if (startBody >= 0) {
+          const re = new RegExp('\\n[ \\t]*' + fence[0] + '{' + fence.length + ',}[ \\t]*(?=\\n|$)', 'g');
+          re.lastIndex = startBody;
+          const em = re.exec(src);
+          if (em) endIdx = em.index + em[0].length;
+        }
+        out += src.slice(i, endIdx);
+        i = endIdx;
+        atLineStart = false;
+        continue;
+      }
+    }
+    if (c === '`') {
+      const run = /^`+/.exec(src.slice(i))[0];
+      const close = src.indexOf(run, i + run.length);
+      const para = src.indexOf('\n\n', i);
+      if (close >= 0 && (para < 0 || close < para)) { out += src.slice(i, close + run.length); i = close + run.length; atLineStart = false; continue; }
+    }
+    const tm = c === '<' ? /^<([a-z][\w-]*)(?=[\s/>])/.exec(src.slice(i, i + 64)) : null;
+    if (tm) {
+      let j = i + tm[0].length;
+      let tag = tm[0];
+      for (;;) {
+        const ws = /^\s*/.exec(src.slice(j))[0];
+        const am = /^([A-Za-z_:][\w:.-]*)(\s*=\s*)?/.exec(src.slice(j + ws.length, j + ws.length + 160));
+        if (!am || !am[1]) break; // ">", "/>", or end of input
+        const vStart = j + ws.length + am[0].length;
+        if (!am[2]) { tag += ws + am[1]; j = vStart; continue; } // boolean attribute
+        const q = src[vStart];
+        if (q === '{') {
+          const e = scanBraces(src, vStart);
+          if (e < 0) break; // unterminated (streaming tail): leave it to the stock compiler's partial handling
+          const r = tryParseExpression(src.slice(vStart + 1, e));
+          const v = r.ok ? r.value : undefined;
+          if (v === null || ['number', 'boolean', 'string'].includes(typeof v)) tag += `${ws}${am[1]}={${JSON.stringify(v)}}`;
+          j = e + 1;
+        } else if (q === '"' || q === "'") {
+          const e = src.indexOf(q, vStart + 1);
+          if (e < 0) break;
+          tag += src.slice(j, e + 1);
+          j = e + 1;
+        } else {
+          const vm = /^[^\s/>]*/.exec(src.slice(vStart))[0];
+          tag += src.slice(j, vStart + vm.length);
+          j = vStart + vm.length;
+          if (!vm) break;
+        }
+      }
+      out += tag;
+      i = j;
+      atLineStart = false;
+      continue;
+    }
+    out += c;
+    atLineStart = c === '\n';
+    i++;
+  }
+  return out;
+}
+
 function isAloneOnLine(src, start, end) {
   const ls = src.lastIndexOf('\n', start - 1) + 1;
   let le = src.indexOf('\n', end);
@@ -247,6 +325,8 @@ export function preprocess(src) {
  */
 export function compileWonder(markdown, opts = {}) {
   const pre = preprocess(String(markdown ?? ''));
+  pre.source = sanitizePrimitiveExpressions(pre.source);
+  pre.fallbackSource = sanitizePrimitiveExpressions(pre.fallbackSource);
   const salt = opts.salt || '';
   // ids depend only on (name, ordinal, salt): stable across streamed revisions of one message
   const resolutionIdFor = (name, _props, ordinal) => defaultResolutionId(name, { __salt: salt }, ordinal);
