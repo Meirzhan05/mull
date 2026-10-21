@@ -5,7 +5,7 @@
   "description": "Wonder: AI learning app combining Wondering-style lessons/practice/FSRS with ChatGPT-style DIL generative UI, powered by Claude",
   "scripts": {
     "start": "node --env-file-if-exists=.env server/index.js",
-    "test": "node --test test/index.js"
+    "test": "node --test --test-timeout=120000 --test-force-exit test/index.js"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.137.0",
