@@ -12,8 +12,10 @@ import { observeMath } from './math.js';
 import { renderTeacher, queueTeacherMessage } from './teacher-screen.js';
 import { renderMemory } from './memory-screen.js';
 import { createSteerBar } from './steer-bar.js'; // Phase 4
+import { lessonPhase, statusAfterStop, carryOver, mergeContinuedAppData, sourcesFromAppData, pageCount, pageTitles } from './steering-core.js';
 
 const store = createStore();
+const PAGE_ID = uid('page'); // this page load: a 'streaming' lesson owned by another id was interrupted
 const app = document.getElementById('app');
 let status = { mode: 'demo', model: 'claude-opus-5-5' };
 let teardown = [];
@@ -220,7 +222,7 @@ function renderHome() {
     el('ul', { class: 'lesson-list' }, ...lessons.map((l) => el('li', null, el('a', { class: 'lesson-row', href: `#/lesson/${l.id}` },
       el('span', { class: `status-dot ${l.finished ? 'done' : l.status === 'complete' ? 'ready' : 'pending'}`, 'aria-hidden': 'true' }),
       el('span', { class: 'lesson-row-title' }, l.title || l.topic),
-      el('span', { class: 'muted small' }, l.finished ? 'Finished' : l.status === 'complete' ? 'Ready' : 'Unfinished'),
+      el('span', { class: 'muted small' }, l.finished ? 'Finished' : l.status === 'complete' ? 'Ready' : lessonPhase(l, { pageId: PAGE_ID }) === 'interrupted' ? 'Interrupted' : 'Unfinished'),
       icon('arrow-right')))))) : null;
 
   app.replaceChildren(el('div', { class: 'home' }, hero, nav, planSection, reviewCard, courseSection, lessonSection));
@@ -262,7 +264,7 @@ function renderCourse(courseId) {
           el('div', { class: 'node-body' },
             el('strong', null, l.title),
             l.summary ? el('span', { class: 'muted small' }, l.summary) : null),
-          el('button', { class: `btn ${current ? '' : 'btn-secondary'} btn-sm`, type: 'button', onclick: () => open(si, li) }, done ? 'Revisit' : lesson?.status === 'complete' ? 'Continue' : 'Start'));
+          el('button', { class: `btn ${current ? '' : 'btn-secondary'} btn-sm`, type: 'button', onclick: () => open(si, li) }, done ? 'Revisit' : lesson?.status === 'complete' ? 'Continue' : lesson && lessonPhase(lesson, { pageId: PAGE_ID }) === 'interrupted' ? 'Resume' : 'Start'));
       }))))));
 }
 
@@ -282,7 +284,12 @@ function renderLesson(lessonId) {
   const errorBox = el('div', { class: 'card error-card', hidden: true });
   const finishBtn = el('button', { class: 'btn btn-lg', type: 'button', disabled: true }, icon('sparkles'), 'Finish lesson');
   const finishHint = el('p', { class: 'muted small' }, 'Finish to collect knowledge cards for your review deck.');
-  const steerBar = createSteerBar(); // Phase 4: shown while the lesson streams
+  // Phase 4: live steer (top, under the reasoning line), resume (top) and revise (sticky, after the lesson)
+  const steerBar = createSteerBar({
+    onContinue: (req) => continueLesson(req),
+    onOpen: () => onPageScroll(),
+    onMode: (mode, node) => { if (!node.parentNode) return; if (mode === 'revise') errorBox.before(node); else reasoning.after(node); },
+  });
   const tutorToggle = el('button', { class: 'btn btn-secondary btn-sm tutor-toggle', type: 'button', 'aria-expanded': 'false' }, icon('chat'), el('span', null, 'Ask tutor'));
 
   const lessonMain = el('div', { class: 'lesson-main' },
@@ -352,24 +359,89 @@ function renderLesson(lessonId) {
 
   finishBtn.addEventListener('click', () => finishLesson(lessonId, finishBtn));
 
-  if (lesson.status === 'complete' && lesson.dil) {
-    surface.render({ code: lesson.dil.code, constants: lesson.dil.constants, appData: appDataFor() });
-    markComplete();
-  } else {
-    startStream();
+  // -- streaming, resume and revise (Phase 4). Persisted lesson.status: 'new' | 'streaming'
+  // (streamOwner = PAGE_ID) | 'interrupted' | 'complete' | 'failed' (see steering-core lessonPhase).
+  let streaming = false;
+  let queued = null; // a continuation requested while a stream is still finishing
+  let failNote = '';
+
+  // The "## " page in view (revise mode): the last page heading above 40% of the viewport.
+  const onPageScroll = () => {
+    if (steerBar.mode !== 'revise') return;
+    const heads = [...mount.querySelectorAll(':scope > h2[data-d-component="title"]')];
+    const line = window.innerHeight * 0.4;
+    let n = 1;
+    heads.forEach((h, i) => { if (h.getBoundingClientRect().top < line) n = i + 1; });
+    steerBar.setPage(n, pageTitles(store.data.lessons[lessonId]?.markdown)[n - 1] || heads[n - 1]?.textContent || '');
+  };
+  window.addEventListener('scroll', onPageScroll, { passive: true });
+  teardown.push(() => window.removeEventListener('scroll', onPageScroll));
+
+  function showInterrupted(note = '') {
+    reasoning.hidden = true;
+    progressFill.style.width = `${Math.min(92, 6 + pageCount(store.data.lessons[lessonId]?.markdown) * 18)}%`;
+    steerBar.setMode('resume');
+    if (note) steerBar.setStatus(note);
   }
 
-  async function startStream() {
+  const phase = lessonPhase(lesson, { pageId: PAGE_ID });
+  if (phase === 'complete') {
+    surface.render({ code: lesson.dil.code, constants: lesson.dil.constants, appData: appDataFor() });
+    markComplete();
+    steerBar.setMode('revise');
+    requestAnimationFrame(onPageScroll);
+  } else if (phase === 'interrupted' || phase === 'streaming') {
+    // reload, closed tab or dropped connection mid-lesson: show what was written, offer Resume
+    if (lesson.dil) surface.render({ code: lesson.dil.code, constants: lesson.dil.constants, appData: appDataFor() });
+    if (lesson.status !== 'interrupted') saveLesson(lessonId, { status: 'interrupted', streamOwner: null });
+    showInterrupted(lesson.interruptedReason || '');
+  } else {
+    runStream();
+  }
+
+  /** Resume (no instruction), steer after a reload, or revise from page N: POST {continueFrom}. */
+  function continueLesson({ instruction = '', fromPage } = {}) {
+    if (streaming) { queued = { instruction, fromPage }; return; }
+    const l = store.data.lessons[lessonId];
+    if (!String(l?.markdown || '').trim()) { runStream(); return; }
+    runStream({
+      markdown: l.markdown,
+      ...(instruction ? { instruction } : {}),
+      ...(fromPage ? { fromPage } : {}),
+      ...(l.messageId ? { messageId: l.messageId } : {}),
+      sources: sourcesFromAppData(current.dil?.appData),
+    });
+  }
+
+  async function runStream(continueFrom = null) {
+    streaming = true;
     errorBox.hidden = true;
     finishBtn.disabled = true;
-    saveLesson(lessonId, { status: 'streaming', markdown: '', dil: null });
-    reasoning.hidden = false;
-    reasoning.querySelector('.reasoning-text').textContent = 'Planning the lesson…';
-    progressFill.style.width = '4%';
     const l = store.data.lessons[lessonId];
-    steerBar.show();
+    // continuation: results of the old program, pruned to the kept pages at the first replace
+    const prev = continueFrom ? { dilAppData: current.dil?.appData, widgetAppData: current.appData } : null;
+    const prevPhase = continueFrom ? lessonPhase(l, { pageId: PAGE_ID }) : 'new';
+    let carried = null;
+    let began = !continueFrom; // has this stream replaced what is persisted yet?
+    let messageId = continueFrom ? l.messageId || null : null;
+    let latest = { markdown: continueFrom ? l.markdown : '', dil: continueFrom ? current.dil : null };
+    let lastSave = 0;
+    const persist = (status = 'streaming') => saveLesson(lessonId, { status, streamOwner: status === 'streaming' ? PAGE_ID : null, markdown: latest.markdown, dil: latest.dil, appData: current.appData, messageId, interruptedReason: null });
+    let unloading = false; // a reload / closed tab rejects the fetch: that is an interruption, not an error
+    const onHide = () => { unloading = true; if (streaming && began) { persist(); store.flush(); } };
+    window.addEventListener('pagehide', onHide);
+    window.addEventListener('beforeunload', onHide);
+    if (!continueFrom) { current.dil = null; persist(); }
+    reasoning.hidden = false;
+    reasoning.querySelector('.reasoning-text').textContent = continueFrom ? (continueFrom.instruction ? 'Steering…' : 'Resuming the lesson…') : 'Planning the lesson…';
+    if (!continueFrom) progressFill.style.width = '4%';
+    steerBar.setMode('live');
+    let r = null;
     try {
-      const r = await streamTurn('/api/lesson/stream', { topic: l.topic, level: l.level, lessonTitle: l.lessonTitle, lessonSummary: l.lessonSummary, course: l.course, memoryEnabled: memoryEnabled() }, {
+      r = await streamTurn('/api/lesson/stream', {
+        topic: l.topic, level: l.level, lessonTitle: l.lessonTitle, lessonSummary: l.lessonSummary, course: l.course, memoryEnabled: memoryEnabled(),
+        ...(continueFrom ? { continueFrom } : {}),
+      }, {
         signal: ac.signal,
         onControl: (d) => steerBar.onControl(d),
         onReasoning: (s) => {
@@ -378,35 +450,70 @@ function renderLesson(lessonId) {
           reasoning.querySelector('.reasoning-text').textContent = s.text || 'Thinking…';
         },
         onContent: (msg, rec) => {
-          const pages = (('\n' + msg.markdown).match(/\n## /g) || []).length;
+          if (rec.messageId) messageId = rec.messageId;
+          if (!began && rec.revision > 1) began = true; // rev 1 is the empty start, rev 2 the kept pages
+          if (!began) return;
+          const pages = pageCount(msg.markdown);
           progressFill.style.width = `${Math.min(92, 6 + pages * 18)}%`;
           if (rec.dil) {
-            current.dil = rec.dil;
-            surface.render({ code: rec.dil.code, constants: rec.dil.constants, appData: appDataFor() }, { animated: rec.status !== 'complete' && rec.mode !== 'replace' }); // a steering replace keeps the kept pages still
+            if (prev && !carried) {
+              const c = carryOver(prev, rec.dil); // old Cite pills + widget state of the kept pages only
+              carried = c.carried;
+              current.appData = c.widgetAppData;
+            }
+            current.dil = carried ? { ...rec.dil, appData: mergeContinuedAppData(carried, rec.dil.appData) } : rec.dil;
+            surface.render({ code: current.dil.code, constants: current.dil.constants, appData: appDataFor() }, { animated: rec.status !== 'complete' && rec.mode !== 'replace' }); // a replace keeps the kept pages still
           }
+          latest = { markdown: msg.markdown, dil: current.dil };
           const t = lessonTitleFrom(msg.markdown, '');
           if (t && titleEl.textContent !== t) titleEl.textContent = t;
+          if (Date.now() - lastSave > 1000) { lastSave = Date.now(); persist(); }
         },
       });
-      steerBar.hide();
-      if (r.failure) throw Object.assign(new Error(r.failure.message || 'Generation failed'), { code: r.failure.code });
+      if (r.failure) throw Object.assign(new Error(r.failure.message || 'Generation failed'), { code: r.failure.code || 'failed' });
       const msg = r.message;
-      const dil = msg.dil ? { code: msg.dil.code, constants: msg.dil.constants, appData: msg.dil.appData, requiredComponents: msg.dil.requiredComponents || [] } : null;
+      const dil = msg.dil ? { code: msg.dil.code, constants: msg.dil.constants, appData: carried ? mergeContinuedAppData(carried, msg.dil.appData) : msg.dil.appData, requiredComponents: msg.dil.requiredComponents || [] } : null;
       current.dil = dil;
-      saveLesson(lessonId, { status: 'complete', markdown: msg.markdown, dil, title: lessonTitleFrom(msg.markdown, l.title), truncated: !!r.final?.debug?.truncated });
+      latest = { markdown: msg.markdown, dil };
+      streaming = false;
+      saveLesson(lessonId, { status: 'complete', streamOwner: null, markdown: msg.markdown, dil, appData: current.appData, messageId, title: lessonTitleFrom(msg.markdown, l.title), truncated: !!r.final?.debug?.truncated, interruptedReason: null });
       store.flush();
       if (r.final?.debug?.truncated) toast('The lesson was cut short (length limit).');
       markComplete();
+      steerBar.setMode('revise');
+      onPageScroll();
     } catch (e) {
-      steerBar.hide();
-      if (ac.signal.aborted) { saveLesson(lessonId, { status: 'interrupted' }); return; }
-      saveLesson(lessonId, { status: 'failed' });
+      streaming = false;
+      if (ac.signal.aborted || unloading) { if (began) { persist('interrupted'); store.flush(); } return; }
       reasoning.hidden = true;
+      if (!began) {
+        // the continuation never started: the persisted lesson is unchanged
+        toast(e.message || 'Could not continue the lesson');
+        if (prevPhase === 'complete') { markComplete(); steerBar.setMode('revise'); } else showInterrupted();
+        steerBar.fail(e.message);
+        return;
+      }
+      const next = statusAfterStop({ markdown: latest.markdown, failureCode: e.code });
+      if (next === 'interrupted') {
+        // stalled / network / client-side drop: keep the pages, offer Resume (continueFrom)
+        failNote = e.code ? e.message : 'The connection dropped. Resume to continue from the last complete page.';
+        persist('interrupted');
+        if (e.code) saveLesson(lessonId, { interruptedReason: failNote }); // a client-side drop may just be a reload: not persisted
+        store.flush();
+        showInterrupted(failNote);
+        return;
+      }
+      saveLesson(lessonId, { status: 'failed', streamOwner: null });
+      steerBar.hide();
       errorBox.hidden = false;
       errorBox.replaceChildren(
         el('h2', { class: 'h-md' }, 'The lesson could not be generated'),
         el('p', { class: 'muted' }, e.message || 'Something went wrong.'),
-        el('button', { class: 'btn', type: 'button', onclick: () => { surface.host.clear(); startStream(); } }, icon('refresh'), 'Try again'));
+        el('button', { class: 'btn', type: 'button', onclick: () => { surface.host.clear(); runStream(); } }, icon('refresh'), 'Try again'));
+    } finally {
+      window.removeEventListener('pagehide', onHide);
+      window.removeEventListener('beforeunload', onHide);
+      if (queued && !ac.signal.aborted) { const q = queued; queued = null; continueLesson(q); }
     }
   }
 }

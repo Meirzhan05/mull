@@ -86,7 +86,7 @@ All of this lives in `server/claude.js`. The client is dependency-injected, so t
 | Endpoint | Response |
 |---|---|
 | `GET /api/status` | `{mode, model}` |
-| `POST /api/lesson/stream {topic, level?, lessonTitle?, lessonSummary?, course?}` | NDJSON lesson |
+| `POST /api/lesson/stream {topic, level?, lessonTitle?, lessonSummary?, course?, continueFrom?}` | NDJSON lesson. `continueFrom: {markdown, instruction?, fromPage?, messageId?, sources?}` resumes or revises a persisted lesson (Phase 4) |
 | `POST /api/lesson/steer {operationId, instruction}` | JSON `{ok, status: accepted\|rejected}`; the result streams on the lesson's own NDJSON (Phase 4) |
 | `POST /api/tutor/stream {lessonContext:{title, markdown}, history, message}` | NDJSON reply; the final content record carries `followupPrompts` |
 | `POST /api/course/plan {topic, level}` | JSON `{plan:{title, description, sections:[{title, lessons:[{title, summary}]}]}}`; the client renders it as a course path |
@@ -275,10 +275,13 @@ Lessons can search the web, and Claude's citations show up as ChatGPT-style numb
 
 ## Phase 4: mid-turn steering
 
-- **UI.** While a lesson streams, a "Steer" bar sits under the reasoning line. It has chips (Simpler, More examples, Go deeper, Shorter) and a free-text input. The code is in `public/steer-bar.js`; `public/steering-core.js` holds the chips, `trimToLastPage` and the reducer.
+- **UI.** One composer (`public/steer-bar.js`) with the same chips (Simpler, More examples, Go deeper, Shorter) and free-text input in three modes. `public/steering-core.js` holds the chips, the page helpers, the reducer and the continuation/persistence helpers shared by server, client and tests.
+  - **Live** (under the reasoning line while a lesson streams): `POST /api/lesson/steer`, below.
+  - **Revise** (a finished lesson): a sticky "Revise from page N" pill that follows the `##` page in view and opens the composer. It rewrites that page and every page after it.
+  - **Resume** (an interrupted lesson): a "Lesson interrupted" banner with **Resume lesson**, or resume with a chip or typed change.
 - **`POST /api/lesson/steer {operationId, instruction}`.** The operationId comes from the stream's control records. The endpoint aborts that operation's current upstream attempt (`server/steering.js`: one AbortController per attempt, linked to the response).
-  - Accepted: returns `{ok:true, status:"accepted"}`.
-  - Finished or unknown operation: 409 `{status:"rejected", reason:"not_streaming"}`.
+  - Accepted: returns `{ok:true, status:"accepted"}`. It answers "accepted" only while the operation is open, and an accepted steer is always applied. That includes a steer that lands after Claude's last token but before the turn closes: the server then keeps every page except the last and continues with the instruction, so it is never dropped silently.
+  - Finished or unknown operation: 409 `{status:"rejected", reason:"not_streaming"}`. The client then falls back to `continueFrom` automatically, after the current stream ends: it trims to the last page and continues.
   - A second steer while one is still being applied: 409 `{status:"rejected", reason:"busy"}`, plus a `steering-status rejected` record on the stream.
 - **The same NDJSON response continues** with:
   1. `control steering-status {status:"accepted", instruction}` and `control steering-message` (ChatGPT §1.5).
@@ -293,6 +296,26 @@ Lessons can search the web, and Claude's citations show up as ChatGPT-style numb
 
   There is no assistant prefill. Web search stays on.
 - **Demo mode.** Steering rewrites the remaining sample pages deterministically (`steerDemoRemainder`). Each page keeps its heading, its first prose paragraph (two sentences at most) and every visual, and the quiz page is kept whole. A "Steered: Simpler" tip callout is added.
+
+### Continuing without the live stream: resume, steer after a reload, revise (`continueFrom`)
+
+Before this, steering needed the original NDJSON connection: after a reload there was nothing to steer, and an interrupted lesson stayed partial. Now `POST /api/lesson/stream` takes an optional `continueFrom` (ChatGPT has `/conversation/resume` and resume tokens, §1.4; Wonder rebuilds the turn from the client's persisted lesson instead, so the server keeps no state):
+
+| Field | Meaning |
+|---|---|
+| `markdown` | The client's persisted lesson (≤ 200,000 chars, else 413) |
+| `instruction?` | A steer (≤ 300 chars). Without one it means "resume where it stopped" |
+| `fromPage?` | Revise a finished lesson: keep the pages before page N (1-based, must exist, else 400) and rewrite from there |
+| `messageId?` | The original message id. It salts the resolution ids, so the kept pages compile to the same ids and their components keep their state |
+| `sources?` | Up to 60 source items behind the kept Cite pills (from the old `componentResults`). Only refs cited in the kept pages are accepted |
+
+- **Kept part.** `fromPage` → everything before that page (`trimBeforePage`); otherwise the last complete `##` page (`trimToLastPage`, fence-aware).
+- **Records.** The same as a live steer: `control steering-status accepted` (with `resume: true` when there is no instruction), `steering-message` (only with an instruction), a reasoning line, then a `replace` record with the kept markdown (revision 2, after the empty start) and normal appends. Every record passes chatgpt-dil's `validateRecord`, and revisions only increase.
+- **Request.** The normal lesson loop, with web search, memory and citations exactly as for a new lesson. The single user turn is `steeringUserContent(request, kept, instruction, {mode})`: the original request plus `<lesson_so_far>` (cites stripped) plus the instruction. There is no prefill. There are three wordings: steer, resume ("continue from where it stopped") and revise ("write page N and every page after it again"). A continuation stream is steerable live like any other.
+- **Citation ids.** `createContinuationSources` (in `server/steering.js`; it wraps `grounding.js`'s registry) seeds the kept sources so their pills resolve on the server, and the final `<Sources/>` lists old and new sources. New refs start after the highest `turn0search<N>` in the kept markdown, numbered N+2, so they never collide with kept Cite tags. A URL that was already cited reuses its ref and number.
+- **Client merge.** At the first program of the continuation, `carryOver` keeps the old citation and widget `componentResults` only for resolution ids still present in the kept program. Old Cite pills therefore keep working even without `sources`, and rewritten widgets (such as the quiz) start fresh. `mergeContinuedAppData` overlays the new stream's results on top, with new winning, and the merged appData is persisted with the lesson.
+- **Persistence states** (`lesson.status`): `new` | `streaming` (with `streamOwner` = this page load's id) | `interrupted` | `complete` | `failed`. During a stream the client persists the markdown, the latest dil, `messageId` and appData about once a second, and again on `pagehide`/`beforeunload`. `lessonPhase()` treats a `streaming` lesson owned by another page load (reload, closed tab) as interrupted. A stream that ends with `control failed` code `stalled` or `network` (the idle watchdog in `server/claude.js`), or with a client-side network drop, is persisted as `interrupted` and gets the Resume banner. Other failure codes keep the normal error card with "Try again". A failed continuation that never started leaves the persisted lesson untouched.
+- **Demo mode.** It is deterministic. `demoContinuation` streams the sample's pages after the kept ones, grounds their citations with the continuation registry, and applies `steerDemoRemainder` when there is an instruction. Resuming an interrupted sample reproduces it byte for byte.
 
 ## Phase 5: interactive function graphs
 
@@ -337,6 +360,17 @@ Lessons can search the web, and Claude's citations show up as ChatGPT-style numb
   - `ConversationTurn` tail replacement.
   - Demo steering over HTTP.
   - Rejections.
+- **`continue.test.js`** (resume / revise / race):
+  - The `continueFrom` request shape with the fake client: the trim, `fromPage`, the instruction, no prefill, and web search and memory still applied.
+  - Resume without an instruction.
+  - Validation: 400/413, the `fromPage` range, `messageId` reuse.
+  - The race: a steer accepted after Claude's last token is applied as a continuation.
+  - Continuation source ids: seeded, never colliding, URLs de-duplicated.
+  - The prompt wordings.
+  - Demo resume and revise over HTTP: kept prefix, stable resolution ids, all cites resolved, Sources old + new, the program runs.
+  - NDJSON validity and monotonic revisions.
+  - Client `carryOver`/`mergeContinuedAppData` tail replacement.
+  - Persistence states and the `stalled`/`network` → interrupted mapping.
 - **`function-graph.test.js`:**
   - Good and bad props: syntax, unknown variables and functions, too many params, points or curves, reserved names, ranges.
   - Fallback.
@@ -361,7 +395,14 @@ Live check against `claude-opus-5-5`, using 5 requests:
    - The popover was checked at desktop and 390 px, with no console errors.
 4. **"Understanding sine waves".** Claude wrote a valid `FunctionGraph` (`a*sin(b*x)` with amplitude and frequency sliders). Pressing +/− re-rendered the curve at desktop and 390 px.
 
+5. **Resume and revise (`continueFrom`), 3 requests.** "What the James Webb Space Telescope has discovered so far":
+   - **Reload mid-stream.** The lesson was reloaded on page 4, after 6 cites. It came back as "Lesson interrupted" with the 3 complete pages, a partial page 4 and working pills.
+   - **Resume.** It sent the 6,217-char lesson, its messageId and 9 sources. The continuation searched again and rewrote page 4 plus the quiz. The kept pages were byte-identical, the new refs were `turn0search9`–`12` (kept max: 8), and the Sources list showed 13 items.
+   - **"Revise from page 3" with More examples.** Pages 1–2 were unchanged and pages 3–5 were rewritten (5.9k → 7.2k chars), with new refs starting after the kept `turn0search4`. Old pills on page 1 still opened their popover.
+   - Checked at desktop and 390 px with no horizontal scroll and no console errors.
+
 Known gaps:
-- Steering works only while the original NDJSON connection is open. After a reload there is no operation to steer.
+- Revising or resuming rewrites from a page boundary. It can't edit one paragraph inside a page, and an interrupted page is always rewritten from its heading.
+- A continuation drops widget state (such as quiz answers) for the rewritten pages, and a steer that lands after the last page has been written only rewrites the last page.
 - Graph slider values are not persisted.
 - Search slows lessons down. In the live runs a lesson took about 42 s without searches and about 68 s with them.

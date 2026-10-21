@@ -1,7 +1,7 @@
 // Wonder HTTP server (node:http, no framework). Serves the API and the static client.
 //
 //   GET  /api/status            -> {mode:"claude"|"demo", model}
-//   POST /api/lesson/stream     -> conversation-source NDJSON (lesson in markdown + DIL)
+//   POST /api/lesson/stream     -> conversation-source NDJSON (lesson in markdown + DIL); continueFrom resumes/revises
 //   POST /api/tutor/stream      -> conversation-source NDJSON (tutor reply + followupPrompts)
 //   POST /api/lesson/steer      -> JSON {ok, status: accepted|rejected} (Phase 4 mid-turn steering)
 //   POST /api/course/plan       -> JSON course outline
@@ -31,8 +31,9 @@ import { TEACHER_TOOLS, createCardStore, createTeacherToolkit, runTeacherLoop, n
 import { createDemoTeacherClient } from './teacher-demo.js';
 // Phase 3 (grounded lessons) + Phase 4 (steering)
 import { withWebSearch, streamGrounded, createSourceRegistry, citationAppData, stripGroundingTags, SOURCES_TAG } from './grounding.js';
-import { createSteeringRegistry, cleanInstruction, steeringUserContent, steerDemoRemainder, trimToLastPage } from './steering.js';
+import { createSteeringRegistry, cleanInstruction, steeringUserContent, steerDemoRemainder, trimToLastPage, normalizeContinueFrom, createContinuationSources, demoContinuation } from './steering.js';
 import { groundDemoLesson } from './demo-grounding.js';
+import { pageCount } from '../public/steering-core.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const WONDER_ROOT = path.resolve(HERE, '..');
@@ -118,9 +119,9 @@ function serveStatic(req, res, pathname) {
 }
 
 /** Follow '## ' headings as they stream and narrate progress like ChatGPT's reasoning line. */
-function progressNarrator(writer, { first = 'Writing the introduction…' } = {}) {
+function progressNarrator(writer, { first = 'Writing the introduction…', pages: initialPages = 0 } = {}) {
   let started = false;
-  let pages = 0;
+  let pages = initialPages; // a continuation starts after the kept pages
   return () => {
     if (!started) { started = true; writer.reasoning(first); }
     const n = (('\n' + writer.markdown).match(/\n## /g) || []).length;
@@ -210,27 +211,43 @@ export function createWonderServer(opts = {}) {
     if (sources.size) writer.append(`${writer.markdown.endsWith('\n') ? '\n' : '\n\n'}${SOURCES_TAG}\n`);
   }
   // ---- Phase 4: steering. Keep the complete pages, replace the tail, continue.
-  function applySteer(writer, instruction) {
-    const kept = trimToLastPage(writer.markdown);
+  function applySteer(writer, instruction, kept = trimToLastPage(writer.markdown)) {
     writer.control('steering-status', { status: 'accepted', instruction });
     writer.control('steering-message', { message: { role: 'user', content: instruction } });
     writer.reasoning(`Steering: ${instruction}`);
     writer.replace(kept);
     return kept;
   }
+  // continueFrom (no live stream): resume an interrupted lesson, steer it after a reload, or
+  // revise a finished one from page N. Same records as a live steer; a resume has no instruction.
+  function applyContinue(writer, cont) {
+    if (cont.instruction) return applySteer(writer, cont.instruction, cont.kept);
+    writer.control('steering-status', { status: 'accepted', instruction: '', resume: true });
+    writer.reasoning('Resuming where the lesson stopped…');
+    writer.replace(cont.kept);
+    return cont.kept;
+  }
 
   async function lessonStream(req, res, body) {
     const topic = clean(body.topic, 300);
     if (!topic) return sendJson(res, 400, { ok: false, error: 'topic is required' });
+    const cont = normalizeContinueFrom(body.continueFrom);
+    if (cont?.error) return sendJson(res, cont.status, { ok: false, error: cont.error });
     const level = ['beginner', 'intermediate', 'advanced'].includes(body.level) ? body.level : 'beginner';
     const useWebSearch = body.useWebSearch !== false; // Phase 3: on by default for lessons
-    const sources = createSourceRegistry({ turnIndex: 0 });
-    const { writer, signal } = startNdjson(req, res, { record: 'lesson', appDataFor: citationAppData(sources) });
+    // a continuation seeds the kept pages' sources and numbers new refs after theirs
+    const sources = cont ? createContinuationSources({ turnIndex: 0, kept: cont.kept, seed: cont.sources }) : createSourceRegistry({ turnIndex: 0 });
+    const { writer, signal } = startNdjson(req, res, { record: 'lesson', appDataFor: citationAppData(sources), ...(cont?.messageId ? { messageId: cont.messageId } : {}) });
     writer.start();
-    writer.reasoning('Planning the lesson…');
-    const narrate = progressNarrator(writer);
+    if (cont) applyContinue(writer, cont);
+    else writer.reasoning('Planning the lesson…');
+    const narrate = progressNarrator(writer, cont ? { first: cont.instruction ? `Steering: ${cont.instruction}` : 'Resuming where the lesson stopped…', pages: pageCount(cont.kept) } : undefined);
     const onText = (t) => { writer.append(t); narrate(); };
     const op = steering.open(writer.operationId, signal, { onReject: (reason, instruction) => writer.control('steering-status', { status: 'rejected', reason, instruction }) });
+    // A steer queued while (or just after) the upstream stream ended is applied as a continuation,
+    // never dropped: lessonSteer only says "accepted" while the operation is still open, and the
+    // operation stays open until this check fails synchronously right before close().
+    const nextSteer = () => (signal.aborted ? null : op.takeSteer());
     let result = { status: 'demo' };
     try {
       if (state.mode === 'claude') {
@@ -238,12 +255,15 @@ export function createWonderServer(opts = {}) {
         const learner = memoryContext(body);
         if (learner) logger.info?.(`[wonder] lesson request personalized with ${Math.min(memory.size, 15)} memory items`);
         const context = joinContext(learner && `${learner}\nUse this to pick examples and pacing that fit this learner; the lesson itself stays about the requested topic.`);
-        let messages = [{ role: 'user', content: request }];
+        let messages = cont
+          ? [{ role: 'user', content: steeringUserContent(request, cont.kept, cont.instruction, { mode: cont.mode, fromPage: cont.fromPage }) }]
+          : [{ role: 'user', content: request }];
         for (;;) {
           const params = withWebSearch(buildStreamParams({ system: LESSON_SYSTEM_PROMPT, context, messages, effort: 'medium' }), useWebSearch);
           result = await runClaude(writer, params, onText, op.attempt(), useWebSearch ? groundedStream(writer, sources) : undefined);
-          if (result.status !== 'aborted' || !op.hasSteer) break;
-          const instruction = op.takeSteer();
+          if (result.status !== 'aborted' && result.status !== 'done') break;
+          const instruction = nextSteer();
+          if (!instruction) break;
           const kept = applySteer(writer, instruction);
           messages = [{ role: 'user', content: steeringUserContent(request, kept, instruction) }];
         }
@@ -251,12 +271,17 @@ export function createWonderServer(opts = {}) {
       if (result.status === 'demo') {
         const pick = pickDemoLesson(body.lessonTitle || topic);
         if (!pick.matched) writer.reasoning(`Demo mode: no sample for "${topic}", showing "${pick.title}"`);
-        let text = useWebSearch ? groundDemoLesson(pick.id, pick.markdown, sources) : pick.markdown;
-        let r = await streamDemoText(text, { onText, delayMs: state.demoDelayMs, signal: op.attempt(), seed: topic.length });
-        while (r.aborted && op.hasSteer) {
-          const instruction = op.takeSteer();
-          const kept = applySteer(writer, instruction);
-          text = kept + steerDemoRemainder(text.startsWith(kept) ? text.slice(kept.length) : '', instruction);
+        const ground = (md) => (useWebSearch ? groundDemoLesson(pick.id, md, sources) : md);
+        let text;
+        let kept = '';
+        if (cont) {
+          kept = cont.kept;
+          text = kept + demoContinuation(pick.markdown, kept, cont.instruction, { ground });
+        } else text = ground(pick.markdown);
+        let r = await streamDemoText(text.slice(kept.length), { onText, delayMs: state.demoDelayMs, signal: op.attempt(), seed: topic.length });
+        for (let instruction = nextSteer(); instruction && !signal.aborted; instruction = nextSteer()) {
+          kept = applySteer(writer, instruction);
+          text = kept + (text.startsWith(kept) ? steerDemoRemainder(text.slice(kept.length), instruction) : demoContinuation(pick.markdown, kept, instruction, { ground }));
           r = await streamDemoText(text.slice(kept.length), { onText, delayMs: state.demoDelayMs, signal: op.attempt(), seed: topic.length });
         }
         result = { status: r.aborted ? 'aborted' : 'done', truncated: false };
@@ -275,8 +300,8 @@ export function createWonderServer(opts = {}) {
     const instruction = cleanInstruction(body.instruction);
     if (!instruction) return sendJson(res, 400, { ok: false, error: 'instruction is required' });
     const op = steering.get(String(body.operationId || ''));
-    if (!op) return sendJson(res, 409, { ok: false, status: 'rejected', reason: 'not_streaming', error: 'This lesson has finished streaming.' });
-    if (!op.steer(instruction)) return sendJson(res, 409, { ok: false, status: 'rejected', reason: 'busy', error: 'Still applying your last change.' });
+    if (!op || op.closed) return sendJson(res, 409, { ok: false, status: 'rejected', reason: 'not_streaming', error: 'This lesson has finished streaming.' });
+    if (!op.steer(instruction)) return sendJson(res, 409, { ok: false, status: 'rejected', reason: op.hasSteer ? 'busy' : 'not_streaming', error: op.hasSteer ? 'Still applying your last change.' : 'This lesson has finished streaming.' });
     return sendJson(res, 200, { ok: true, status: 'accepted', operationId: op.operationId });
   }
 

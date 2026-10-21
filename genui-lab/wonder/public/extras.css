@@ -58,3 +58,26 @@
   background: var(--bg); color: var(--ink); outline: none;
 }
 .steer-row input:focus { border-color: var(--brand); }
+
+/* ---- Steer modes: revise a finished lesson (sticky pill -> composer), resume an interrupted one */
+.steer-open { display: none; }
+.steer-head .steer-resume { margin-left: auto; flex: 0 0 auto; }
+.steer-head .steer-close { margin-left: auto; width: 32px; height: 32px; flex: 0 0 auto; }
+.steer-head .steer-resume[hidden], .steer-head .steer-close[hidden] { display: none; }
+.steer-bar[data-mode="resume"] { border-style: solid; border-color: color-mix(in srgb, var(--warning, #d08a1c) 55%, var(--line)); }
+.steer-bar[data-mode="resume"] .steer-head, .steer-bar[data-mode="revise"] .steer-head { flex-wrap: wrap; row-gap: 4px; }
+.steer-bar[data-mode="resume"] .steer-status, .steer-bar[data-mode="revise"] .steer-status { white-space: normal; order: 5; flex: 1 0 100%; }
+.steer-bar[data-mode="revise"] {
+  position: sticky; bottom: max(14px, env(safe-area-inset-bottom)); z-index: 30; border-style: solid; box-shadow: var(--shadow-card);
+}
+.steer-bar[data-mode="revise"]:not(.is-open) { padding: 0; border: 0; background: none; box-shadow: none; justify-self: start; animation: none; }
+.steer-bar[data-mode="revise"]:not(.is-open) > :not(.steer-open) { display: none; }
+.steer-bar[data-mode="revise"]:not(.is-open) .steer-open {
+  display: inline-flex; align-items: center; gap: 8px; padding: 10px 16px; border-radius: 999px; cursor: pointer;
+  border: 1.5px solid color-mix(in srgb, var(--brand) 55%, var(--line)); background: var(--surface); color: var(--ink);
+  font: inherit; font-size: 0.88rem; font-weight: 700; box-shadow: var(--shadow-card);
+}
+.steer-open .ui-icon { width: 17px; height: 17px; color: var(--brand-strong); }
+.steer-open:hover { border-color: var(--brand); background: var(--brand-subtle); }
+@media (min-width: 1180px) { .steer-bar[data-mode="revise"]:not(.is-open) { justify-self: center; } }
+@media (max-width: 1179px) { .steer-bar[data-mode="revise"].is-open { bottom: calc(max(18px, env(safe-area-inset-bottom)) + 58px); } } /* clear the tutor "Ask" button */

@@ -52,3 +52,151 @@ export function steerReducer(state, event) {
     default: return s;
   }
 }
+
+// ---------------------------------------------------------------- continueFrom (resume / revise)
+//
+// A lesson can be continued without its original stream: POST /api/lesson/stream with
+// `continueFrom: {markdown, instruction?, fromPage?, messageId?, sources?}`. The server keeps
+// the complete pages (or the pages before `fromPage`), sends them as a `replace` record and
+// streams the rest. The helpers below are shared by the server, the client and the tests.
+
+export const MAX_CONTINUE_MARKDOWN = 200000;
+export const MAX_CONTINUE_SOURCES = 60;
+
+/** Offsets of every "## " page heading (fence-aware). */
+export function pageOffsets(markdown) {
+  const md = String(markdown ?? '');
+  const heads = [];
+  let inFence = false;
+  let pos = 0;
+  for (const line of md.split('\n')) {
+    if (/^[ \t]*(```|~~~)/.test(line)) inFence = !inFence;
+    else if (!inFence && /^## /.test(line)) heads.push(pos);
+    pos += line.length + 1;
+  }
+  return heads;
+}
+
+/** Everything before page `n` (1-based): page 1 keeps only the title and hook. */
+export function trimBeforePage(markdown, n) {
+  const md = String(markdown ?? '');
+  const heads = pageOffsets(md);
+  const i = Math.max(1, Math.floor(n)) - 1;
+  return i < heads.length ? md.slice(0, heads[i]) : md;
+}
+
+/** Page `n` (1-based) and everything after it ('' when the lesson has fewer pages). */
+export function sliceFromPage(markdown, n) {
+  const md = String(markdown ?? '');
+  const heads = pageOffsets(md);
+  const i = Math.max(1, Math.floor(n)) - 1;
+  return i < heads.length ? md.slice(heads[i]) : '';
+}
+
+/** "## " headings in order (page titles), fence-aware. */
+export function pageTitles(markdown) {
+  const md = String(markdown ?? '');
+  return pageOffsets(md).map((at) => md.slice(at + 3, (md.indexOf('\n', at) + 1 || md.length + 1) - 1).trim());
+}
+
+/** The kept part of a continuation: pages before `fromPage`, else the last complete page. */
+export function keptForContinue(markdown, fromPage) {
+  return fromPage ? trimBeforePage(markdown, fromPage) : trimToLastPage(markdown);
+}
+
+/** Every __resolutionId in a compiled program (constants-referenced or inline). */
+export function resolutionIdsOf(dil) {
+  const ids = new Set();
+  const code = String(dil?.code ?? '');
+  const re = /"__resolutionId":(?:__dilConstants\["(\d+)"\]|"([^"\\]+)")/g;
+  let m;
+  while ((m = re.exec(code))) {
+    const id = m[1] != null ? dil?.constants?.[m[1]] : m[2];
+    if (typeof id === 'string' && id) ids.add(id);
+  }
+  return ids;
+}
+
+const resultsOf = (appData) => (appData && typeof appData === 'object' && appData.opGenui?.componentResults) || {};
+
+/** Only the componentResults whose resolution id is in `ids`. */
+export function keepResults(componentResults, ids) {
+  const out = {};
+  for (const [k, v] of Object.entries(componentResults || {})) if (ids.has(k)) out[k] = v;
+  return out;
+}
+
+/**
+ * appData for a continued lesson: results carried over from the kept pages, overlaid with the
+ * new stream's own results (new wins for the same resolution id).
+ */
+export function mergeContinuedAppData(carried, appData) {
+  const base = appData && typeof appData === 'object' ? appData : {};
+  const op = base.opGenui || {};
+  return { ...base, opGenui: { modelDataBindings: {}, ...op, componentResults: { ...(carried || {}), ...resultsOf(base) } } };
+}
+
+/**
+ * Client side of a continuation, given the first program of the new stream (the kept pages):
+ * keep the old citation results (`dilAppData`) and widget results (`widgetAppData`) only for
+ * components that survive, so old Cite pills keep working and rewritten widgets start fresh.
+ */
+export function carryOver({ dilAppData, widgetAppData } = {}, keptDil) {
+  const ids = resolutionIdsOf(keptDil);
+  const carried = keepResults(resultsOf(dilAppData), ids);
+  const widget = widgetAppData && typeof widgetAppData === 'object'
+    ? { ...widgetAppData, opGenui: { ...(widgetAppData.opGenui || {}), componentResults: keepResults(resultsOf(widgetAppData), ids) } }
+    : widgetAppData ?? null;
+  return { ids, carried, widgetAppData: widget };
+}
+
+/** Source items behind the Cite/Sources results (sent back so kept pills keep their numbers). */
+export function sourcesFromAppData(appData) {
+  const byRef = new Map();
+  for (const r of Object.values(resultsOf(appData))) {
+    for (const it of r?.state?.items || []) {
+      if (it && typeof it.ref === 'string' && typeof it.url === 'string' && !byRef.has(it.ref)) {
+        byRef.set(it.ref, { ref: it.ref, index: it.index, url: it.url, title: it.title, domain: it.domain, snippet: it.snippet ?? null, ...(it.page_age ? { page_age: it.page_age } : {}) });
+      }
+    }
+  }
+  return [...byRef.values()].sort((a, b) => (a.index || 0) - (b.index || 0)).slice(0, MAX_CONTINUE_SOURCES);
+}
+
+/** The refs of every server-inserted <Cite refs={[…]}/> in a lesson. */
+export function citeRefsIn(markdown) {
+  const refs = new Set();
+  for (const m of String(markdown ?? '').matchAll(/<Cite\s+refs=\{(\[[^{}]*\])\}\s*\/>/g)) {
+    try { for (const r of JSON.parse(m[1])) if (typeof r === 'string') refs.add(r); } catch {}
+  }
+  return refs;
+}
+
+// ---------------------------------------------------------------- persisted lesson states
+//
+// lesson.status: 'new' (never streamed) | 'streaming' (a page is writing it: streamOwner = that
+// page's id) | 'interrupted' (stopped before the end, markdown = what was shown) | 'complete'
+// | 'failed' (an error before anything was written). A 'streaming' lesson whose owner is not
+// the current page was left by a reload or a closed tab, so it counts as interrupted.
+
+/** Failure codes that mean "the stream was cut", not "the request was bad": resumable. */
+export const RESUMABLE_FAILURES = Object.freeze(['stalled', 'network']);
+export const isResumableFailure = (code) => RESUMABLE_FAILURES.includes(String(code || ''));
+
+/** 'complete' | 'streaming' | 'interrupted' | 'new' for a persisted lesson. */
+export function lessonPhase(lesson, { pageId } = {}) {
+  if (!lesson) return 'new';
+  const hasText = !!String(lesson.markdown || '').trim();
+  if (lesson.status === 'complete' && lesson.dil) return 'complete';
+  if (lesson.status === 'streaming' && pageId && lesson.streamOwner === pageId) return 'streaming';
+  if (hasText && (lesson.status === 'streaming' || lesson.status === 'interrupted')) return 'interrupted';
+  return 'new';
+}
+
+/** The persisted status after a stream ends without completing. */
+export function statusAfterStop({ markdown, failureCode, aborted } = {}) {
+  const hasText = !!String(markdown || '').trim();
+  if (aborted) return hasText ? 'interrupted' : 'new';
+  if (hasText && (failureCode == null || isResumableFailure(failureCode))) return 'interrupted';
+  return 'failed';
+}
