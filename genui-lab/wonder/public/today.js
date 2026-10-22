@@ -1,7 +1,7 @@
-// Today (#/): a working dashboard. A compact header, one command bar (start a lesson, plan a
-// course or write to the Teacher), then two columns: the "Up next" queue, suggestions and recent
-// reading on the left; a rail of panels (today's XP, the streak, the deck, the study plan) on the
-// right. On narrow screens the rail moves above the queue as a strip.
+// Today (#/): input first. The hero is one large composer (a question as the headline, an
+// auto-growing field, and a footer with the mode, the level and send), with quick-start chips
+// under it. Below it, secondary: the "Up next" queue and recent reading on the left, and a rail of
+// panels (today's XP, the streak, the deck, the study plan) on the right.
 // Phases 9-10: the header carries the Teacher's brief when a deadline or the streak is at stake,
 // Up next has "Refresh" rows for fading lessons and dated plan rows, the plan panel follows the
 // calendar, the command bar takes the learner's own material, and reading rows show recall.
@@ -17,11 +17,12 @@ import { dailyBrief } from './brief-core.js'; // Phase 10
 import { postJson } from './stream-client.js';
 
 const MODES = [
-  { id: 'lesson', label: 'Lesson', placeholder: 'What do you want to understand?', action: 'Begin' },
-  { id: 'course', label: 'Course', placeholder: 'A subject to study over several lessons', action: 'Plan' },
-  { id: 'teacher', label: 'Teacher', placeholder: 'A goal, a question, or a plan you need', action: 'Send' },
-  { id: 'material', label: 'Material', placeholder: 'A title for your notes (optional)', action: 'Begin' },
+  { id: 'lesson', label: 'Lesson', icon: 'book', title: 'What do you want to learn?', placeholder: 'Ask about anything: how vaccines work, Bayes’ theorem, the French Revolution…', action: 'Begin' },
+  { id: 'course', label: 'Course', icon: 'layers', title: 'What do you want to study?', placeholder: 'A subject to learn over several lessons, e.g. statistics from scratch', action: 'Plan' },
+  { id: 'teacher', label: 'Teacher', icon: 'teacher', title: 'What do you need help with?', placeholder: 'A goal, a question, or a plan you need', action: 'Send' },
+  { id: 'material', label: 'Material', icon: 'download', title: 'What should Wonder teach from?', placeholder: 'A title for your notes (optional)', action: 'Begin' },
 ];
+const TEACHER_CHIPS = ['What should I study today?', 'Make me a 5-day plan for a goal', 'Quiz me on my last lesson', 'How am I doing?'];
 const MATERIAL_ACCEPT = '.txt,.md,.markdown,.pdf,text/plain,text/markdown,application/pdf';
 
 /** Phase 10: read an attached file into a /api/materials body. */
@@ -59,20 +60,25 @@ export function renderToday(ctx) {
     : day.xp > 0
       ? `${day.goal - day.xp} XP to today’s goal.`
       : streak > 0 ? `Keep the ${streak}-day streak going.` : 'Pick up where you left off, or start something new.';
-  const head = el('header', { class: 't-head' },
-    el('p', { class: 't-date' }, now.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' }), totals.activeDays ? ` · Day ${totals.activeDays}` : ''),
-    el('h1', { class: 't-title' }, `${greeting(now)}${name ? `, ${name}` : ''}`),
-    el('p', { class: 't-sub' }, sub));
+  const heroTitle = el('h1', { class: 'hero-title' });
+  const head = el('div', { class: 'hero-top' },
+    el('p', { class: 'hero-greet' }, `${greeting(now)}${name ? `, ${name}` : ''}`, el('span', { class: 'hero-dot', 'aria-hidden': 'true' }, '·'), el('span', { class: brief.urgent ? 'hero-urgent' : '' }, sub)),
+    heroTitle);
+  void totals;
 
   // -- command bar
   let mode = 'lesson';
   let level = 'beginner';
-  const input = el('input', { type: 'text', maxlength: '300', autocomplete: 'off', 'aria-label': 'What do you want to understand?' });
-  const go = el('button', { class: 'btn cmd-go', type: 'submit' }, el('span', null, 'Begin'), el('kbd', { class: 'cmd-kbd' }, '↵'));
-  const modeSeg = el('div', { class: 'seg cmd-modes', role: 'tablist', 'aria-label': 'What to start' }, ...MODES.map((m) => el('button', {
-    class: 'seg-btn', type: 'button', role: 'tab', 'aria-selected': String(m.id === mode), dataset: { mode: m.id },
+  const input = el('textarea', { rows: '1', maxlength: '300', autocomplete: 'off', class: 'composer-input', 'aria-label': 'What do you want to learn?' });
+  const go = el('button', { class: 'composer-send', type: 'submit', 'aria-label': 'Begin', title: 'Begin (Enter)' }, icon('arrow-up'));
+  const goLabel = el('span', { class: 'composer-hint' });
+  const modeSeg = el('div', { class: 'composer-modes', role: 'tablist', 'aria-label': 'What to start' }, ...MODES.map((m) => el('button', {
+    class: 'composer-mode', type: 'button', role: 'tab', 'aria-selected': String(m.id === mode), dataset: { mode: m.id },
     onclick: () => { setMode(m.id); input.focus(); },
-  }, m.label)));
+  }, icon(m.icon), el('span', null, m.label))));
+  const autosize = () => { input.style.height = 'auto'; input.style.height = `${Math.min(220, input.scrollHeight)}px`; };
+  input.addEventListener('input', () => { autosize(); go.classList.toggle('ready', !!input.value.trim() || mode === 'material'); });
+  input.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); submit(); } });
   const levelSel = el('select', { class: 'cmd-level', 'aria-label': 'Level', onchange: (e) => { level = e.target.value; } }, ...LEVELS.map((lv) => el('option', { value: lv }, cap(lv))));
   // -- Phase 10: "Material": paste notes or attach a file; Begin writes a lesson from it, or a course
   let file = null;
@@ -104,18 +110,23 @@ export function renderToday(ctx) {
     const def = MODES.find((x) => x.id === m);
     for (const b of modeSeg.children) b.setAttribute('aria-selected', String(b.dataset.mode === m));
     input.placeholder = def.placeholder;
-    go.firstChild.textContent = def.action;
+    heroTitle.textContent = def.title;
+    go.setAttribute('aria-label', def.action);
+    go.title = `${def.action} (Enter)`;
+    goLabel.textContent = 'Enter to ' + def.action.toLowerCase() + ' · Shift+Enter for a new line';
     levelSel.hidden = m === 'teacher';
     materialBox.hidden = m !== 'material';
+    composer.classList.toggle('has-material', m === 'material');
+    go.classList.toggle('ready', !!input.value.trim() || m === 'material');
+    drawChips();
   }
-  setMode('lesson');
   async function submit(as = 'lesson') {
     const t = input.value.trim();
     if (mode === 'material') {
       if (!notes.value.trim() && !file) { notes.focus(); toast('Paste some material or attach a file first'); return; }
       go.disabled = true;
       courseBtn.disabled = true;
-      go.firstChild.textContent = 'Reading…';
+      go.classList.add('busy');
       try {
         const item = await uploadMaterial();
         if (as === 'course') { if (!(await actions.planCourse(item.title, level, item))) throw new Error('Could not plan the course'); }
@@ -123,6 +134,7 @@ export function renderToday(ctx) {
       } catch (e) {
         toast(e.message || 'Could not add that material');
         go.disabled = false;
+        go.classList.remove('busy');
         courseBtn.disabled = false;
         setMode('material');
       }
@@ -133,18 +145,29 @@ export function renderToday(ctx) {
     else if (mode === 'teacher') actions.askTeacher(t);
     else {
       go.disabled = true;
-      go.firstChild.textContent = 'Planning…';
+      go.classList.add('busy');
       const ok = await actions.planCourse(t, level);
-      if (!ok) { go.disabled = false; setMode('course'); }
+      if (!ok) { go.disabled = false; go.classList.remove('busy'); setMode('course'); }
     }
   }
-  const cmd = el('form', { class: 'cmd-wrap', onsubmit: (e) => { e.preventDefault(); submit(); } },
-    el('div', { class: 'cmd' },
-      modeSeg,
-      el('label', { class: 'cmd-field' }, icon('search'), input),
-      levelSel,
-      go),
-    materialBox);
+  // quick starts under the composer: topics for lessons and courses, prompts for the Teacher
+  const topics = suggestedTopics(settings, d.lessons, now, 5);
+  const chips = el('div', { class: 'hero-chips', 'aria-label': 'Suggestions' });
+  function drawChips() {
+    if (mode === 'material') { chips.replaceChildren(); return; }
+    const list = mode === 'teacher' ? TEACHER_CHIPS : topics;
+    chips.replaceChildren(...list.map((t) => el('button', { class: 'hero-chip', type: 'button', onclick: () => { input.value = t; autosize(); submit(); } },
+      mode === 'teacher' ? null : el('span', { class: 'hero-chip-tag' }, topicInterest(t) || 'General'), t)),
+    ...(mode === 'teacher' ? [] : [el('a', { class: 'hero-chip hero-chip-link', href: '#/you' }, 'Interests', icon('arrow-right'))]));
+  }
+  const composer = el('form', { class: 'composer', onsubmit: (e) => { e.preventDefault(); submit(); } },
+    el('label', { class: 'composer-field' }, input),
+    materialBox,
+    el('div', { class: 'composer-bar' }, modeSeg, el('span', { class: 'composer-spacer' }), goLabel, levelSel, go));
+  composer.addEventListener('click', (e) => { if (e.target === composer) input.focus(); });
+  setMode('lesson');
+  const cmd = el('section', { class: 'hero', 'aria-label': 'Start something' }, head, composer, chips);
+  if (window.matchMedia?.('(min-width: 900px)').matches) setTimeout(() => input.focus({ preventScroll: true }), 50);
 
   // -- left column: queue, suggestions, recent
   const next = upNext(d, now);
@@ -152,13 +175,6 @@ export function renderToday(ctx) {
     sectionHead('Up next', next[0]?.kind === 'start' ? null : `${next.length}`, el('button', { class: 'link-btn', type: 'button', onclick: () => actions.teacherCheckIn?.() }, 'Ask your Teacher', icon('arrow-right'))),
     el('ol', { class: 'queue' }, ...next.map((n, i) => queueRow(n, i, ctx)), ...(next[0]?.kind === 'start' ? quickRows(ctx) : [])));
 
-  const topics = suggestedTopics(settings, d.lessons, now, 6);
-  const suggested = el('section', { class: 'panel-section' },
-    sectionHead(settings.interests?.length ? 'Suggested for you' : 'Suggested', null, el('a', { class: 'link-btn', href: '#/you' }, 'Interests')),
-    el('ul', { class: 'tiles' }, ...topics.map((t) => el('li', null, el('button', { type: 'button', class: 'tile', onclick: () => actions.startLesson(t, level) },
-      el('span', { class: 'tile-tag' }, topicInterest(t) || 'General'),
-      el('span', { class: 'tile-title' }, t),
-      el('span', { class: 'tile-go' }, 'Start lesson', icon('arrow-right')))))));
 
   const recent = Object.values(d.lessons).sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || '')).slice(0, 5);
   const recentSec = recent.length ? el('section', { class: 'panel-section' },
@@ -188,8 +204,10 @@ export function renderToday(ctx) {
         el('span', null, deck.due ? 'Review now' : deck.nextDue ? `Next ${formatDue(deck.nextDue)}` : 'No cards yet'))),
     planPanel(d, actions));
 
-  app.replaceChildren(el('div', { class: 'today' }, head, cmd,
-    el('div', { class: 't-grid' }, el('div', { class: 't-main' }, queue, suggested, recentSec), rail)));
+  app.replaceChildren(el('div', { class: 'today' }, cmd,
+    el('div', { class: 't-below' },
+      el('h2', { class: 't-below-title' }, 'Your learning'),
+      el('div', { class: 't-grid' }, el('div', { class: 't-main' }, queue, recentSec), rail))));
 }
 
 function sectionHead(title, count, extra) {

@@ -29,6 +29,7 @@ function append(node, children) {
 const PATHS = {
   'arrow-left': ['M19 12H5', 'M11 6l-6 6 6 6'],
   'arrow-right': ['M5 12h14', 'M13 6l6 6-6 6'],
+  'arrow-up': ['M12 19V5', 'M6 11l6-6 6 6'],
   send: ['M5 12h13', 'M12 5l7 7-7 7'],
   chat: ['M5 5h14a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H10l-4 3v-3H5a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1z'],
   x: ['M6 6l12 12', 'M18 6L6 18'],
