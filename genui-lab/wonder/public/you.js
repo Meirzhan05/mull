@@ -6,6 +6,7 @@ import { learnerTotals, activityGrid, DAILY_GOALS, goalOf } from './progress-cor
 import { memoryPanel } from './memory-screen.js';
 import { masteryPanel } from './mastery-screen.js'; // Phase 6
 import { insightsPanel } from './insights-panel.js'; // Phase 9
+import { accountInfo, signedInAccount, currentSyncStatus, onSyncStatus, syncEngine, signIn, signOut, switchToSignedIn, accountLabel, pushAvailable, enablePush, disablePush } from './account.js'; // account sync
 
 export const TEXT_SIZES = [['0.92', 'Small'], ['1', 'Default'], ['1.1', 'Large'], ['1.2', 'Larger']];
 
@@ -38,8 +39,60 @@ function materialsPanel(ctx) {
   };
   fetch('/api/materials').then((r) => r.json()).then((r) => draw(r.items || [])).catch(() => card.replaceChildren(el('p', { class: 'muted small materials-empty' }, 'Could not load your materials.')));
   return el('div', { class: 'mastery', id: 'materials' },
-    el('div', { class: 'section-head' }, el('h2', { class: 'rubric' }, 'Your material', count), el('span', { class: 'muted small' }, 'Stored on this Wonder server')),
+    el('div', { class: 'section-head' }, el('h2', { class: 'rubric' }, 'Your material', count), el('span', { class: 'muted small' }, signedInAccount() ? 'Stored in your account' : 'Stored on this Wonder server')),
     card);
+}
+
+const ago = (t) => {
+  const s = Math.round((Date.now() - t) / 1000);
+  return s < 45 ? 'just now' : s < 3600 ? `${Math.round(s / 60)} min ago` : new Date(t).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+};
+
+/**
+ * Account sync: sign in to keep lessons, cards, progress, memory and material in an account and
+ * on every browser signed in to it. Shown only when the server has accounts configured.
+ */
+function accountPanel(ctx) {
+  const body = el('div', { class: 'card settings' });
+  const sec = el('div', { class: 'account-sync', hidden: true, style: { marginBottom: '12px' } }, body);
+  const btn = (label, cls, onclick) => el('button', { class: `btn ${cls}`, type: 'button', onclick: async (e) => {
+    const b = e.currentTarget;
+    b.disabled = true;
+    try { await onclick(); } catch (err) { toast(err.message || 'That did not work'); } finally { b.disabled = false; }
+  } }, label);
+  const row = (title, note, ...actions) => el('div', { class: 'setting' }, el('div', { class: 'setting-text' }, el('strong', null, title), el('p', { class: 'muted small' }, note)), el('div', { style: { display: 'flex', gap: '8px', flexWrap: 'wrap' } }, ...actions));
+  const draw = () => {
+    const info = accountInfo();
+    sec.hidden = !info?.sync;
+    if (!info?.sync) return;
+    const acct = signedInAccount();
+    const st = currentSyncStatus();
+    if (!acct) {
+      body.replaceChildren(row('Sync across your devices', 'Sign in to keep your lessons, cards, progress, memory and material in an account, on every browser you sign in on. What this browser has comes with you.',
+        btn('Sign in', 'btn-primary', signIn)));
+    } else if (st.state === 'mismatch') {
+      body.replaceChildren(row('Signed in as someone else', 'This browser holds another account’s copy. Switch to the account that is signed in now, or sign out.',
+        btn('Use this account', 'btn-secondary', switchToSignedIn), btn('Sign out', 'btn-secondary', signOut)));
+    } else if (st.state === 'signedOut') {
+      body.replaceChildren(row('Your session ended', 'Sign in again to keep syncing. Changes made here meanwhile are kept and sync once you are back.',
+        btn('Sign in', 'btn-primary', signIn), btn('Sign out', 'btn-secondary', signOut)));
+    } else {
+      const pending = syncEngine()?.pending() || 0;
+      const line = st.state === 'syncing' ? 'Syncing…'
+        : st.state === 'offline' ? `Offline. ${pending ? `${pending} change${pending === 1 ? '' : 's'} will sync when you are back.` : 'Everything here is saved.'}`
+          : st.state === 'error' ? `Could not sync (${st.error || 'error'}). Retrying.`
+            : st.state === 'unavailable' ? 'Sync is unavailable on this server right now; this browser keeps your changes.'
+              : st.at ? `Synced ${ago(st.at)}${pending ? ` · ${pending} waiting` : ''}.` : 'Connecting…';
+      body.replaceChildren(row(accountLabel() ? `Signed in as ${accountLabel()}` : 'Signed in', `${line} Lessons, cards, progress, memory and material are kept in your account.`,
+        btn('Sync now', 'btn-secondary', async () => { await syncEngine()?.syncNow(); toast('Synced'); }),
+        btn('Sign out', 'btn-secondary', async () => { if (await signOut()) toast('Signed out'); })));
+    }
+  };
+  draw();
+  const off = onSyncStatus(draw);
+  const timer = setInterval(draw, 30_000);
+  ctx.teardown?.push(() => { off(); clearInterval(timer); });
+  return sec;
 }
 
 /** A row with a switch. */
@@ -63,7 +116,7 @@ function reminderSetting(settings, setSetting) {
   const describe = () => {
     note.textContent = !supported ? 'This browser has no notifications. Use “Add to calendar” on your study plan instead.'
       : Notification.permission === 'denied' ? 'Notifications are blocked for this site in your browser settings. “Add to calendar” on your plan still works.'
-        : r().enabled ? `Wonder nudges you at ${r().time} on days you haven’t met your goal, while a Wonder tab is open. Plan events added to your calendar use this time too.`
+        : r().enabled ? `Wonder nudges you at ${r().time} on days you haven’t met your goal, ${pushAvailable() ? 'on this device even when Wonder is closed' : 'while a Wonder tab is open'}. Plan events added to your calendar use this time too.`
           : 'A nudge at this time on days you haven’t met your goal. Plan events added to your calendar use this time too.';
   };
   sw.addEventListener('click', async () => {
@@ -72,6 +125,10 @@ function reminderSetting(settings, setSetting) {
       let p = 'denied';
       try { p = await Notification.requestPermission(); } catch {}
       if (p !== 'granted') { describe(); toast('Notifications were not allowed'); return; }
+    }
+    // signed in with push on the server: the reminder also arrives with no tab open (Web Push)
+    if (pushAvailable()) {
+      try { if (next) await enablePush(); else await disablePush(); } catch { /* the in-tab reminder still works */ }
     }
     setSetting({ reminder: { ...r(), enabled: next } });
     sw.setAttribute('aria-checked', String(next));
@@ -153,7 +210,9 @@ export function renderYou(ctx) {
     setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 500);
   } }, icon('download'), 'Export my data');
   const resetBtn = el('button', { class: 'btn btn-secondary btn-danger', type: 'button', onclick: () => {
-    if (!confirm('Erase all lessons, courses, Teacher chats, cards, XP and streaks from this browser? This cannot be undone. (Memory is separate, above.)')) return;
+    if (!confirm(signedInAccount()
+      ? 'Erase all lessons, courses, Teacher chats, cards, XP and streaks from your account, on every device? This cannot be undone. (Memory is separate, above.)'
+      : 'Erase all lessons, courses, Teacher chats, cards, XP and streaks from this browser? This cannot be undone. (Memory is separate, above.)')) return;
     store.reset();
     store.flush();
     toast('All progress erased');
@@ -162,9 +221,10 @@ export function renderYou(ctx) {
   } }, icon('trash'), 'Erase progress');
   const dataCard = el('section', { class: 'section' },
     el('h2', { class: 'rubric' }, 'Your data'),
+    accountPanel(ctx),
     el('div', { class: 'card settings' },
       el('div', { class: 'setting' },
-        el('div', { class: 'setting-text' }, el('strong', null, 'Stored in this browser'), el('p', { class: 'muted small' }, store.persistent ? 'Lessons, chats, cards and progress live in this browser’s local storage.' : 'Storage is blocked here, so progress lasts only until you close the tab.')),
+        el('div', { class: 'setting-text' }, el('strong', null, signedInAccount() ? 'Stored in your account' : 'Stored in this browser'), el('p', { class: 'muted small' }, signedInAccount() ? 'Lessons, chats, cards and progress live in your account, with a copy in this browser for offline use.' : store.persistent ? 'Lessons, chats, cards and progress live in this browser’s local storage.' : 'Storage is blocked here, so progress lasts only until you close the tab.')),
         el('div', { style: { display: 'flex', gap: '8px', flexWrap: 'wrap' } }, exportBtn, resetBtn))));
 
   // settings-style layout: a section nav beside the content; the nav follows your scroll

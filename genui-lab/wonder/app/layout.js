@@ -1,6 +1,7 @@
 // Root layout: fonts (self-hosted by next/font), global CSS, metadata and the pre-paint theme
 // script. The page body is the Wonder app shell (app/wonder-app.js).
 import { Geist, Geist_Mono } from 'next/font/google';
+import { ClerkProvider } from '@clerk/nextjs';
 import '../../chatgpt-dil/src/dil.css';
 import 'katex/dist/katex.min.css';
 import './styles/styles.css';
@@ -32,13 +33,17 @@ export const viewport = {
 // apply the saved theme before first paint (no flash); the shell manages it afterwards
 const THEME_SCRIPT = "try{var t=localStorage.getItem('wonder.theme');if(t==='light'||t==='dark')document.documentElement.setAttribute('data-theme',t)}catch(e){}";
 
+// Accounts (sync across devices) only when Clerk is configured; the vanilla client reaches it as
+// window.Clerk (public/account.js). Without the keys the page is exactly as before.
+const ACCOUNTS = !!(process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY && process.env.CLERK_SECRET_KEY);
+
 export default function RootLayout({ children }) {
   return (
     <html lang="en" className={`${sans.variable} ${mono.variable}`} suppressHydrationWarning>
       <head>
         <script dangerouslySetInnerHTML={{ __html: THEME_SCRIPT }} />
       </head>
-      <body>{children}</body>
+      <body>{ACCOUNTS ? <ClerkProvider>{children}</ClerkProvider> : children}</body>
     </html>
   );
 }

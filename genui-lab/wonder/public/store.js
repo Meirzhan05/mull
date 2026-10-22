@@ -181,7 +181,9 @@ export function createStore({ storage } = {}) {
     base = JSON.parse(e.newValue);
     for (const l of listeners) { try { l(data); } catch {} }
   };
-  if (picked.persistent && typeof globalThis.addEventListener === 'function') globalThis.addEventListener('storage', onStorage);
+  // only for the real localStorage: a passed-in storage (the signed-in account cache, tests) brings
+  // its own change feed, and must not pick up the signed-out state's storage events
+  if (!storage && picked.persistent && typeof globalThis.addEventListener === 'function') globalThis.addEventListener('storage', onStorage);
 
   return {
     persistent: picked.persistent,
