@@ -55,3 +55,17 @@
 /* Reminder setting */
 .reminder-controls { display: flex; align-items: center; gap: 12px; }
 .time-input { font: inherit; padding: 6px 10px; border: 1px solid var(--line-strong); border-radius: var(--radius-sm); background: var(--surface); color: var(--ink); }
+
+/* "My material" in the Today omnibox */
+.material-tools { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 0 4px; }
+.material-tools[hidden] { display: none; }
+.file-chip { display: inline-flex; align-items: center; gap: 6px; padding: 4px 6px 4px 10px; border-radius: 999px; background: var(--brand-subtle); font-size: 13px; font-weight: 600; max-width: 100%; }
+.file-chip[hidden] { display: none; }
+.file-chip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 220px; }
+.file-chip .icon-btn { width: 24px; height: 24px; }
+.material-tools .btn:last-child { margin-left: auto; }
+.material-tag { display: inline-flex; align-items: center; gap: 4px; min-width: 0; }
+.material-tag .icon { width: 14px; height: 14px; flex: 0 0 auto; }
+.materials-list { display: grid; gap: 8px; }
+.material-row { display: flex; align-items: center; gap: 12px; padding: 12px 14px; }
+.material-row .up-item-text { flex: 1; min-width: 0; }

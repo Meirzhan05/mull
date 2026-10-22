@@ -219,8 +219,10 @@ export const EXTRACT_SCHEMA = {
   },
 };
 
-export function lessonUserMessage({ topic, level, course, lessonTitle, lessonSummary, variant }) {
+export function lessonUserMessage({ topic, level, course, lessonTitle, lessonSummary, variant, material }) {
   const parts = [`Write a lesson about: ${topic}`];
+  // Phase 7: taught from the learner's own material (attached above as a document)
+  if (material?.title) parts.push(`Teach this from the attached material "${material.title}" (the learner's own notes or reading). Stay faithful to it: use its terms, examples and order, and cite it for the facts you take from it. Explain what it leaves implicit, but don't contradict it or add topics it doesn't cover.`);
   parts.push(`Learner level: ${level || 'beginner'}`);
   if (course?.title) parts.push(`This lesson is part of the course "${course.title}".`);
   if (lessonTitle) parts.push(`Lesson title: ${lessonTitle}`);

@@ -180,7 +180,7 @@ export function renderTeacher(ctx, threadId) {
         ctx.giveXp((Number(p.score) || 0) * XP.quizCorrect, `${p.score}/${p.total} on the quiz`);
         break;
       }
-      case 'open_url': if (/^https?:\/\//i.test(p.url || '')) window.open(p.url, '_blank', 'noopener,noreferrer'); break;
+      case 'open_url': if (/^https?:\/\//i.test(p.url || '') || /^\/api\/materials\/file\?id=mat-[0-9a-f]{12}(#page=\d+)?$/.test(p.url || '')) window.open(p.url, '_blank', 'noopener,noreferrer'); break;
       default:
     }
   }

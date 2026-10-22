@@ -51,23 +51,28 @@ let teardown = [];
 // ------------------------------------------------------------------ actions shared by screens
 
 /** Start a lesson on a topic (Today, palette, Library, suggestions). */
-function startLesson(topic, level = 'beginner') {
+function startLesson(topic, level = 'beginner', extra = {}) {
   const t = String(topic || '').trim();
   if (!t) return;
-  const id = createLesson({ topic: t, title: t, level });
+  const id = createLesson({ topic: t, title: t, level, ...extra });
   location.hash = `#/lesson/${id}`;
 }
 
+/** Phase 7: a lesson taught from the learner's own material (a stored material id). */
+function startMaterialLesson(material, level = 'beginner') {
+  startLesson(material.title, level, { materialId: material.id, materialTitle: material.title });
+}
+
 /** Plan a course with Claude, then open its map. Resolves false on failure. */
-async function planCourse(topic, level = 'beginner') {
+async function planCourse(topic, level = 'beginner', material = null) {
   const t = String(topic || '').trim();
   if (!t) return false;
   toast('Planning your course…', 6000);
   try {
-    const { plan } = await postJson('/api/course/plan', { topic: t, level });
+    const { plan } = await postJson('/api/course/plan', { topic: t, level, ...(material ? { materialId: material.id } : {}) });
     const id = uid('course');
     store.update((dd) => {
-      dd.courses.unshift({ id, title: plan.title, description: plan.description, level, topic: t, createdAt: new Date().toISOString(), sections: plan.sections.map((s) => ({ title: s.title, lessons: s.lessons.map((l) => ({ ...l, lessonId: null })) })) });
+      dd.courses.unshift({ id, title: plan.title, description: plan.description, level, topic: t, ...(material ? { materialId: material.id, materialTitle: material.title } : {}), createdAt: new Date().toISOString(), sections: plan.sections.map((s) => ({ title: s.title, lessons: s.lessons.map((l) => ({ ...l, lessonId: null })) })) });
       return dd;
     });
     location.hash = `#/course/${id}`;
@@ -104,7 +109,7 @@ function openCourseLesson(courseId, si, li) {
   if (!entry) return;
   let lessonId = entry.lessonId && store.data.lessons[entry.lessonId] ? entry.lessonId : null;
   if (!lessonId) {
-    lessonId = createLesson({ topic: entry.title, title: entry.title, level: course.level, courseId, sectionIndex: si, lessonIndex: li, lessonTitle: entry.title, lessonSummary: entry.summary, course: { title: course.title } });
+    lessonId = createLesson({ topic: entry.title, title: entry.title, level: course.level, courseId, sectionIndex: si, lessonIndex: li, lessonTitle: entry.title, lessonSummary: entry.summary, course: { title: course.title }, ...(course.materialId ? { materialId: course.materialId, materialTitle: course.materialTitle } : {}) });
     store.update((d) => { const c = d.courses.find((x) => x.id === courseId); c.sections[si].lessons[li].lessonId = lessonId; return d; });
   }
   location.hash = `#/lesson/${lessonId}`;
@@ -141,7 +146,7 @@ function exportPlan(planId) {
   toast(`Calendar file with ${plan.days?.length || 0} study sessions at ${time}`);
 }
 
-const actions = { startLesson, planCourse, askTeacher, openPlanItem, openCourseLesson, teacherCheckIn, exportPlan };
+const actions = { startLesson, startMaterialLesson, planCourse, askTeacher, openPlanItem, openCourseLesson, teacherCheckIn, exportPlan };
 
 // Phase 7: the daily reminder. While any Wonder tab is open, a notification fires once a day at
 // the learner's time if today's goal is not met, saying what the brief would put first. The
@@ -746,6 +751,7 @@ function renderLesson(lessonId) {
       r = await streamTurn('/api/lesson/stream', {
         topic: l.topic, level: l.level, lessonTitle: l.lessonTitle, lessonSummary: l.lessonSummary, course: l.course, memoryEnabled: memoryEnabled(),
         variant: l.variant, learnerInsights: memoryEnabled() ? insightsForPrompt(store.data) : [], // Phase 6
+        ...(l.materialId ? { materialId: l.materialId } : {}), // Phase 7
         ...(continueFrom ? { continueFrom } : {}),
       }, {
         signal: ac.signal,
@@ -850,7 +856,8 @@ function handleClientAction(a, { lessonId, openTutor, tutor }) {
       break;
     }
     case 'open_url':
-      if (/^https?:\/\//i.test(p.url || '')) window.open(p.url, '_blank', 'noopener,noreferrer');
+      // web sources, or a cited page of the learner's own material (Phase 7)
+      if (/^https?:\/\//i.test(p.url || '') || /^\/api\/materials\/file\?id=mat-[0-9a-f]{12}(#page=\d+)?$/.test(p.url || '')) window.open(p.url, '_blank', 'noopener,noreferrer');
       break;
     default:
   }

@@ -8,6 +8,36 @@ import { insightsPanel } from './insights-panel.js'; // Phase 6
 
 export const TEXT_SIZES = [['0.92', 'Small'], ['1', 'Default'], ['1.1', 'Large'], ['1.2', 'Larger']];
 
+/**
+ * Phase 7: the learner's materials (stored on the Wonder server, not in this browser): open the
+ * original, teach a new lesson from it, or delete it.
+ */
+function materialsPanel(ctx) {
+  const list = el('div', { class: 'materials-list' }, el('p', { class: 'muted small' }, 'Loading…'));
+  const size = (m) => (m.kind === 'pdf' ? `PDF · ${(m.bytes / 1048576).toFixed(1)} MB` : `Text · ${Math.max(1, Math.round(m.chars / 1000))}k characters`);
+  const draw = (items) => {
+    if (!items.length) { list.replaceChildren(el('p', { class: 'muted small' }, 'Nothing yet. On Today, choose “My material” to paste notes or attach a PDF; Wonder teaches from it and cites it.')); return; }
+    list.replaceChildren(...items.map((m) => el('div', { class: 'card material-row' },
+      el('span', { class: 'icon-tile' }, icon('file')),
+      el('span', { class: 'up-item-text' }, el('strong', null, m.title), el('span', { class: 'muted small' }, `${size(m)} · added ${new Date(m.createdAt).toLocaleDateString()}`)),
+      el('a', { class: 'btn btn-ghost btn-sm', href: `/api/materials/file?id=${m.id}`, target: '_blank', rel: 'noopener' }, 'Open'),
+      el('button', { class: 'btn btn-secondary btn-sm', type: 'button', onclick: () => ctx.actions?.startMaterialLesson?.(m) }, icon('play'), 'Lesson'),
+      el('button', { class: 'icon-btn', type: 'button', 'aria-label': `Delete ${m.title}`, onclick: async () => {
+        if (!confirm(`Delete “${m.title}” from the Wonder server? Lessons already written from it stay.`)) return;
+        try {
+          const r = await fetch(`/api/materials?id=${encodeURIComponent(m.id)}`, { method: 'DELETE' }).then((x) => x.json());
+          if (!r.ok) throw new Error(r.error);
+          draw(r.items || []);
+          toast('Material deleted');
+        } catch (e) { toast(e.message || 'Could not delete it'); }
+      } }, icon('trash')))));
+  };
+  fetch('/api/materials').then((r) => r.json()).then((r) => draw(r.items || [])).catch(() => list.replaceChildren(el('p', { class: 'muted small' }, 'Could not load your materials.')));
+  return el('section', { class: 'section', id: 'materials' },
+    el('div', { class: 'section-head' }, el('h2', { class: 'h-md' }, 'Your material'), el('span', { class: 'muted small' }, 'Stored on this Wonder server')),
+    list);
+}
+
 /** A row with a switch. */
 function switchSetting(title, note, on, onChange) {
   const sw = el('button', { class: 'switch', type: 'button', role: 'switch', 'aria-checked': String(on), 'aria-label': title }, el('span', { class: 'switch-knob' }));
@@ -133,6 +163,6 @@ export function renderYou(ctx) {
         el('div', { class: 'setting-text' }, el('strong', null, 'Stored in this browser'), el('p', { class: 'muted small' }, store.persistent ? 'Lessons, chats, cards and progress live in this browser’s local storage.' : 'Storage is blocked here, so progress lasts only until you close the tab.')),
         el('div', { style: { display: 'flex', gap: '8px', flexWrap: 'wrap' } }, exportBtn, resetBtn))));
 
-  app.replaceChildren(el('div', { class: 'you' }, head, stats, heat, insightsPanel(ctx), settingsCard, memoryPanel(ctx), dataCard));
+  app.replaceChildren(el('div', { class: 'you' }, head, stats, heat, insightsPanel(ctx), materialsPanel(ctx), settingsCard, memoryPanel(ctx), dataCard));
   if (location.hash === '#/memory') requestAnimationFrame(() => document.getElementById('memory')?.scrollIntoView({ block: 'start' }));
 }

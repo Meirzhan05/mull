@@ -9,12 +9,26 @@ import { pageCount } from './steering-core.js';
 import { lessonOutcome, outcomeLabel } from './outcomes-core.js'; // Phase 6
 import { planStatus, dayLabel, countdownLabel } from './plan-core.js'; // Phase 7
 import { dailyBrief } from './brief-core.js'; // Phase 7
+import { postJson } from './stream-client.js';
 
 const MODES = [
   { id: 'lesson', label: 'Lesson', icon: 'play', placeholder: 'What do you want to learn? e.g. How do vaccines work?', hint: 'A 5–10 minute interactive lesson' },
   { id: 'course', label: 'Course', icon: 'layers', placeholder: 'A bigger subject, e.g. Statistics from scratch', hint: 'A path of short lessons' },
   { id: 'teacher', label: 'Ask Teacher', icon: 'teacher', placeholder: 'e.g. Plan my week to learn the basics of Spanish', hint: 'Plans, quizzes and advice' },
+  { id: 'material', label: 'My material', icon: 'file', placeholder: 'Paste your notes, a chapter or a syllabus, or attach a .txt, .md or .pdf file', hint: 'Taught from your material, citing it' },
 ];
+const MATERIAL_ACCEPT = '.txt,.md,.markdown,.pdf,text/plain,text/markdown,application/pdf';
+
+/** Phase 7: read an attached file into a /api/materials body. */
+function readMaterialFile(file) {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    const pdf = /\.pdf$/i.test(file.name) || file.type === 'application/pdf';
+    r.onerror = () => reject(new Error('Could not read that file'));
+    r.onload = () => resolve(pdf ? { kind: 'pdf', base64: String(r.result).replace(/^data:[^,]*,/, ''), filename: file.name } : { kind: 'text', text: String(r.result), filename: file.name });
+    if (pdf) r.readAsDataURL(file); else r.readAsText(file);
+  });
+}
 
 /**
  * @param {{app: HTMLElement, store: object, status: object, actions: object}} ctx
@@ -62,6 +76,25 @@ export function renderToday(ctx) {
       for (const b of levelSeg.children) b.setAttribute('aria-checked', String(b === e.currentTarget));
     } }, lv[0].toUpperCase() + lv.slice(1))));
   const hint = el('span', { class: 'omni-hint' });
+  // -- Phase 7: "My material": paste text or attach a file, then a lesson (Enter) or a course
+  let file = null;
+  const fileInput = el('input', { type: 'file', accept: MATERIAL_ACCEPT, hidden: true });
+  const fileChip = el('span', { class: 'file-chip', hidden: true });
+  const fileBtn = el('button', { class: 'btn btn-ghost btn-sm', type: 'button', onclick: () => fileInput.click() }, icon('file'), 'Attach file');
+  const courseBtn = el('button', { class: 'btn btn-secondary btn-sm', type: 'button', onclick: () => submit('course') }, icon('layers'), 'Make a course');
+  const materialTools = el('div', { class: 'material-tools', hidden: true }, fileBtn, fileChip, courseBtn);
+  fileInput.addEventListener('change', () => {
+    file = fileInput.files?.[0] || null;
+    fileInput.value = '';
+    fileChip.hidden = !file;
+    fileChip.replaceChildren(...(file ? [icon('file'), el('span', null, file.name), el('button', { class: 'icon-btn', type: 'button', 'aria-label': 'Remove file', onclick: () => { file = null; fileChip.hidden = true; } }, icon('x'))] : []));
+  });
+  async function uploadMaterial() {
+    const body = file ? await readMaterialFile(file) : { kind: 'text', text: input.value };
+    const r = await postJson('/api/materials', body);
+    if (!r.ok) throw new Error(r.error || 'Could not add that material');
+    return r.item;
+  }
   const tabs = el('div', { class: 'omni-tabs', role: 'tablist', 'aria-label': 'What to start' }, ...MODES.map((m) => el('button', {
     class: 'omni-tab', type: 'button', role: 'tab', 'aria-selected': String(m.id === mode), dataset: { mode: m.id },
     onclick: () => { setMode(m.id); input.focus(); },
@@ -73,12 +106,34 @@ export function renderToday(ctx) {
     input.placeholder = def.placeholder;
     hint.replaceChildren(icon(def.icon), def.hint);
     levelSeg.hidden = m === 'teacher';
+    materialTools.hidden = m !== 'material';
+    input.maxLength = m === 'material' ? 200000 : 300;
+    input.rows = m === 'material' ? 3 : 1;
   }
   setMode('lesson');
   const autosize = () => { input.style.height = 'auto'; input.style.height = `${Math.min(180, input.scrollHeight)}px`; };
   input.addEventListener('input', autosize);
-  async function submit() {
+  async function submit(as = 'lesson') {
     const t = input.value.trim();
+    if (mode === 'material') {
+      if (!t && !file) { input.focus(); toast('Paste some material or attach a file first'); return; }
+      sendBtn.disabled = true;
+      courseBtn.disabled = true;
+      sendBtn.classList.add('loading');
+      hint.replaceChildren(el('span', { class: 'reasoning-dot', 'aria-hidden': 'true' }), as === 'course' ? 'Reading your material and planning a course…' : 'Reading your material…');
+      try {
+        const item = await uploadMaterial();
+        if (as === 'course') { if (!(await actions.planCourse(item.title, level, item))) throw new Error('Could not plan the course'); }
+        else actions.startMaterialLesson(item, level);
+      } catch (e) {
+        toast(e.message || 'Could not add that material');
+        sendBtn.disabled = false;
+        courseBtn.disabled = false;
+        sendBtn.classList.remove('loading');
+        setMode('material');
+      }
+      return;
+    }
     if (!t) { input.focus(); toast(mode === 'teacher' ? 'Type a message first' : 'Type a topic first'); return; }
     if (mode === 'lesson') actions.startLesson(t, level);
     else if (mode === 'teacher') actions.askTeacher(t);
@@ -90,10 +145,11 @@ export function renderToday(ctx) {
       if (!ok) { sendBtn.disabled = false; sendBtn.classList.remove('loading'); setMode('course'); }
     }
   }
-  input.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submit(); } });
+  input.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey && mode !== 'material') { e.preventDefault(); submit(); } });
   const omni = el('form', { class: 'card omni', onsubmit: (e) => { e.preventDefault(); submit(); } },
     tabs,
     el('div', { class: 'omni-field' }, input, sendBtn),
+    materialTools, fileInput,
     el('div', { class: 'omni-foot' }, hint, levelSeg));
   const suggestions = el('div', { class: 'suggest-row', 'aria-label': 'Suggested topics' },
     el('span', { class: 'h-sm' }, settings.interests?.length ? 'For you' : 'Try'),
@@ -230,7 +286,7 @@ export function lessonTile(l, data) {
     el('span', { class: `tag ${state[0]}` }, icon(state[1]), state[2]),
     el('span', { class: 'lesson-tile-title' }, l.title || l.topic),
     el('span', { class: 'lesson-tile-meta' },
-      course ? el('span', null, course.title) : el('span', null, (l.level || 'beginner').replace(/^./, (c) => c.toUpperCase())),
+      course ? el('span', null, course.title) : l.materialTitle ? el('span', { class: 'material-tag', title: 'Taught from your material' }, icon('file'), l.materialTitle) : el('span', null, (l.level || 'beginner').replace(/^./, (c) => c.toUpperCase())),
       l.quizScore?.total ? el('span', null, `· Quiz ${l.quizScore.score}/${l.quizScore.total}`) : null,
       l.finished ? recallTag(lessonOutcome(data, l.id)) : null,
       el('span', { style: { marginLeft: 'auto' } }, relTime(l.updatedAt))));

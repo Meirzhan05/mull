@@ -21,6 +21,7 @@ import {
   MODEL, detectMode, createClaudeClient, buildStreamParams, buildStructuredParams, streamText, createStructured,
   isCredentialError, friendlyError, REFUSAL_MESSAGE,
 } from './claude.js';
+import { createMaterialStore, DEFAULT_MATERIALS_DIR, MATERIAL_BODY_LIMIT, documentBlock, materialCitation, demoMaterialLesson, demoMaterialCourse } from './materials.js'; // Phase 7
 import { TEACHER_OPENER } from '../public/teacher-core.js'; // Phase 7
 import { LESSON_SYSTEM_PROMPT, TUTOR_SYSTEM_PROMPT, TEACHER_SYSTEM_PROMPT, COURSE_SYSTEM_PROMPT, COURSE_PLAN_SCHEMA, lessonUserMessage, tutorLessonContext, joinContext, insightsContext } from './prompts.js';
 import { pickDemoLesson, streamDemoText, buildDemoTutorReply, demoCoursePlan } from './demo.js';
@@ -84,13 +85,13 @@ function sendJson(res, status, body) {
   res.end(data);
 }
 
-function readJson(req) {
+function readJson(req, limit = MAX_BODY) {
   return new Promise((resolve, reject) => {
     let size = 0;
     const chunks = [];
     req.on('data', (c) => {
       size += c.length;
-      if (size > MAX_BODY) { reject(Object.assign(new Error('Request body too large'), { status: 413 })); req.destroy(); return; }
+      if (size > limit) { reject(Object.assign(new Error('Request body too large'), { status: 413 })); req.destroy(); return; }
       chunks.push(c);
     });
     req.on('end', () => {
@@ -155,6 +156,16 @@ export function createWonderServer(opts = {}) {
   const recordDir = opts.recordDir ?? env.WONDER_RECORD_DIR ?? null;
   const memoryContext = (body, { withIds = false } = {}) => (body?.memoryEnabled === false ? '' : memory.promptBlock({ withIds }));
   const steering = createSteeringRegistry(); // Phase 4: in-flight lesson operations
+  // Phase 7: the learner's own material. Tests that keep memory in-process (memoryFile: null)
+  // keep materials in-process too unless they pass materialsDir.
+  const materials = opts.materials ?? createMaterialStore({ dir: 'materialsDir' in opts ? opts.materialsDir : opts.memoryFile === null ? null : (env.WONDER_MATERIALS_DIR || DEFAULT_MATERIALS_DIR) });
+  /** {meta, data} for a client-sent material id, or null. */
+  const loadMaterial = (id) => {
+    if (id == null || id === '') return null;
+    const meta = materials.meta(id);
+    const data = meta ? materials.read(id) : null;
+    return meta && data != null ? { meta, data } : { missing: true };
+  };
 
   function switchToDemo(reason) {
     state.mode = 'demo';
@@ -202,10 +213,11 @@ export function createWonderServer(opts = {}) {
   }
 
   // ---- Phase 3: web search with citations -> Cite pills + Sources (server/grounding.js)
-  function groundedStream(writer, sources) {
+  function groundedStream(writer, sources, mapCitation) {
     return (p, o) => streamGrounded(state.client, p, {
       ...o,
       registry: sources,
+      mapCitation,
       onSearch: (q) => writer.reasoning(q ? `Searching the web: “${String(q).slice(0, 80)}”` : 'Searching the web…', { icon: 'globe' }),
       onSearchError: (code) => { logger.warn?.(`[wonder] web search error: ${code}`); writer.reasoning('Search is unavailable, writing from what I know…'); },
     });
@@ -237,7 +249,12 @@ export function createWonderServer(opts = {}) {
     const cont = normalizeContinueFrom(body.continueFrom);
     if (cont?.error) return sendJson(res, cont.status, { ok: false, error: cont.error });
     const level = ['beginner', 'intermediate', 'advanced'].includes(body.level) ? body.level : 'beginner';
-    const useWebSearch = body.useWebSearch !== false; // Phase 3: on by default for lessons
+    const material = loadMaterial(body.materialId); // Phase 7
+    if (material?.missing) return sendJson(res, 404, { ok: false, error: 'That material is no longer stored on this server. Add it again from Today.' });
+    // Phase 3: web search on by default for lessons; a lesson taught from the learner's own
+    // material stays faithful to it unless search is asked for explicitly
+    const useWebSearch = material ? body.useWebSearch === true : body.useWebSearch !== false;
+    const userTurn = (text) => (material ? [documentBlock(material.meta, material.data), { type: 'text', text }] : text);
     // a continuation seeds the kept pages' sources and numbers new refs after theirs
     const sources = cont ? createContinuationSources({ turnIndex: 0, kept: cont.kept, seed: cont.sources }) : createSourceRegistry({ turnIndex: 0 });
     const { writer, signal } = startNdjson(req, res, { record: 'lesson', appDataFor: citationAppData(sources), ...(cont?.messageId ? { messageId: cont.messageId } : {}) });
@@ -260,7 +277,7 @@ export function createWonderServer(opts = {}) {
     let result = { status: 'demo' };
     try {
       if (state.mode === 'claude') {
-        const request = lessonUserMessage({ topic, level, course: body.course, lessonTitle: clean(body.lessonTitle, 200), lessonSummary: clean(body.lessonSummary, 400), variant: body.variant });
+        const request = lessonUserMessage({ topic, level, course: body.course, lessonTitle: clean(body.lessonTitle, 200), lessonSummary: clean(body.lessonSummary, 400), variant: body.variant, material: material?.meta });
         const learner = memoryContext(body);
         if (learner) logger.info?.(`[wonder] lesson request personalized with ${Math.min(memory.size, 15)} memory items`);
         const context = joinContext(
@@ -268,24 +285,27 @@ export function createWonderServer(opts = {}) {
           body.memoryEnabled !== false ? insightsContext(body.learnerInsights) : '', // Phase 6
         );
         let messages = cont
-          ? [{ role: 'user', content: steeringUserContent(request, cont.kept, cont.instruction, { mode: cont.mode, fromPage: cont.fromPage }) }]
-          : [{ role: 'user', content: request }];
+          ? [{ role: 'user', content: userTurn(steeringUserContent(request, cont.kept, cont.instruction, { mode: cont.mode, fromPage: cont.fromPage })) }]
+          : [{ role: 'user', content: userTurn(request) }];
         for (;;) {
           const params = withWebSearch(buildStreamParams({ system: LESSON_SYSTEM_PROMPT, context, messages, effort: 'medium' }), useWebSearch);
-          result = await runClaude(writer, params, onText, op.attempt(), useWebSearch ? groundedStream(writer, sources) : undefined);
+          const grounded = useWebSearch || material ? groundedStream(writer, sources, material ? materialCitation([material.meta]) : undefined) : undefined;
+          result = await runClaude(writer, params, onText, op.attempt(), grounded);
           if (result.status === 'done') endAttempt();
           if (result.status !== 'aborted' && result.status !== 'done') break;
           const instruction = nextSteer();
           if (!instruction) break;
           guard = null;
           const kept = applySteer(writer, instruction);
-          messages = [{ role: 'user', content: steeringUserContent(request, kept, instruction) }];
+          messages = [{ role: 'user', content: userTurn(steeringUserContent(request, kept, instruction)) }];
         }
       }
       if (result.status === 'demo') {
-        const pick = pickDemoLesson(body.lessonTitle || topic);
-        if (!pick.matched) writer.reasoning(`Demo mode: no sample for "${topic}", showing "${pick.title}"`);
-        const ground = (md) => (useWebSearch ? groundDemoLesson(pick.id, md, sources) : md);
+        let pick = pickDemoLesson(body.lessonTitle || topic);
+        if (material?.meta.kind === 'text') pick = { id: null, title: material.meta.title, matched: true, markdown: demoMaterialLesson(material.meta, material.data) };
+        else if (material) writer.reasoning('Demo mode cannot read PDFs. Showing a sample lesson instead…');
+        else if (!pick.matched) writer.reasoning(`Demo mode: no sample for "${topic}", showing "${pick.title}"`);
+        const ground = (md) => (useWebSearch && pick.id ? groundDemoLesson(pick.id, md, sources) : md);
         let text;
         let kept = '';
         if (cont) {
@@ -359,9 +379,16 @@ export function createWonderServer(opts = {}) {
     const topic = clean(body.topic, 300);
     if (!topic) return sendJson(res, 400, { ok: false, error: 'topic is required' });
     const level = ['beginner', 'intermediate', 'advanced'].includes(body.level) ? body.level : 'beginner';
+    const material = loadMaterial(body.materialId); // Phase 7: a course that follows the learner's material
+    if (material?.missing) return sendJson(res, 404, { ok: false, error: 'That material is no longer stored on this server.' });
     if (state.mode === 'claude') {
       try {
-        const plan = await createStructured(state.client, buildStructuredParams({ system: COURSE_SYSTEM_PROMPT, schema: COURSE_PLAN_SCHEMA, user: `Topic: ${topic}\nLevel: ${level}`, effort: 'low' }));
+        const params = buildStructuredParams({ system: COURSE_SYSTEM_PROMPT, schema: COURSE_PLAN_SCHEMA, user: `Topic: ${topic}\nLevel: ${level}`, effort: 'low' });
+        if (material) {
+          // structured output: the document goes in without citations (they don't combine)
+          params.messages = [{ role: 'user', content: [documentBlock(material.meta, material.data, { citations: false }), { type: 'text', text: `Plan a course that teaches the attached material "${material.meta.title}", following its structure and order. Each lesson covers one part of it; lesson summaries name what the learner will be able to explain from that part.\nLevel: ${level}` }] }];
+        }
+        const plan = await createStructured(state.client, params);
         const sections = (plan.sections || []).map((s) => ({ title: clean(s.title, 120), lessons: (s.lessons || []).map((l) => ({ title: clean(l.title, 160), summary: clean(l.summary, 300) })).filter((l) => l.title).slice(0, 4) })).filter((s) => s.title && s.lessons.length).slice(0, 4);
         if (!sections.length) throw new Error('empty plan');
         return sendJson(res, 200, { ok: true, plan: { title: clean(plan.title, 120) || topic, description: clean(plan.description, 400), level, sections } });
@@ -375,7 +402,7 @@ export function createWonderServer(opts = {}) {
         }
       }
     }
-    return sendJson(res, 200, { ok: true, plan: demoCoursePlan(topic, level) });
+    return sendJson(res, 200, { ok: true, plan: material?.meta.kind === 'text' ? demoMaterialCourse(material.meta, material.data, level) : demoCoursePlan(topic, level) });
   }
 
   async function practiceExtract(req, res, body) {
@@ -505,6 +532,28 @@ export function createWonderServer(opts = {}) {
     'POST /api/memory': memoryAdd,
     'DELETE /api/memory': memoryDelete,
     'POST /api/memory/extract': memoryExtract,
+    'GET /api/materials': async (req, res) => sendJson(res, 200, { ok: true, items: materials.list() }),
+    'POST /api/materials': async (req, res, body) => { // Phase 7
+      const r = materials.add({ title: body.title, kind: body.kind, text: body.text, base64: body.base64, filename: body.filename });
+      if (!r.ok) return sendJson(res, 400, r);
+      logger.info?.(`[wonder] material added: ${r.item.kind}, ${r.item.chars ?? r.item.bytes} ${r.item.kind === 'pdf' ? 'bytes' : 'chars'}`);
+      sendJson(res, 200, { ok: true, item: r.item, items: materials.list() });
+    },
+    'DELETE /api/materials': async (req, res, body) => {
+      const id = new URL(req.url, 'http://localhost').searchParams.get('id') || body.id;
+      const meta = materials.remove(id);
+      if (!meta) return sendJson(res, 404, { ok: false, error: 'No such material' });
+      sendJson(res, 200, { ok: true, removed: meta, items: materials.list() });
+    },
+    'GET /api/materials/file': async (req, res) => {
+      const id = new URL(req.url, 'http://localhost').searchParams.get('id');
+      const meta = materials.meta(id);
+      const data = meta ? materials.read(id) : null;
+      if (data == null) return sendJson(res, 404, { ok: false, error: 'No such material' });
+      const buf = Buffer.isBuffer(data) ? data : Buffer.from(data, 'utf8');
+      res.writeHead(200, { 'Content-Type': meta.kind === 'pdf' ? 'application/pdf' : 'text/plain; charset=utf-8', 'Content-Length': buf.length, 'Content-Disposition': 'inline', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' });
+      res.end(buf);
+    },
     'POST /api/widget_action': async (req, res, body) => { const r = widgetAction(body); sendJson(res, r.status, r.body); },
   };
 
@@ -516,7 +565,7 @@ export function createWonderServer(opts = {}) {
       }
       const route = routes[`${req.method} ${url.pathname}`];
       if (route) {
-        const body = req.method === 'GET' ? {} : await readJson(req);
+        const body = req.method === 'GET' ? {} : await readJson(req, url.pathname === '/api/materials' ? MATERIAL_BODY_LIMIT : MAX_BODY);
         return await route(req, res, body);
       }
       if (url.pathname.startsWith('/api/')) return sendJson(res, 404, { ok: false, error: 'Not found' });
