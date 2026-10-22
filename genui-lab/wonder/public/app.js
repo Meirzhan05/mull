@@ -8,6 +8,7 @@ import { streamTurn, postJson } from './stream-client.js';
 import { addItems, deckStats, awardXp, formatDue, XP } from './deck.js';
 import { normalizePracticeItem } from './practice-core.js';
 import { renderReview } from './review.js';
+import { renderCourseReview, courseReviewButton } from './course-review-screen.js'; // whole-course review
 import { el, icon, toast, inlineMd, lessonTitleFrom } from './ui.js';
 import { observeMath } from './math.js';
 import { renderTeacher, queueTeacherMessage, queueTeacherOpener } from './teacher-screen.js';
@@ -280,8 +281,10 @@ function renderCourse(courseId) {
           el('span', { class: 'ledger-label' }, 'Progress'),
           el('span', { class: 'ledger-value' }, String(p.done), el('small', null, ` of ${p.total} lessons`)),
           el('span', { class: 'ledger-bar', 'aria-hidden': 'true' }, el('i', { style: { width: `${Math.round(pct * 100)}%` } })))),
-      firstOpen ? el('div', null, el('button', { class: 'btn btn-lg', type: 'button', onclick: () => openCourseLesson(courseId, firstOpen.si, firstOpen.li) }, icon('play'), p.done ? `Continue: ${firstOpen.title}` : 'Start the course'))
-        : el('p', { class: 'byline' }, 'Every lesson in this course is finished.')),
+      el('div', { class: 'course-actions' },
+        firstOpen ? el('button', { class: 'btn btn-lg', type: 'button', onclick: () => openCourseLesson(courseId, firstOpen.si, firstOpen.li) }, icon('play'), p.done ? `Continue: ${firstOpen.title}` : 'Start the course')
+          : el('p', { class: 'byline' }, 'Every lesson in this course is finished.'),
+        courseReviewButton(store, course))),
     ...course.sections.map((s, si) => el('section', { class: 'path-section' },
       el('h2', { class: 'rubric path-title' }, `Part ${roman(si + 1)} · ${s.title}`),
       el('ol', { class: 'path' }, ...s.lessons.map((l, li) => {
@@ -1208,6 +1211,7 @@ function route() {
   else if ((m = /^#\/course\/([\w-]+)$/.exec(h))) { screen = 'course'; document.body.dataset.screen = screen; renderCourse(m[1]); }
   else if (h === '#/review') { screen = 'review'; document.body.dataset.screen = screen; renderReviewScreen(); }
   else if ((m = /^#\/review\/lesson\/([\w-]+)$/.exec(h))) { screen = 'review'; document.body.dataset.screen = screen; renderReviewScreen(m[1]); }
+  else if ((m = /^#\/review\/course\/([\w-]+)$/.exec(h))) { screen = 'review'; document.body.dataset.screen = screen; renderCourseReview(screenCtx(), m[1]); }
   else if ((m = /^#\/teacher(?:\/([\w-]+))?$/.exec(h))) { screen = 'teacher'; document.body.dataset.screen = screen; renderTeacher(screenCtx(), m[1] || null); }
   else if (h === '#/library') { screen = 'library'; document.body.dataset.screen = screen; renderLibrary(screenCtx()); }
   else if (h === '#/you' || h === '#/memory' || h === '#/mastery') { screen = 'you'; document.body.dataset.screen = screen; renderYou(screenCtx()); }
