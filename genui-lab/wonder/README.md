@@ -86,17 +86,19 @@ All of this lives in `server/claude.js`. The client is dependency-injected, so t
 | Endpoint | Response |
 |---|---|
 | `GET /api/status` | `{mode, model}` |
-| `POST /api/lesson/stream {topic, level?, lessonTitle?, lessonSummary?, course?, continueFrom?}` | NDJSON lesson. `continueFrom: {markdown, instruction?, fromPage?, messageId?, sources?}` resumes or revises a persisted lesson (Phase 4) |
+| `POST /api/lesson/stream {topic, level?, lessonTitle?, lessonSummary?, course?, continueFrom?, variant?, learnerInsights?, materialId?}` | NDJSON lesson. `continueFrom: {markdown, instruction?, fromPage?, messageId?, sources?}` resumes or revises a persisted lesson (Phase 4). `variant` is the teaching style and `learnerInsights` holds the measured findings (Phase 6). `materialId` teaches from the learner's material (Phase 7) |
 | `POST /api/lesson/steer {operationId, instruction}` | JSON `{ok, status: accepted\|rejected}`; the result streams on the lesson's own NDJSON (Phase 4) |
 | `POST /api/tutor/stream {lessonContext:{title, markdown}, history, message}` | NDJSON reply; the final content record carries `followupPrompts` |
-| `POST /api/course/plan {topic, level}` | JSON `{plan:{title, description, sections:[{title, lessons:[{title, summary}]}]}}`; the client renders it as a course path |
+| `POST /api/course/plan {topic, level, materialId?}` | JSON `{plan:{title, description, sections:[{title, lessons:[{title, summary}]}]}}`; the client renders it as a course path |
 | `POST /api/widget_action {componentName, action_type, payload, resolutionId}` | JSON `{componentResults?, issueTurn?, result?}` |
 | `POST /api/practice/extract {lessonMarkdown}` | JSON `{cards:[{term, definition, example}], items:[…]}` |
-| `POST /api/teacher/stream {threadId, history, message, progress, memoryEnabled}` | NDJSON Teacher turn. Cards live in the final `dil.appData.opGenui.componentResults`; `followupPrompts` on the final record |
+| `POST /api/teacher/stream {threadId, history, message \| opener:true, progress, memoryEnabled}` | NDJSON Teacher turn. `opener: true` is a check-in: the server sends its own fixed turn (Phase 7). Cards live in the final `dil.appData.opGenui.componentResults`; `followupPrompts` on the final record |
 | `GET /api/memory` | `{items:[{id, fact, kind, source, createdAt}]}` (newest first) |
 | `POST /api/memory {fact, kind}` | Adds a user fact (de-duplicated) |
 | `DELETE /api/memory?id=…` or `DELETE /api/memory {all:true}` | Removes one item, or forgets everything |
 | `POST /api/memory/extract {lessonTitle, quizResults, tutorThread, memoryEnabled}` | `{added:[…], source}`: 0–3 new facts from a finished lesson |
+| `GET /api/materials` · `POST /api/materials {kind: text\|pdf, text \| base64, title?, filename?}` · `DELETE /api/materials?id=` | The learner's materials (Phase 7). Stored in `data/materials/` |
+| `GET /api/materials/file?id=` | The original material (text or PDF) that Cite pills open |
 
 `memoryEnabled: false` on lesson, tutor, Teacher and extraction requests leaves memory out of the prompt (and the Teacher's `remember`/`forget` return an error result instead of writing).
 
@@ -487,3 +489,62 @@ Known gaps:
 - A continuation drops widget state (such as quiz answers) for the rewritten pages, and a steer that lands after the last page has been written only rewrites the last page.
 - Widget state (graph sliders, stepper step, flashcards, …) is saved per lesson and message; see "Widget state persistence". The sandbox worker reports every change immediately and the store flushes synchronously on `pagehide`, so a change made just before a hard reload is kept. "Reset interactive widgets" also clears server-graded quiz answers (`quiz_restart` for each graded quiz) and the widgets in tutor replies.
 - **Search latency is tuned.** Claude writes the title and hook before searching and makes 1–2 focused searches (`max_uses: 3`). On the same JWST topic, live: first text went from 34.2 s to 1.6 s and the whole lesson from 59.5 s to 44.1 s, with 9 sources still cited. Every stream has an idle watchdog (`WONDER_STREAM_IDLE_MS`, default 120 s), so a stalled connection fails fast as a resumable `stalled`/`network` error instead of hanging. After a search, an exact repeat of an already-written paragraph (e.g. the hook) is dropped.
+
+## Phase 6: did each lesson work?
+
+A lesson's quiz says what the learner knew a minute after reading it. Wonder also measures what they still know days later, from the review deck it already keeps. Everything is in `public/outcomes-core.js`, which is pure and shared with the server.
+
+- **Delayed recall.** Each review of a lesson's card that comes at least a day after the previous one is a recall test. Hard counts as recalled. Results are grouped into 1–3, 4–13 and 14+ day gaps.
+  - A result is shown only at *n* ≥ 3.
+  - Until then, the FSRS estimate of memory today stands in.
+  - Cards missed on two delayed reviews are *leeches*.
+- **Teaching-style experiment.** New lessons rotate between `standard`, `example-first` and `predict-first`.
+  - The style is one line in the lesson **user** turn, so the cached system prompt never changes.
+  - Assignment is balanced: the style with the least data goes next.
+  - Once every style has ≥ 3 measured lessons and ≥ 5 delayed reviews, the best one is used 2/3 of the time.
+  - It can be turned off on You.
+- **"What works for you."** Recall by style and by visual, with sample sizes.
+  - A finding needs ≥ 2 lessons and ≥ 8 delayed reviews on each side, and a 10-point gap.
+  - Findings go into the lesson request as `learnerInsights`. The server bounds them and places them after the cache breakpoint, and leaves them out when memory is off.
+- **Where outcomes show up.**
+  - "How well it stuck" on a finished lesson.
+  - Recall tags on lesson tiles.
+  - "Fading lessons" with **Refresh** (`#/review/lesson/<id>`: that lesson's cards, weakest first) and **Relearn** (the same topic in the best-measured other style).
+  - The Teacher's `get_progress`, which includes per-lesson recall, fading lessons with their slipping cards, and findings.
+
+## Phase 7: a proactive Teacher, and lessons from your own material
+
+- **Dated plans.**
+  - `plan_study` takes a `deadline` (`YYYY-MM-DD` or `""`) and dates every day from the learner's today.
+  - A plan that runs past the deadline goes back to Claude as an error that says how many days fit.
+  - `public/plan-core.js` works out today's item, overdue items, pace (ahead, on track, behind) and the countdown. Today and "Up next" follow the calendar.
+- **Daily brief.**
+  - `public/brief-core.js` ranks overdue plan work, due cards, today's plan item and the worst-fading lesson. It reads local state only, with no model call.
+  - It appears on Today as "Your Teacher's brief" and is the text of the daily reminder.
+- **The Teacher speaks first.** A check-in turn (`opener: true`) has the Teacher read progress and propose the best next step as a card. The server substitutes its own fixed `TEACHER_OPENER` text. It runs from "Talk it through" on the brief, and once a day on opening the Teacher (a setting on You).
+- **Reminders.**
+  - A daily notification at a chosen time while a Wonder tab is open, if the goal isn't met.
+  - "Add to calendar" exports the plan as `.ics` (`public/ics.js`, RFC 5545 escaping and folding) with an alarm per study day and the deadline, so reminders work with Wonder closed.
+- **Your own material.**
+  - On Today, choose "My material": paste notes or attach .txt/.md/.pdf, then make a lesson or a course. `server/materials.js` stores it.
+  - Claude gets it as a cached `document` block with citations on.
+  - `char_location` and `page_location` citations are mapped onto the same source registry as web results. They become Cite pills and Sources ("Your material", "…, p. 4") that open the original.
+  - Material lessons don't search the web unless asked to.
+  - In demo mode, text material becomes an outline lesson and a course by its headings.
+
+## Phase 6-7 tests and live verification
+
+- **Tests.** `test/outcomes.test.js`, `test/proactive.test.js` and `test/materials.test.js` cover:
+  - recall buckets, thresholds, leeches and forecast memory, built from real FSRS review sequences;
+  - balanced assignment and exploitation of teaching styles;
+  - the variant line and insights placement in the request;
+  - plan date math, pace and backward-planning bounds, plus the tool's error feedback;
+  - brief ranking and reminder timing;
+  - ICS output;
+  - Teacher check-ins, with a fake client and in demo;
+  - the materials store (limits, path-safe ids, persistence);
+  - document blocks, and citation mapping through a fake client that streams `citations_delta`;
+  - course plans from material, and the demo outline.
+- **Live.**
+  - **Teacher check-in.** On seeded review history it proposed relearning the worst-recalled lesson "starting from concrete examples", the best-measured style.
+  - **Lesson from lecture notes.** It used the class's own coffee-shop example and carried 11 Cite pills. "Sources" opened the original notes.

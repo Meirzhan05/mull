@@ -88,7 +88,7 @@ What each product does that Wonder doesn't yet, ranked by how much each item wou
 
 Phases 1–5 make generation better, but a frontier chat app can also write an interactive lesson on request. What it can't do is check, days later, whether the learner remembered it. It also doesn't act between conversations, and it doesn't know the learner's own course material. Phases 6 and 7 build on what only Wonder has: the review logs, the deck, the plans and the deadlines.
 
-### Phase 6: Did each lesson work? (lesson outcomes) 
+### Phase 6: Did each lesson work? (lesson outcomes) ✅
 
 Every lesson gets measured. Recall a few days later counts as the result, not the quiz score at the end. Those measurements then feed back into how the next lesson is written.
 
@@ -96,9 +96,9 @@ Every lesson gets measured. Recall a few days later counts as the result, not th
   - **Right after the lesson:** the in-lesson quiz score (`quizScore`), as now.
   - **Delayed recall:** for each lesson's cards, the reviews that came at least 1 day after the previous review of that card (`elapsed_days ≥ 1`, so same-session learning steps don't count). A review counts as recalled at rating ≥ Hard. Results go into delay buckets of 1–3, 4–13 and 14+ days. Each result carries its sample size *n*. It is only shown at *n* ≥ 3 and is labelled `low`, `ok` or `good` by *n*.
   - **Estimated memory today:** the mean FSRS retrievability `R = forgettingCurve(daysSinceLastReview, stability)` over the lesson's reviewed cards. It's available after a single review, so a lesson has a number before it has delayed reviews.
-  - **Leeches:** cards with ≥ 2 lapses (*Again* after leaving New). They point at the exact idea that didn't stick.
+  - **Leeches:** cards missed (*Again*) on ≥ 2 delayed reviews, or lapsed twice by FSRS. The log is needed because FSRS only counts a lapse from Review state, so repeated misses during relearning never reach `lapses ≥ 2`. Leeches point at the exact idea that didn't stick.
   - **Lesson outcome:** `{quiz, recall, buckets, memoryToday, cards, reviewed, leeches, verdict}`. `verdict` is `stuck`, `fading`, `weak` or `unknown`. It is based on recall when *n* is large enough, otherwise on memoryToday.
-- **Lesson recipe.** When a lesson finishes, the client records what was in it: `recipe = {variant, components[], pages, level, grounded, steers, tutorQuestions}`. `components` are the catalog tags found in the markdown.
+- **Lesson recipe.** `lessonRecipe(lesson)` reads what went into a lesson from its stored markdown: `{variant, components[], pages, level, grounded, material, tutorQuestions}`. `components` are the catalog tags found in the markdown. It's computed, not recorded, so lessons written before Phase 6 count too.
 - **Teaching-style experiment.** Each new lesson is assigned a *style variant*. The variant is a one-line instruction appended to the lesson **user** message, which keeps the system prompt cache unchanged:
   - `standard`: no extra instruction.
   - `example-first`: each page opens with a concrete example before the general idea.
@@ -106,49 +106,54 @@ Every lesson gets measured. Recall a few days later counts as the result, not th
   - **Assignment is balanced, not random.** Whichever arm has the least data goes next, which matters at single-learner sample sizes. Once every arm has ≥ 3 lessons with ≥ 5 delayed reviews, the best-recall arm is used 2/3 of the time and the rest is spent exploring.
   - A setting (`settings.styleExperiment`, on by default) turns it off, in which case every lesson is `standard`.
   - The variant is stored on the lesson. Steered and resumed lessons keep it.
-- **Closing the loop.** `whatWorks(data)` summarizes recall by variant and by component. It reports a component only when lessons with it and lessons without it each have ≥ 8 delayed reviews and the gap is ≥ 10 points.
+- **Closing the loop.** `whatWorks(data)` summarizes recall by variant and by component. It reports a finding only when each side has ≥ 2 lessons and ≥ 8 delayed reviews and the gap is ≥ 10 points. One lesson is an anecdote, not a pattern. These are correlations within one learner's lessons.
   - The client sends the result as `learnerInsights` with the lesson request. The server bounds it as untrusted input and adds it to the per-request context block after the cache breakpoint. An example: "Lessons with a worked example (LessonStepper) were remembered better: 86% vs 64% over 31 reviews."
   - The Teacher's `get_progress` now includes each lesson's outcome, the weakest lessons, leech prompts and `whatWorks`. With these it can propose a refresher grounded in what actually faded.
 - **UI.**
-  - **Lesson end panel:** a "How well it stuck" row showing the quiz now, recall after N days with *n*, and memory today. Leeches link to a review.
+  - **Lesson end panel:** a "How well it stuck" row showing the quiz now, recall after N days with *n*, memory today and the teaching style. A fading lesson gets "Refresh this lesson's cards", which goes to `#/review/lesson/<id>`: that lesson's cards, due or not, weakest memory first.
   - **You → "What works for you":** recall by teaching style and by visual, each with *n* and an honest "not enough data yet" state. Below that, "Fading lessons" with **Refresh** (review those cards now) and **Relearn** (a new lesson on the same topic in a different style).
   - **Library tiles:** a small retention tag such as "92% recall".
 - **Tests.** Outcome math with synthetic logs (buckets, thresholds, leeches, retrievability), balanced variant assignment and exploitation, the `whatWorks` thresholds, server bounding of `learnerInsights`, and the variant line in the lesson message.
 
-### Phase 7: A proactive Teacher plus your own material 
+### Phase 7: A proactive Teacher plus your own material ✅
 
 The Teacher should act on the learner's behalf, and lessons should come from the learner's own course and not just a typed topic.
 
 - **Dated plans and backward planning.**
   - `plan_study` gains `deadline` (`YYYY-MM-DD` or `""`), and the strict schema keeps every field required. Today's date is already in the progress snapshot.
-  - With a deadline, the plan ends on it. The day count is `min(7, days until the deadline)`, and the last day is a review or quiz.
-  - Saving a plan stamps `startDate`, which gives every day a calendar date.
+  - The plan starts on the learner's today, taken from the snapshot. With a deadline it may not run past it: at most `min(7, days through the deadline)` days, and fewer than 3 only when the deadline is that close. A plan that doesn't fit goes back to Claude as an `is_error` result saying how many days to use. The prompt asks for new material early and a review or quiz last.
+  - Each day carries its `date` and `label` ("Thu, Oct 22"). The plan keeps `startDate` and `deadline` when saved, and plans saved before Phase 7 start on their `savedAt` date.
   - `public/plan-core.js` works out today's plan day, items overdue from earlier days, and whether the learner is ahead, on track or behind. Today then shows *today's* item and not just the first unopened one.
   - Plan cards and the Today plan show real dates and a "N days to <goal>" countdown.
 - **Daily brief: `public/brief-core.js`.** It's computed from local state, so it costs no model call and works in demo mode. It ranks up to 3 actions:
-  - cards due now;
-  - cards that will drop below 80% retrievability within 2 days, which means review now and not tomorrow;
-  - today's plan item and any overdue ones;
-  - the weakest lesson from Phase 6;
-  - a streak at risk (late in the day and no XP yet);
-  - the deadline countdown.
+  - overdue plan items;
+  - cards due now (FSRS makes a card due when its recall drops to about 90%), with the lessons they come from;
+  - today's plan item;
+  - the worst-fading lesson from Phase 6, with **Refresh**.
+
+  The headline is the deadline countdown and pace, a streak at risk (after 6 pm with no XP yet), or the goal status.
 
   Today shows it as "Your Teacher's brief" with one button per action.
-- **The Teacher speaks first.** Opening an empty Teacher thread sends `POST /api/teacher/stream {opener: true, progress}`.
-  - The server sends Claude a fixed, clearly marked user turn: "[Wonder: the learner just opened the Teacher. Check their progress and greet them with the single best next step.]" This is not a prefill. The client doesn't show it as a learner bubble.
+- **The Teacher speaks first.** It sends `POST /api/teacher/stream {opener: true, progress}`. This happens through "Talk it through" on the brief, and on the first Teacher visit of the day with no thread selected. That automatic check-in has a setting, `settings.teacherCheckIn`.
+  - The server sends Claude its own fixed, clearly marked user turn (`TEACHER_OPENER`) and never uses client text for it. This is not a prefill. The client keeps the turn in the thread history but doesn't show it as a learner bubble.
   - The Teacher calls `get_progress` and proposes a concrete next step through a card.
   - The demo teacher has an opener script.
 - **Reminders.**
-  - **In-app:** `settings.reminder = {enabled, time: "HH:MM"}`. While any Wonder tab is open, a minute timer fires a `Notification` once per day at that time if today's goal isn't met. The body is the brief's top action. Permission is only requested from the settings toggle.
+  - **In-app:** `settings.reminder = {enabled, time: "HH:MM"}`. While any Wonder tab is open, a 30-second timer fires a `Notification` once per day at that time if today's goal isn't met. The "shown today" mark lives outside the synced state, so two open tabs don't both fire. The body is the brief's top action. Permission is only requested from the settings toggle.
   - **Calendar export:** "Add to calendar" downloads an `.ics` file with one event per plan day at the reminder time. Each event lists that day's items and a link back to Wonder, so the reminders work even with the app closed and with no push server. `public/ics.js` is pure and tested.
 - **Your own material.**
   - **Store: `server/materials.js`.** Files live in `data/materials/` (git-ignored). There's an index of `{id, title, kind: text|pdf, chars|bytes, createdAt}`.
-  - **Endpoints:** `POST /api/materials {title, kind, text | base64}` (max 10 MB PDF, 200k chars of text), `GET /api/materials`, and `DELETE /api/materials?id=`. The client doesn't store the material, only its id.
-  - **Lessons from material:** `/api/lesson/stream` and `/api/course/plan` take `materialId`. The material is sent as a `document` content block with `citations: {enabled: true}`. Text uses `source.type: "text"`, a PDF uses `source.type: "base64"`. The block is followed by the request text, with "Teach from this material; stay faithful to it".
+  - **Endpoints:** `POST /api/materials {title, kind, text | base64}` (max 10 MB PDF, 40–200k characters of text, at most 50 materials), `GET /api/materials`, `DELETE /api/materials?id=`, and `GET /api/materials/file?id=` (the original, for "Open source"). Ids are server-generated and checked against `mat-<12 hex>` before any path is built. The client doesn't store the material, only its id.
+  - **Lessons from material:** `/api/lesson/stream` takes `materialId`. The material is sent as a cached `document` content block with `citations: {enabled: true}`. Text uses `source.type: "text"`, a PDF uses `source.type: "base64"`. The block is followed by the request text with a "teach from it, stay faithful" line, and steers and resumes resend it.
+  - Web search is off by default for material lessons.
   - **Citations to your notes:** document citations (`char_location` / `page_location`) go into the same source registry as web results. They render as `<Cite>` pills titled "<material title>, p. N" and appear in `Sources`, so a lesson cites the learner's own notes.
-  - **Courses from material:** given a syllabus or chapter, the course plan follows its structure.
-  - **UI:** a "From my material" tab in the Today omnibox (paste text, or pick a .txt/.md/.pdf file), a Materials list on the You screen with delete, and a material chip on lessons built from one.
-  - **Demo mode:** the material is stored, and the lesson is a deterministic outline of the material's headings and paragraphs, so the flow works without credentials.
+  - **Courses from material:** given a syllabus or chapter, the course plan follows its structure. The document goes in without citations, because citations don't combine with structured output. Every lesson of that course is taught from the material.
+  - **UI:**
+    - A "My material" tab in the Today omnibox: paste text or attach a .txt/.md/.pdf, then make a lesson or a course.
+    - A "Your material" list on You with Open, Lesson and delete.
+    - A material chip on lesson tiles.
+    - Material Cite pills open the original, PDF pages included.
+  - **Demo mode:** the material is stored. For text, the lesson is a deterministic outline of its headings and paragraphs, and the course follows its headings, so the flow works without credentials. Demo mode can't read PDFs and shows a sample lesson for them.
 - **Tests.** Plan date math (deadline, behind and ahead, overdue), brief ranking, ICS output (escaping, line folding, `DTSTART`), the materials store (limits, delete, path safety), the document block and citation mapping using a fake client that emits `char_location` and `page_location` citations, and the Teacher opener with a fake client.
 
 ### Later (not in this pass)
@@ -161,9 +166,15 @@ The Teacher should act on the learner's behalf, and lessons should come from the
 ## Status
 
 Phases 1–5 are implemented, merged into `main` and verified:
-- **Tests:** 155 pass with `node --test genui-lab/wonder/test/index.js`.
 - **Live check:** one real `claude-opus-5-5` lesson used learner memory (4 items), web search (15 `Cite` pills plus `Sources`) and a mid-stream "Simpler" steer together.
 - **Teacher:** verified live on its own, with remember, a study plan and lesson cards.
+
+Phases 6–7 are implemented on branch `worktree-learning-outcomes`:
+- **Tests:** 270 pass with `node --test genui-lab/wonder/test/index.js`. New files: `outcomes.test.js`, `proactive.test.js` and `materials.test.js`. The date tests pass in two time zones.
+- **Browser check:** run on seeded review history. It covered "What works for you", Refresh, Relearn in another style, the "How well it stuck" panel, the daily brief, and the dated plan with overdue items and the countdown. The new sections fit at 390 px.
+- **Live check:**
+  - The Teacher check-in read the outcomes and proposed relearning the worst-recalled lesson with the best-measured style ("starting from concrete examples has helped you remember things much better").
+  - A lesson from pasted lecture notes used the class's own example and carried 11 `Cite` pills that open the original notes.
 
 ## Verification for each phase
 

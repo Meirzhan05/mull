@@ -67,5 +67,5 @@
 .material-tag { display: inline-flex; align-items: center; gap: 4px; min-width: 0; }
 .material-tag .icon { width: 14px; height: 14px; flex: 0 0 auto; }
 .materials-list { display: grid; gap: 8px; }
-.material-row { display: flex; align-items: center; gap: 12px; padding: 12px 14px; }
-.material-row .up-item-text { flex: 1; min-width: 0; }
+.material-row { display: flex; align-items: center; gap: 8px 12px; padding: 12px 14px; flex-wrap: wrap; }
+.material-row .up-item-text { flex: 1 1 160px; min-width: 0; }
