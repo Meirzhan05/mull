@@ -17,7 +17,8 @@ import { validateComponentProps } from './catalog-schema.js';
 import { buildStructuredParams, createStructured } from './claude.js';
 import { stripGroundingTags } from './grounding.js';
 
-const VISUALS = new Set(['LessonStepper', 'Reveal', 'CompareToggle', 'InputOutputSlider', 'Flowchart', 'Timeline', 'BarChart', 'ConceptMap', 'Cycle', 'Quiz', 'Flashcards', 'FunctionGraph', 'ExplainBack']);
+// Figure is not here: it renders nothing when no image is found, so it cannot be a page's only visual.
+const VISUALS = new Set(['LessonStepper', 'Reveal', 'CompareToggle', 'InputOutputSlider', 'Flowchart', 'Timeline', 'BarChart', 'ConceptMap', 'Cycle', 'Quiz', 'Flashcards', 'FunctionGraph', 'ExplainBack', 'Diagram']);
 const LAYOUT_RE = /<(box|col|row|grid)\b/;
 const CHECK_PAGE_RE = /check your understanding/i;
 const words = (s) => (String(s).match(/[\p{L}\p{N}][\p{L}\p{N}'’-]*/gu) || []).length;

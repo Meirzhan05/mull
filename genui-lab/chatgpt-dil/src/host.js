@@ -24,7 +24,8 @@ export const rendererFor = (type) => RENDERER_ALIASES[type] || type;
 
 const TEXTISH = new Set(['text', 'title', 'caption', 'label', 'bold', 'italic', 'underline', 'strikethrough', 'code', 'shimmer-text', 'badge', 'link', 'blockquote', 'math']);
 const MARKDOWNISH = new Set(['text-only-markdown', 'markdown']);
-const SVG_CHILDREN = new Set(['path', 'circle', 'line', 'rect', 'polyline', 'polygon', 'ellipse', 'g']);
+// 'svg-text' is a Wonder extension: an SVG <text> label whose string comes from its `text` prop.
+const SVG_CHILDREN = new Set(['path', 'circle', 'line', 'rect', 'polyline', 'polygon', 'ellipse', 'g', 'svg-text']);
 const FLEX_TYPES = new Set(['box', 'row', 'col', 'grid-item', 'card', 'flow-item', 'carousel-item', 'carousel-media-item', 'pressable', 'animate', 'animate-item', 'animate-group', 'transition', 'form', 'popover', 'popover-content', 'tooltip', 'loading-block']);
 
 // ---------------------------------------------------------------- tokens
@@ -289,6 +290,7 @@ function tagFor(type, props, parentType) {
     case 'table-cell': return 'td';
     case 'icon': case 'loading-indicator': case 'svg': return 'svg';
     default:
+      if (type === 'svg-text') return 'text';
       if (SVG_CHILDREN.has(type)) return type;
       return 'div';
   }
@@ -298,19 +300,85 @@ const SVG_ATTR = {
   strokeWidth: 'stroke-width', strokeLinecap: 'stroke-linecap', strokeLinejoin: 'stroke-linejoin', strokeDasharray: 'stroke-dasharray',
   strokeOpacity: 'stroke-opacity', fillOpacity: 'fill-opacity', vectorEffect: 'vector-effect', fillRule: 'fill-rule', clipRule: 'clip-rule',
   textAnchor: 'text-anchor', preserveAspectRatio: 'preserveAspectRatio', viewBox: 'viewBox',
+  // Wonder extension (svg-text labels and tappable diagram shapes)
+  fontSize: 'font-size', fontWeight: 'font-weight', dominantBaseline: 'dominant-baseline', paintOrder: 'paint-order', pointerEvents: 'pointer-events',
 };
 const SVG_PASS = new Set(['d', 'cx', 'cy', 'r', 'rx', 'ry', 'x', 'y', 'x1', 'x2', 'y1', 'y2', 'points', 'transform', 'opacity']);
+
+/**
+ * Attributes, inline style, text and click handler id for an svg element or SVG child (pure;
+ * exported for tests). Wonder extensions: `svg-text` labels (`text` prop), width/height on SVG
+ * children, `data-dil-catalog`, and shapes with onClick, which become keyboard buttons unless
+ * they are aria-hidden (pointer-only hit areas, never in the tab order).
+ */
+export function computeSvgPresentation(type, props) {
+  const p = props || {};
+  const attrs = {};
+  const style = {};
+  if (type === 'svg') {
+    attrs.viewBox = String(p.viewBox || '0 0 100 100');
+    if (p.preserveAspectRatio) attrs.preserveAspectRatio = String(p.preserveAspectRatio);
+    style.width = p.width != null ? dim(p.width) : '100%';
+    if (p.height != null) style.height = dim(p.height);
+    style.display = 'block';
+    style.overflow = 'visible';
+    if (p.role) attrs.role = String(p.role);
+    if (p.ariaLabel) attrs['aria-label'] = String(p.ariaLabel);
+  }
+  for (const [k, v] of Object.entries(p)) {
+    if (v == null || typeof v === 'object') continue;
+    if (k === 'fill' || k === 'stroke') { style[k] = resolveColor(v, 'text'); continue; }
+    if (SVG_ATTR[k] && type !== 'svg') attrs[SVG_ATTR[k]] = String(v);
+    else if (SVG_PASS.has(k)) attrs[k] = String(v);
+    else if ((k === 'width' || k === 'height') && type !== 'svg') attrs[k] = String(v); // sized children (rect, image, …)
+  }
+  if (p.__component) attrs['data-dil-catalog'] = String(p.__component);
+  if (type !== 'svg' && p.ariaHidden) attrs['aria-hidden'] = 'true';
+  const fn = type !== 'svg' && p.onClick && p.onClick.__fn;
+  if (fn != null && fn !== false) {
+    if (!p.ariaHidden) {
+      attrs.tabindex = '0';
+      attrs.role = 'button';
+      if (p.ariaLabel) attrs['aria-label'] = String(p.ariaLabel);
+      if (p.ariaPressed != null) attrs['aria-pressed'] = String(!!p.ariaPressed);
+    }
+    style.cursor = 'pointer';
+  }
+  return { attrs, style, text: type === 'svg-text' ? (p.text == null ? '' : String(p.text)) : undefined, onClick: fn != null && fn !== false ? fn : null };
+}
+
+/**
+ * Whether an image src leaves the page's origin. Protocol-relative ("//host/x") and
+ * scheme-relative URLs count, and the origin is compared exactly (not as a string prefix), so
+ * "http://localhost:8751.evil.example" is remote. data: and blob: URLs stay local.
+ */
+export function isRemoteSrc(src, base) {
+  const s = String(src || '').trim();
+  if (!s || /^(data|blob):/i.test(s)) return false;
+  try {
+    const u = new URL(s, base || 'about:blank');
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') return u.protocol !== 'about:';
+    let origin = null;
+    try { origin = base ? new URL(base).origin : null; } catch {}
+    return !origin || u.origin !== origin;
+  } catch {
+    return true;
+  }
+}
 
 // ---------------------------------------------------------------- host
 
 /**
  * @param {HTMLElement} mount
- * @param {{invoke:(fnId:number,args:any[])=>void, onAction?:(a:object)=>void, allowRemoteImages?:boolean, raf?:(cb:Function)=>void}} opts
+ * @param {{invoke:(fnId:number,args:any[])=>void, onAction?:(a:object)=>void, allowRemoteImages?:boolean|((src:string, props:object)=>boolean), raf?:(cb:Function)=>void}} opts
+ *   allowRemoteImages may be a predicate (Wonder extension) given the src and the image's props.
  */
 export function createHost(mount, opts) {
   const doc = mount.ownerDocument;
   const raf = opts.raf || ((cb) => requestAnimationFrame(cb));
-  let allowRemoteImages = !!opts.allowRemoteImages;
+  const imagePolicy = (v) => (typeof v === 'function' ? v : !!v);
+  let allowRemoteImages = imagePolicy(opts.allowRemoteImages);
+  const remoteAllowed = (src, props) => (typeof allowRemoteImages === 'function' ? !!allowRemoteImages(src, props) : allowRemoteImages);
   const recs = new Map();
   const root = { id: 0, type: '#root', props: {}, el: mount, childHost: mount, kids: [], parent: null };
   recs.set(0, root);
@@ -322,7 +390,7 @@ export function createHost(mount, opts) {
   let wordCounter = 0;
   const stats = { batches: 0, frames: 0, ops: 0 };
 
-  const isRemote = (src) => /^https?:/i.test(src) && !src.startsWith(doc.location?.origin || '\u0000');
+  const isRemote = (src) => isRemoteSrc(src, doc.location?.href);
 
   function ensureEl(rec) {
     if (rec.el) return rec.el;
@@ -439,7 +507,7 @@ export function createHost(mount, opts) {
     el.textContent = '';
     const src = p.src || '';
     if (!src) return;
-    if (isRemote(src) && !allowRemoteImages) {
+    if (isRemote(src) && !remoteAllowed(src, p)) {
       el.setAttribute('data-d-image-fallback', '');
       const ph = doc.createElement('div');
       ph.className = 'd-image-placeholder';
@@ -497,28 +565,21 @@ export function createHost(mount, opts) {
 
   function applySvgProps(rec) {
     const el = rec.el;
-    const p = rec.props;
     for (const k of rec.attrKeys || []) el.removeAttribute(k);
-    const keys = [];
-    const set = (k, v) => { el.setAttribute(k, String(v)); keys.push(k); };
+    const { attrs, style, text, onClick } = computeSvgPresentation(rec.type, rec.props);
+    for (const [k, v] of Object.entries(attrs)) el.setAttribute(k, v);
     el.style.cssText = '';
-    if (rec.type === 'svg') {
-      set('viewBox', p.viewBox || '0 0 100 100');
-      if (p.preserveAspectRatio) set('preserveAspectRatio', p.preserveAspectRatio);
-      el.style.width = p.width != null ? dim(p.width) : '100%';
-      if (p.height != null) el.style.height = dim(p.height);
-      el.style.display = 'block';
-      el.style.overflow = 'visible';
-      if (p.role) set('role', p.role);
-      if (p.ariaLabel) set('aria-label', p.ariaLabel);
+    for (const [k, v] of Object.entries(style)) el.style[k] = v;
+    if (text != null) el.textContent = text;
+    if (onClick != null) {
+      const fire = (e) => { e.preventDefault(); e.stopPropagation(); opts.invoke(onClick, []); };
+      el.onclick = fire;
+      el.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') fire(e); };
+    } else if (rec.type !== 'svg') {
+      el.onclick = null;
+      el.onkeydown = null;
     }
-    for (const [k, v] of Object.entries(p)) {
-      if (v == null || typeof v === 'object') continue;
-      if (k === 'fill' || k === 'stroke') { el.style[k] = resolveColor(v, 'text'); continue; }
-      if (SVG_ATTR[k] && rec.type !== 'svg') set(SVG_ATTR[k], v);
-      else if (SVG_PASS.has(k)) set(k, v);
-    }
-    rec.attrKeys = keys;
+    rec.attrKeys = Object.keys(attrs);
   }
 
   function maybeCelebrate(rec) {
@@ -732,7 +793,7 @@ export function createHost(mount, opts) {
       mount.textContent = '';
     },
     setAllowRemoteImages(v) {
-      allowRemoteImages = !!v;
+      allowRemoteImages = imagePolicy(v);
       for (const rec of recs.values()) if ((rec.type === 'image' || rec.type === 'search-image') && rec.el) renderImage(rec);
     },
     stats,

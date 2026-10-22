@@ -1204,6 +1204,17 @@ function route() {
   const h = location.hash || '#/';
   let m;
   let screen = 'home';
+  // #/learn/<topic> starts a lesson on that topic (the landing page's composer links here). The
+  // #/learn entry is replaced by Today first, so Back from the lesson goes home instead of
+  // landing on #/learn again and starting another lesson. location.replace, not
+  // history.replaceState: Next's router patches the latter and re-applies that URL afterwards.
+  if ((m = /^#\/learn\/(.+)$/.exec(h))) {
+    let t = '';
+    try { t = decodeURIComponent(m[1]); } catch {}
+    location.replace('#/');
+    if (t.trim()) startLesson(t.slice(0, 200));
+    return;
+  }
   if ((m = /^#\/lesson\/([\w-]+)$/.exec(h))) { screen = 'lesson'; document.body.dataset.screen = screen; renderLesson(m[1]); }
   else if ((m = /^#\/course\/([\w-]+)$/.exec(h))) { screen = 'course'; document.body.dataset.screen = screen; renderCourse(m[1]); }
   else if (h === '#/review') { screen = 'review'; document.body.dataset.screen = screen; renderReviewScreen(); }

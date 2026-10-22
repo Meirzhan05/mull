@@ -33,7 +33,7 @@ cp .env.example .env        # then put your key after ANTHROPIC_API_KEY=
 npm run dev                 # next dev → http://localhost:8750
 ```
 
-For production, `npm run build && npm start` (`next start -p 8750`). `ANTHROPIC_API_KEY=... npm run dev` also works, as does an `ant auth login` profile. The server never reads, prints or logs the key. `GET /api/status` returns only `{mode: "claude"|"demo", model}`. Pass `-p <port>` to `next` to change the port. `WONDER_MODE=demo` forces demo mode even when credentials exist. `WONDER_MEMORY_FILE` moves the learner memory file. `WONDER_RECORD_DIR=<dir>` writes each lesson, tutor and Teacher stream's NDJSON to a file there; that is how the fixtures were captured, and the records contain no credentials.
+For production, `npm run build && npm start` (`next start -p 8750`). `ANTHROPIC_API_KEY=... npm run dev` also works, as does an `ant auth login` profile. The server never reads, prints or logs the key. `GET /api/status` returns only `{mode: "claude"|"demo", model}`. Pass `-p <port>` to `next` to change the port. `WONDER_MODE=demo` forces demo mode even when credentials exist. `WONDER_MEMORY_FILE` moves the learner memory file. `WONDER_FIGURES=off` stops `<Figure/>` from looking images up on Wikimedia Commons. `WONDER_RECORD_DIR=<dir>` writes each lesson, tutor and Teacher stream's NDJSON to a file there; that is how the fixtures were captured, and the records contain no credentials.
 
 ### Demo mode
 
@@ -147,6 +147,8 @@ Next serves `public/` and, through read-only route handlers, `genui-lab/chatgpt-
 | `Flashcards` | Flip cards; "Save to review deck" |
 | `Celebration` | Confetti moment |
 | `ExplainBack` | Free-response answer graded against a rubric on the server (Phase 8) |
+| `Diagram` | A drawing Claude composes from simple SVG shapes and labels. Tap a part (on the drawing or its chip) to read about it; step through with Back/Next while shapes fade in and the rest dims. See [Diagrams and real images](#diagrams-and-real-images) |
+| `Figure` | A real, freely licensed image from Wikimedia Commons. Claude writes a search phrase; the server finds the image, its license and author. Tap to enlarge, optional "Look closer" question, credit line with a Source link |
 | `TeacherCard` | **Server-only**: spliced in by `/api/teacher/stream`, never written by the model. Props are just `kind` and the server-assigned `__resolutionId`; the data is `componentResults[__resolutionId].state`. `approval` (Start lesson / Not now / Undo), `plan` (per-item open buttons, Save plan / Unsave), `memory` (Remembered/Forgot chip with Undo/Redo). Shows a skeleton until resolved |
 
 Claude can also use the DIL layout primitives (`box/row/col/grid/text/title/icon/badge/divider/math/…`), with icon names taken from `chatgpt-dil/src/icons.js`.
@@ -259,7 +261,7 @@ npm run eval -- --limit 3
 ## Tests
 
 ```sh
-node --test genui-lab/wonder/test/index.js      # 280 tests, about 15 s, no network
+node --test genui-lab/wonder/test/index.js      # no network (Figure lookups are stubbed)
 ```
 
 - **`mastery.test.js`, `critic.test.js`, `freeresponse.test.js`** cover phases 6–8: the estimator and decay, evidence, prompt injection, the lint, quiz fixes and the `replace` record, the eval harness end to end (demo and fake Claude), the grader, the ExplainBack widget in the sandbox, explain practice items and Guide me.
@@ -329,6 +331,8 @@ server/math-spans.js      math spans hoisted before the stock compiler
 public/teacher-screen.js, teacher-core.js (progress snapshot, history), memory-screen.js
 public/learning-catalog.js (in-sandbox components), learning-runtime.js, wonder-worker.js, dil-surface.js, stream-client.js
 public/view-state.js      widget state snapshots (store, useSaved, caps)   public/lesson-menu.js  lesson overflow menu
+server/diagram.js         Diagram validation/fallback    server/figures.js   Figure validation, Commons lookup, resolver
+public/catalog-media.js   Diagram + Figure (in-sandbox components)
 test/*.test.js, test/index.js, test/helpers.js
 ```
 
@@ -339,6 +343,8 @@ Interactive widgets keep their state across reloads and when a lesson is reopene
 | Widget | Saved | Not saved |
 |---|---|---|
 | `FunctionGraph` | parameter values | |
+| `Diagram` | current step, selected part | |
+| `Figure` | "Look closer" answer shown | enlarged view |
 | `LessonStepper` | current step | |
 | `Reveal` | which items are open | |
 | `CompareToggle` | left / right / side by side (side by side shows the left view on phones) | |
@@ -369,7 +375,8 @@ Interactive widgets keep their state across reloads and when a lesson is reopene
   - Without Web Locks, the lease fallback is still exclusive. Acquiring broadcasts a claim, writes the lease, waits a 120 ms settle window and re-checks, and the lowest claim ticket wins ties. `test/lock-race.test.js` races two tabs 100 times; exactly one wins every time.
 - **Teacher history is text.** Earlier turns go back to Claude as markdown with `[Card: …]` notes, not as the original tool_use/tool_result blocks. Card state on the server is in memory, but cards carry their state, so they survive restarts.
 - **Memory is one file for one local learner.** There are no accounts. It is not encrypted; "Forget everything" deletes it.
-- **Inherited from chatgpt-dil:** a best-effort sandbox lockdown and no SVG `<text>`. Flowchart and ConceptMap are therefore laid out with boxes rather than drawn edges.
+- **Inherited from chatgpt-dil:** a best-effort sandbox lockdown and no SVG `<text>` in the captured client. Flowchart and ConceptMap are therefore laid out with boxes rather than drawn edges. Wonder's host adds an `svg-text` primitive for `Diagram` labels.
+- **Figure needs the network and Wikimedia.** The server queries Wikimedia Commons, and the learner's browser loads the image from `upload.wikimedia.org` / `thumb.wikimedia.org` (no referrer). Offline, or with `WONDER_FIGURES=off`, Figures are left out and the lesson reads without them. Claude never sees the picture, so captions are written to be true of any good image of the subject.
 
 ## Credentials
 
@@ -645,3 +652,84 @@ A lesson's quiz says what the learner knew a minute after reading it. Wonder als
 - **Live.**
   - **Teacher check-in.** On seeded review history it proposed relearning the worst-recalled lesson "starting from concrete examples", the best-measured style.
   - **Lesson from lecture notes.** It used the class's own coffee-shop example and carried 11 Cite pills. "Sources" opened the original notes.
+
+## Diagrams and real images
+
+Two catalog components put pictures next to the explanation.
+
+### `Diagram`: drawings Claude composes
+
+```
+<Diagram title="…" width={400} height={240}
+  shapes={[{"id":"sun","type":"circle","x":60,"y":60,"r":26,"fill":"yellow","part":"sun"},
+           {"type":"text","x":60,"y":104,"text":"Sun"},
+           {"id":"ray","type":"arrow","from":[92,70],"to":[230,150],"stroke":"orange","curve":-10,"part":"light"}]}
+  parts={[{"id":"sun","label":"The Sun","text":"…"},{"id":"light","label":"Sunlight","text":"…"}]}
+  steps={[{"label":"…","text":"…","show":["sun"],"highlight":["sun"]},{"label":"…","show":["ray"],"highlight":["ray"]}]}
+  caption="…"/>
+```
+
+- **Validation** (`server/diagram.js`, registered in `catalog-schema.js`):
+  - **Canvas.** 100-1000 × 60-1000 units, between 1:2 and 4:1 (default 400×250).
+  - **Shapes.** 1-40 of `rect`, `circle`, `ellipse`, `line`, `arrow` (optional `curve`, `both`), `polyline`, `polygon`, `path` (SVG path commands only) and `text` (≤ 60 chars). Aliases such as `box`, `dot` and `label` are accepted. Every shape must lie inside the canvas.
+  - **Colors.** Named colors map to theme tokens or mid-tone hexes that read in light and dark (`brand`, `blue`, `sky`, … `ink`, `muted`, `surface`). `white` and `black` stay literal, so white things are not drawn dark in dark mode. `#hex` passes through, and anything else falls back to the default.
+  - **Parts.** At most 8 parts. Each needs an id, a label and text, and must match at least one shape (by `part` or `id`). A free `text` label whose anchor sits inside a rect, circle or ellipse with an id or part joins the smallest one. It takes that shape's `part` and `follows` its id, so the label appears, dims and taps with its shape, even when a step stages the shape by id.
+  - **Steps.** Between 2 and 8 steps. Every name in `show` and `highlight` must match a shape id or a part.
+  - **Fallback.** Invalid props become markdown: the parts as a list and the steps in order.
+- **Sandbox component** (`public/catalog-media.js`):
+  - **Drawing.** Shapes are drawn with DIL svg primitives. Arrowheads are polygons computed in the sandbox.
+  - **Labels.** Labels use the `svg-text` host extension, with a halo so they stay readable over lines. On phones, labels grow so 12-15 unit text stays legible.
+  - **Parts.** Tapping a shape selects its part; thin shapes get a wide invisible hit area. Shapes are pointer-only (aria-hidden, out of the tab order): the canvas is `role=img`, and the part chips are the keyboard and screen-reader controls. The host still supports keyboard-button shapes for other uses.
+  - **Steps.** A shape listed in some step's `show` stays hidden until that step. The step's `highlight` dims everything else to 22%, and the CSS fades opacity changes.
+- **Demo.** The sky-blue sample's sunset page compares the noon and sunset light paths through the atmosphere in three steps, with four tappable parts.
+
+### `Figure`: real images from Wikimedia Commons
+
+```
+<Figure query="cumulus clouds blue sky" file="File:…" caption="…" alt="…" question="…" answer="…"/>
+```
+
+- **No URLs from the model.** Claude writes a 2-6 word `query`, and an exact Commons `file` title only when it is sure of one. URLs in `query` are rejected.
+- **Server lookup** (`server/figures.js`):
+  - **Query.** The file title is tried first, then a Commons search (`filetype:bitmap|drawing`, 8 results).
+  - **Filtering.** Results must be a raster or SVG image, freely licensed (not `NonFree`), at least 320 px wide and not an extreme panorama. They must be served from `upload.wikimedia.org` or `thumb.wikimedia.org`. Language-neutral files win over localized SVG copies such as `…-ru.svg`.
+  - **Output.** A 960 px thumbnail with the `utm_*` parameters stripped, the size, the license and the author as plain text.
+- **Delivery.** Results are server-resolved `componentResults[__resolutionId]`, like Cite. Every DIL stream has a resolver (`startNdjson`): lessons, tutor replies and the Teacher.
+  - **Pending.** Each compiled revision reports `pending` and starts the lookup once.
+  - **Mid-stream.** When the lookup lands mid-stream, the writer re-sends the program (`writer.refresh()`: an empty append with a fresh `dil`).
+  - **End of stream.** Before the final record the stream waits up to 6 s ("Finding images…"). Anything still pending, failed or not found becomes `{found:false}`, and the component renders nothing.
+  - **Caching.** Results are cached per server (300 entries). Failures are not cached, so the next stream retries, and a "nothing found" expires after 10 minutes. Lookups use the stream's abort signal, so leaving a lesson cancels them.
+  - **Persistence.** The final `dil` carries the image state, so the saved lesson shows it after a reload without another lookup.
+- **Renderer.** `dil-surface.js` gives the host an image policy: a remote image loads only when the server resolved that exact URL for a Figure on this surface (`public/figure-hosts.js`, shared with the server). Any other remote `src` keeps the host's placeholder. That includes a Wikimedia URL the model wrote into a raw `<image>`, which would otherwise show without its credit. So model output cannot embed tracking pixels. The host treats protocol-relative (`//host`) and look-alike origins as remote (`isRemoteSrc`).
+- **Sandbox component.**
+  - **Loading.** A "Finding an image…" frame shows while the lookup runs.
+  - **Image.** A tall image is letterboxed to 1.25:1 until tapped.
+  - **Text.** Caption, an optional "Look closer" question whose answer is revealed and saved, and `Image: author · license · Wikimedia Commons` with a Source button that opens the file page.
+- **Settings.** `WONDER_FIGURES=off`, or `figureLookup: null` in `createWonderCore`, skips the network. The tests stub the lookup. `figureSettleMs` changes the end-of-stream wait.
+- **Demo.** The sky-blue sample shows a photo of white clouds in a blue sky on its Mie-scattering page.
+
+### Tests and live verification
+
+- **`test/diagram.test.js`:**
+  - normalization and rejections;
+  - fallback markdown;
+  - reveal and highlight opacities across the steps;
+  - selecting parts by shape, hit area and chip;
+  - larger labels on phones;
+  - the demo diagram;
+  - every streamed prefix of the demo.
+- **`chatgpt-dil/test/host.test.js`:** SVG attributes for the host extensions (sized children, `svg-text`, keyboard vs pointer-only shapes) and `isRemoteSrc`.
+- **`test/figure.test.js`:**
+  - validation, and picking Commons results (license, size, host, localized SVGs, HTML authors);
+  - the lookup's requests, through a fake `fetch`;
+  - the resolver (pending, resolved, cached, failures retried, finalize);
+  - the sandbox component (loading, image, enlarge, Look closer, Source, not found);
+  - the image policy (only server-resolved Figure URLs load);
+  - misses expiring, lookups cancelled with the stream, and a Figure resolving in a Teacher reply;
+  - a Figure never counting as a page's only visual, and counting in outcomes only when shown;
+  - two lesson streams through the real server: a late lookup arrives mid-stream and is in the final record, and with no network the Figure is left out.
+- **Live (demo mode, browser).**
+  - **Diagram.** The sky-blue diagram stepped Noon → Sunset → Compare. Tapping the orange arrow opened "Sunset light", and the step and selection survived a reload. Checked in light and dark, at desktop and 375 px widths.
+  - **Claude.** A live lesson on "How the human heart pumps blood" came back with a valid `Diagram` on the first try: four chambers, the septum and the valves as 6 tappable parts, and "Tap each chamber below" in the prose. It surfaced two fixes. Rects need `width`/`height` passed through by the host. Free labels inside a shape now join that shape's part, so tapping a chamber's name selects the chamber and its label doesn't dim. Claude chose no `Figure` for that topic.
+  - **Figure.** The live Commons lookup found "Clouds in the sky in August 2014" (Jakec, CC BY-SA 4.0) in about 0.5 s. It rendered with its caption, Look closer and credit, and reloaded from the saved lesson.
+

@@ -85,6 +85,16 @@ export function createTurnWriter({ write, messageId = randomUUID(), operationId 
       if (dil) { rec.dil = dil; lastDilAt = now(); lastDilLen = markdown.length; }
       emit(rec);
     },
+    /** Re-send the current program with fresh appData (a server-resolved Figure arrived). */
+    refresh() {
+      if (finished || revision === 0) return;
+      const { dil } = buildDil(true);
+      if (!dil) return;
+      revision++;
+      lastDilAt = now();
+      lastDilLen = markdown.length;
+      emit({ type: 'content', messageId, revision, mode: 'append', baseRevision: revision - 1, markdown: '', status: 'streaming', dil });
+    },
     /** Final record + trailer. Returns the final compile result. */
     complete({ followupPrompts, defaultFollowups, truncated = false, conversationState } = {}) {
       if (finished) return null;

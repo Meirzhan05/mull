@@ -146,3 +146,13 @@
 .guide-toggle .switch.small .switch-knob { top: 2px; left: 2px; width: 12px; height: 12px; }
 .guide-toggle[aria-checked="true"] .switch.small { background: var(--accent); }
 .guide-toggle[aria-checked="true"] .switch.small .switch-knob { transform: translateX(12px); }
+
+/* ---- Diagram (public/catalog-media.js): shapes fade between steps; tappable parts get a hover cue
+   (shapes are pointer-only; the part chips are the keyboard controls) */
+.dil-root svg[data-dil-catalog="DiagramCanvas"] { font-family: var(--font); user-select: none; -webkit-user-select: none; }
+.dil-root [data-dil-catalog="DiagramShape"] { transition: opacity 0.35s ease, stroke-width 0.2s ease; }
+.dil-root [data-dil-catalog="DiagramShape"][style*="cursor: pointer"]:hover { filter: brightness(1.08) saturate(1.1); }
+.dil-root [data-dil-catalog="DiagramHit"] { cursor: pointer; }
+@media (prefers-reduced-motion: reduce) {
+  .dil-root [data-dil-catalog="DiagramShape"] { transition: none; }
+}
