@@ -514,7 +514,7 @@ export async function runTeacherLoop({ client, params, messages: initial, writer
       if (!announced.has(tu.id)) writer.reasoning(TOOL_LABELS[tu.name] || 'Working on it…');
       let r;
       try { r = await execute(tu.name, v.value); } catch (e) { r = { content: `Tool failed: ${e.message}`, isError: true }; }
-      if (r.card) appendBlock(`<TeacherCard kind="${r.card.kind}" __resolutionId="${onCard(r.card.state)}"/>`);
+      if (r.card) appendBlock(`<TeacherCard kind="${r.card.kind}" __resolutionId="${onCard(r.card.state, r.card)}"/>`);
       else if (r.markup) appendBlock(r.markup);
       results.push({ type: 'tool_result', tool_use_id: tu.id, content: String(r.content ?? ''), ...(r.isError ? { is_error: true } : {}) });
     }

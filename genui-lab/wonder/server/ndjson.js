@@ -105,10 +105,10 @@ export function createTurnWriter({ write, messageId = randomUUID(), operationId 
       emit({ type: 'end' });
       return result;
     },
-    fail(message, code = 'failed') {
+    fail(message, code = 'failed', { retryAfterMs } = {}) {
       if (finished) return;
       finished = true;
-      api.control('failed', { message, code });
+      api.control('failed', { message, code, ...(Number.isFinite(retryAfterMs) ? { retryAfterMs } : {}) });
       emit({ type: 'end' });
     },
     get finished() { return finished; },
