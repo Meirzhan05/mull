@@ -25,6 +25,7 @@ import { renderYou, TEXT_SIZES } from './you.js';
 import { needsOnboarding, showOnboarding } from './onboarding.js';
 import { dailyProgress, courseProgress, roman, readingMinutes } from './progress-core.js';
 import { storeEvidence, quizEvidence, requestMastery } from './mastery-core.js'; // Phase 6
+import { qualitySummary } from './quality-core.js'; // Phase 7
 
 const store = createStore();
 const PAGE_ID = uid('page'); // this page load: a 'streaming' lesson owned by another id was interrupted
@@ -476,7 +477,8 @@ function renderLesson(lessonId) {
         el('p', { class: 'muted' }, 'The key ideas become index cards in your review deck. Each returns just before you would forget it.'),
         el('div', { class: 'end-stats' }, pages ? el('span', { class: 'tag' }, `${pages} pages`) : null, score, el('span', { class: 'tag' }, `+${XP.lessonComplete} XP`)),
         el('div', { class: 'end-actions' }, finishBtn,
-          el('button', { class: 'btn btn-secondary btn-lg', type: 'button', onclick: () => setTutorOpen(true) }, 'Ask the tutor first')));
+          el('button', { class: 'btn btn-secondary btn-lg', type: 'button', onclick: () => setTutorOpen(true) }, 'Ask the tutor first')),
+        qualityNote(l.quality));
       return;
     }
     endPanel.className = 'card lesson-end finished';
@@ -490,7 +492,8 @@ function renderLesson(lessonId) {
       el('div', { class: 'end-actions' },
         nxt ? el('button', { class: 'btn btn-lg', type: 'button', onclick: () => openCourseLesson(l.courseId, nxt.si, nxt.li) }, `Next: ${nxt.title}`, icon('arrow-right')) : null,
         due ? el('a', { class: `btn btn-lg ${nxt ? 'btn-secondary' : ''}`, href: '#/review' }, `Review ${due} card${due === 1 ? '' : 's'}`) : null,
-        el('a', { class: `btn btn-lg ${nxt || due ? 'btn-secondary' : ''}`, href: '#/' }, 'Back to Today')));
+        el('a', { class: `btn btn-lg ${nxt || due ? 'btn-secondary' : ''}`, href: '#/' }, 'Back to Today')),
+      qualityNote(l.quality));
   }
 
   function markComplete() {
@@ -680,13 +683,17 @@ function renderLesson(lessonId) {
     drawEnd();
     steerBar.setMode('live');
     let r = null;
+    let quality = null; // Phase 7: the server's quality-report control
     try {
       r = await streamTurn('/api/lesson/stream', {
         topic: l.topic, level: l.level, lessonTitle: l.lessonTitle, lessonSummary: l.lessonSummary, course: l.course, memoryEnabled: memoryEnabled(), mastery: requestMastery(store.data),
         ...(continueFrom ? { continueFrom } : {}),
       }, {
         signal: ac.signal,
-        onControl: (d) => steerBar.onControl(d),
+        onControl: (d) => {
+          if (d.kind === 'quality-report' && d.report) { quality = d.report; return; } // Phase 7
+          steerBar.onControl(d);
+        },
         onReasoning: (s) => {
           if (s.active === false) { reasoning.hidden = true; return; }
           reasoning.hidden = false;
@@ -720,7 +727,9 @@ function renderLesson(lessonId) {
       current.dil = dil;
       latest = { markdown: msg.markdown, dil };
       streaming = false;
-      saveLesson(lessonId, { status: 'complete', streamOwner: null, markdown: msg.markdown, dil, appData: current.appData, messageId, title: lessonTitleFrom(msg.markdown, l.title), truncated: !!r.final?.debug?.truncated, interruptedReason: null });
+      saveLesson(lessonId, { status: 'complete', streamOwner: null, markdown: msg.markdown, dil, appData: current.appData, messageId, title: lessonTitleFrom(msg.markdown, l.title), truncated: !!r.final?.debug?.truncated, interruptedReason: null, quality });
+      const qs = qualitySummary(quality);
+      if (qs?.tone === 'fixed') toast(qs.headline, 4200);
       store.flush();
       if (dil) surface.pruneViewState(resolutionIdsOf(dil)); // widget state: drop widgets a revision removed or rewrote
       if (r.final?.debug?.truncated) toast('The lesson was cut short (length limit).');
@@ -762,6 +771,16 @@ function renderLesson(lessonId) {
       window.removeEventListener('beforeunload', onHide);
     }
   }
+}
+
+/** Phase 7: the lesson's quality check, a collapsed note in the end panel. */
+function qualityNote(report) {
+  const q = qualitySummary(report);
+  if (!q) return null;
+  const ic = q.tone === 'warn' ? 'quote' : q.tone === 'lint' ? 'list' : 'check';
+  if (!q.items.length) return el('div', { class: `quality-note ${q.tone}` }, el('p', null, icon(ic), el('span', null, q.headline)));
+  return el('details', { class: `quality-note ${q.tone}` }, el('summary', null, icon(ic), el('span', null, q.headline)),
+    el('ul', null, ...q.items.map((i) => el('li', { class: i.major ? 'major' : '' }, el('strong', null, `${i.label}. `), i.text))));
 }
 
 function handleClientAction(a, { lessonId, openTutor, tutor }) {

@@ -1,2 +1,5 @@
 node_modules/
 .env
+
+# Eval reports (npm run eval)
+evals/reports/

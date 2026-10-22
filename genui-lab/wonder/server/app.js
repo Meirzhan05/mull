@@ -36,6 +36,7 @@ import { withWebSearch, streamGrounded, createSourceRegistry, citationAppData, s
 import { createSteeringRegistry, cleanInstruction, steeringUserContent, steerDemoRemainder, trimToLastPage, normalizeContinueFrom, createContinuationSources, demoContinuation, createContinuationGuard } from './steering.js';
 import { groundDemoLesson } from './demo-grounding.js';
 import { masteryContext } from './learner-model.js'; // Phase 6
+import { lintLesson, critiqueLesson, applyQuizFixes, qualityReport } from './critic.js'; // Phase 7
 import { pageCount } from '../public/steering-core.js';
 
 export const STATIC_ROOTS = [
@@ -315,9 +316,41 @@ export function createWonderCore(opts = {}) {
     }
     if (result.status === 'done') {
       finishGrounded(writer, sources);
-      writer.complete({ truncated: result.truncated });
+      // Phase 7: lint always; the Claude critic only for a whole, non-refused Claude lesson
+      if (body.verify !== false && !signal.aborted) {
+        await verifyLesson(writer, { topic, level, sources, signal, useClaude: state.mode === 'claude' && !result.refused && !result.truncated });
+      }
+      if (!signal.aborted) writer.complete({ truncated: result.truncated });
     }
     t.end();
+  }
+
+  // ---- Phase 7: quality check after the lesson streamed (server/critic.js)
+  async function verifyLesson(writer, { topic, level, sources, signal, useClaude }) {
+    const md = writer.markdown;
+    let lint = lintLesson(md);
+    let critique = null;
+    let applied = [];
+    let error = null;
+    if (useClaude) {
+      writer.reasoning('Double-checking facts and quiz answers…', { icon: 'check' });
+      try {
+        critique = await critiqueLesson(state.client, { markdown: md, topic, level, sources: sources.list(), signal });
+        const fixed = applyQuizFixes(md, critique.quizFixes);
+        applied = fixed.applied;
+        if (fixed.rejected.length) logger.warn?.(`[wonder] critic quiz fixes rejected: ${fixed.rejected.map((r) => `${r.question_id} (${r.reason})`).join('; ')}`);
+        if (applied.length && !signal.aborted) {
+          writer.replace(fixed.markdown);
+          lint = lintLesson(fixed.markdown);
+        }
+        logger.info?.(`[wonder] lesson critic: ${critique.verdict}, ${critique.issues.length} issue(s), ${applied.length} quiz fix(es)`);
+      } catch (err) {
+        if (signal.aborted) return;
+        error = err?.code === 'timeout' ? 'timeout' : friendlyError(err).code;
+        logger.warn?.(`[wonder] lesson critic skipped: ${error}`);
+      }
+    }
+    if (!signal.aborted) writer.control('quality-report', { report: qualityReport({ lint, critique, applied, checked: !!critique, error }) });
   }
 
   async function lessonSteer(t, body) {

@@ -1,0 +1,10 @@
+[
+  { "topic": "How vaccines train your immune system", "level": "beginner" },
+  { "topic": "Bayes' theorem with everyday examples", "level": "beginner" },
+  { "topic": "Compound interest", "level": "beginner" },
+  { "topic": "How public-key encryption works", "level": "intermediate" },
+  { "topic": "Supply and demand", "level": "beginner" },
+  { "topic": "Derivatives as rates of change", "level": "intermediate" },
+  { "topic": "How the greenhouse effect works", "level": "beginner" },
+  { "topic": "Big-O notation and why it matters", "level": "advanced" }
+]
