@@ -10,6 +10,17 @@
 		<key>NSAllowsLocalNetworking</key>
 		<true/>
 	</dict>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>app.wonder.ios</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>wonder</string>
+			</array>
+		</dict>
+	</array>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Wonder connects to the Wonder server running on your computer to write lessons.</string>
 </dict>

@@ -8,12 +8,11 @@ struct TodayView: View {
     @State private var level = "beginner"
     @State private var mode = Mode.lesson
     @FocusState private var focused: Bool
+    @State private var t: JSON = .null
 
     enum Mode: String, CaseIterable { case lesson = "Lesson", course = "Course", teacher = "Teacher" }
 
     var body: some View {
-        let _ = app.core.revision
-        let t = app.core.get("today")
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
                 ServerBanner()
@@ -33,6 +32,7 @@ struct TodayView: View {
         .navigationTitle("Today")
         .toolbar(.hidden, for: .navigationBar)
         .refreshable { await app.loadStatus() }
+        .task(id: app.core.revision) { t = app.core.get("today") } // not in body: typing re-renders this view
     }
 
     // MARK: sections

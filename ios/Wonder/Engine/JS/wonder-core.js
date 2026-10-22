@@ -3078,6 +3078,7 @@ const API = {
   mergeContinuedAppData: ({ carried, appData }) => mergeContinuedAppData(carried, appData),
   statusAfterStop: (o) => statusAfterStop(o),
   pageCount: ({ markdown }) => pageCount(markdown),
+  readingMinutes: ({ markdown }) => readingMinutes(markdown),
   pageTitles: ({ markdown }) => pageTitles(markdown),
   resolutionIdsOf: ({ dil }) => [...resolutionIdsOf(dil)],
   pruneViewState: ({ viewState, dil }) => pruneViewState(viewState, resolutionIdsOf(dil)),

@@ -116,7 +116,7 @@ private struct LessonReader: View {
         if c.streaming { return total > 0 ? "Writing page \(total)…" : "Writing…" }
         if !c.isComplete { return total > 0 ? "\(total) page\(total == 1 ? "" : "s") so far" : "" }
         if c.currentPage > 0 { return "Page \(c.currentPage) of \(total)" }
-        return total > 0 ? "\(total) pages · \(max(1, app.core.get("lessons").array.first(where: { $0["id"].string == c.lessonId })?["minutes"].int ?? 1)) min read" : ""
+        return total > 0 ? "\(total) pages · \(c.minutes) min read" : ""
     }
 
     @ToolbarContentBuilder
@@ -156,7 +156,7 @@ private struct LessonReader: View {
     }
 
     private var steerBar: some View {
-        let chips = app.core.get("constants")["STEER_CHIPS"].array
+        let chips = app.constants["STEER_CHIPS"].array
         let title: String = {
             switch c.steerMode {
             case .live: return "Steer this lesson"
@@ -241,13 +241,9 @@ private struct LessonReader: View {
                     if let q = c.lesson["quizScore"]["total"].int, q > 0 { Tag(text: "Quiz \(c.lesson["quizScore"]["score"].int ?? 0)/\(q)", tone: .brand) }
                     Tag(text: "+50 XP")
                 }
-                HStack(spacing: 8) {
-                    Button { Task { await c.collectCards() } } label: {
-                        HStack { if c.collecting { ProgressView().controlSize(.small).tint(DilTheme.brandInk) }; Text(c.collecting ? "Collecting your cards…" : "Collect the cards") }
-                    }
-                    .buttonStyle(.wonder(.primary, large: true))
-                    .disabled(c.collecting)
-                    Button("Ask the tutor first") { c.tutor.open = true }.buttonStyle(.wonder(.secondary, large: true))
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 8) { collectButton(full: false); tutorFirstButton(full: false) }
+                    VStack(spacing: 8) { collectButton(full: true); tutorFirstButton(full: true) }
                 }
                 .padding(.top, 4)
             }
@@ -264,6 +260,18 @@ private struct LessonReader: View {
             .card(padding: 24)
             .background(RoundedRectangle(cornerRadius: 16).fill(LinearGradient(colors: [DilTheme.successSubtle, DilTheme.surface], startPoint: .top, endPoint: .center)))
         }
+    }
+
+    private func collectButton(full: Bool) -> some View {
+        Button { Task { await c.collectCards() } } label: {
+            HStack { if c.collecting { ProgressView().controlSize(.small).tint(DilTheme.brandInk) }; Text(c.collecting ? "Collecting your cards…" : "Collect the cards") }
+        }
+        .buttonStyle(.wonder(.primary, large: true, full: full))
+        .disabled(c.collecting)
+    }
+
+    private func tutorFirstButton(full: Bool) -> some View {
+        Button("Ask the tutor first") { c.tutor.open = true }.buttonStyle(.wonder(.secondary, large: true, full: full))
     }
 
     private var nextSteps: some View {
@@ -338,7 +346,6 @@ struct PackSheet: View {
                         .padding(14)
                         .background(RoundedRectangle(cornerRadius: 14).fill(on ? DilTheme.surface : DilTheme.brandSubtle))
                         .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(DilTheme.line))
-                        .rotation3DEffect(.degrees(on ? 0 : 8), axis: (x: 1, y: 0, z: 0))
                     }
                     .buttonStyle(PressFeedbackStyle())
                     .foregroundStyle(DilTheme.ink)

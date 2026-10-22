@@ -24,7 +24,7 @@ final class WonderCore {
     private init() {
         let box = self.box
         let dir = Self.storeURL
-        JSEngine.queue.sync {
+        JSEngine.core.queue.sync {
             let file = { (key: String) in dir.appendingPathComponent(key.replacingOccurrences(of: "/", with: "_") + ".json") }
             let get: @convention(block) (String) -> Any = { key in
                 (try? String(contentsOf: file(key), encoding: .utf8)) ?? NSNull()
@@ -37,7 +37,7 @@ final class WonderCore {
                 DispatchQueue.main.async { WonderCore.shared.bump() }
             }
             let native: [String: Any] = ["storageGet": get, "storageSet": set, "storageRemove": remove, "changed": changed]
-            box.host = JSHost(script: "wonder-core", name: "core", globals: ["__wonderCoreNative": native])
+            box.host = JSHost(script: "wonder-core", name: "core", lane: JSEngine.core, globals: ["__wonderCoreNative": native])
         }
     }
 
@@ -50,7 +50,7 @@ final class WonderCore {
     func call(_ name: String, _ args: JSON = [:]) throws -> JSON {
         let box = self.box
         let argsJSON = args.jsonString
-        let text: String? = JSEngine.queue.sync { box.host?.invoke("WonderCore", "call", [name, argsJSON]) }
+        let text: String? = JSEngine.core.queue.sync { box.host?.invoke("WonderCore", "call", [name, argsJSON]) }
         guard let text, let r = JSON.parse(text) else { throw CoreError(message: "core call \(name) returned nothing") }
         if r["ok"].bool == true { return r["value"] }
         throw CoreError(message: r["error"].string ?? "core call \(name) failed")

@@ -8,6 +8,7 @@ import path from 'node:path';
 import vm from 'node:vm';
 import { fileURLToPath } from 'node:url';
 import { bundle, BUNDLES } from '../bundle.mjs';
+import { fixtures } from '../fixtures.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repo = path.resolve(here, '../../..');
@@ -40,6 +41,12 @@ const settle = () => new Promise((r) => setTimeout(r, 20));
 test('the written bundles match their sources', () => {
   for (const [name, entry] of Object.entries(BUNDLES)) {
     assert.equal(fs.readFileSync(path.join(JS, name), 'utf8'), bundle(entry, name), `${name} is stale: run node ios/engine/bundle.mjs`);
+  }
+});
+
+test('the iOS unit-test fixtures match the web fixtures they are made from', async () => {
+  for (const [name, text] of Object.entries(await fixtures())) {
+    assert.equal(fs.readFileSync(path.join(repo, 'ios/WonderTests/Fixtures', name), 'utf8'), text, `${name} is stale: run node ios/engine/fixtures.mjs`);
   }
 });
 

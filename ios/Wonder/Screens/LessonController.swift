@@ -14,7 +14,10 @@ final class LessonController {
     enum SteerMode { case hidden, live, resume, revise }
 
     private(set) var title = ""
-    private(set) var markdown = ""
+    private(set) var markdown = "" { didSet { if markdown != oldValue { refreshPages() } } }
+    private(set) var pageCount = 0
+    private(set) var pageTitles: [String] = []
+    private(set) var minutes = 1
     private(set) var streaming = false
     private(set) var reasoning: String? = nil
     private(set) var error: String? = nil
@@ -66,11 +69,15 @@ final class LessonController {
             self.core.saveLesson(self.lessonId, ["viewState": vs ?? .null])
         }
         tutor.lesson = self
+        refreshPages()
     }
 
     var lesson: JSON { core.lesson(lessonId) }
-    var pageCount: Int { core.get("pageCount", ["markdown": .string(markdown)]).int ?? 0 }
-    var pageTitles: [String] { core.get("pageTitles", ["markdown": .string(markdown)]).array.compactMap(\.string) }
+    private func refreshPages() {
+        pageCount = core.get("pageCount", ["markdown": .string(markdown)]).int ?? 0
+        pageTitles = core.get("pageTitles", ["markdown": .string(markdown)]).array.compactMap(\.string)
+        minutes = max(1, core.get("readingMinutes", ["markdown": .string(markdown)]).int ?? 1)
+    }
     var isComplete: Bool { status == "complete" && !streaming }
 
     // MARK: lifecycle

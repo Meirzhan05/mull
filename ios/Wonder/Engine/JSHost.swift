@@ -1,10 +1,15 @@
 import Foundation
 import JavaScriptCore
 
-/// All JavaScript runs on one serial queue, in contexts that share one virtual machine.
+/// JavaScript runs on two serial queues, each with its own virtual machine (contexts of
+/// different VMs run concurrently): one for the DIL surfaces, one for the app core, so a
+/// screen's core reads never wait behind a lesson re-render.
 enum JSEngine {
-    static let queue = DispatchQueue(label: "app.wonder.js", qos: .userInitiated)
-    static let vm: JSVirtualMachine = JSVirtualMachine()
+    struct Lane: @unchecked Sendable { let queue: DispatchQueue; let vm: JSVirtualMachine }
+    static let surfaces = Lane(queue: DispatchQueue(label: "app.wonder.js.surfaces", qos: .userInitiated), vm: JSVirtualMachine())
+    static let core = Lane(queue: DispatchQueue(label: "app.wonder.js.core", qos: .userInitiated), vm: JSVirtualMachine())
+    /// The surfaces' queue (DilSurface).
+    static var queue: DispatchQueue { surfaces.queue }
 
     private static var sources: [String: String] = [:]
     private static let sourcesLock = NSLock()
@@ -24,18 +29,20 @@ enum JSEngine {
 }
 
 /// One JSContext with the bridge `jsc-shim.js` expects: `__native.post / setTimer / clearTimer / log`.
-/// Create, use and destroy it on `JSEngine.queue` only.
+/// Create, use and destroy it on its lane's queue only.
 final class JSHost {
     let context: JSContext
     let name: String
+    let lane: JSEngine.Lane
     var onPost: ((String) -> Void)?
     private var timers: [Int: DispatchWorkItem] = [:]
     private(set) var destroyed = false
 
-    init(script: String, name: String, globals: [String: Any] = [:]) {
-        dispatchPrecondition(condition: .onQueue(JSEngine.queue))
+    init(script: String, name: String, lane: JSEngine.Lane = JSEngine.surfaces, globals: [String: Any] = [:]) {
+        dispatchPrecondition(condition: .onQueue(lane.queue))
         self.name = name
-        context = JSContext(virtualMachine: JSEngine.vm)
+        self.lane = lane
+        context = JSContext(virtualMachine: lane.vm)
         context.name = name
         let label = name
         context.exceptionHandler = { _, exc in
@@ -65,7 +72,7 @@ final class JSHost {
     /// Call a global function with string arguments; returns its result as a string (or nil).
     @discardableResult
     func call(_ function: String, _ args: [Any]) -> String? {
-        dispatchPrecondition(condition: .onQueue(JSEngine.queue))
+        dispatchPrecondition(condition: .onQueue(lane.queue))
         guard !destroyed, let fn = context.objectForKeyedSubscript(function), !fn.isUndefined else { return nil }
         let r = fn.call(withArguments: args)
         guard let r, !r.isUndefined, !r.isNull else { return nil }
@@ -74,7 +81,7 @@ final class JSHost {
 
     /// Call `object.method(...args)`.
     func invoke(_ object: String, _ method: String, _ args: [Any]) -> String? {
-        dispatchPrecondition(condition: .onQueue(JSEngine.queue))
+        dispatchPrecondition(condition: .onQueue(lane.queue))
         guard !destroyed, let obj = context.objectForKeyedSubscript(object), !obj.isUndefined else { return nil }
         return obj.invokeMethod(method, withArguments: args)?.toString()
     }
@@ -87,7 +94,7 @@ final class JSHost {
             self.call("__wonderFireTimer", [id])
         }
         timers[id] = work
-        JSEngine.queue.asyncAfter(deadline: .now() + max(0, ms) / 1000, execute: work)
+        lane.queue.asyncAfter(deadline: .now() + max(0, ms) / 1000, execute: work)
     }
 
     private func clearTimer(_ id: Int) {
@@ -96,7 +103,7 @@ final class JSHost {
     }
 
     func destroy() {
-        dispatchPrecondition(condition: .onQueue(JSEngine.queue))
+        dispatchPrecondition(condition: .onQueue(lane.queue))
         destroyed = true
         for t in timers.values { t.cancel() }
         timers.removeAll()

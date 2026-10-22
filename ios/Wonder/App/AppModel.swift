@@ -28,6 +28,8 @@ final class AppModel {
     struct PendingTeacher: Equatable { var message: String?; var opener: Bool; var threadId: String? }
 
     let core = WonderCore.shared
+    /// Shared constants from the core (XP table, steer chips, daily goals): read once.
+    @ObservationIgnored lazy var constants: JSON = core.get("constants")
     @ObservationIgnored private var toastTask: Task<Void, Never>?
 
     func path(_ tab: Tab) -> Binding<[Route]> {
@@ -49,6 +51,26 @@ final class AppModel {
         let t = tab ?? self.tab
         self.tab = t
         paths[t, default: []].append(route)
+    }
+
+    // MARK: deep links
+
+    /// wonder://lesson?topic=…&level=…  ·  wonder://course?topic=…  ·  wonder://teacher?message=…
+    /// wonder://review  ·  wonder://lesson/<id>
+    func handle(url: URL) {
+        guard url.scheme == "wonder" else { return }
+        let q = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
+        let arg = { (k: String) in q.first(where: { $0.name == k })?.value ?? "" }
+        let level = ["beginner", "intermediate", "advanced"].contains(arg("level")) ? arg("level") : "beginner"
+        switch url.host {
+        case "lesson":
+            let id = url.pathComponents.dropFirst().first ?? ""
+            if !id.isEmpty, !core.lesson(id).isNull { open(.lesson(id), in: .today) } else if !arg("topic").isEmpty { tab = .today; startLesson(arg("topic"), level: level) }
+        case "course": if !arg("topic").isEmpty { tab = .today; Task { _ = await planCourse(arg("topic"), level: level) } }
+        case "teacher": if !arg("message").isEmpty { askTeacher(arg("message")) } else { tab = .teacher }
+        case "review": tab = .review
+        default: tab = .today
+        }
     }
 
     // MARK: status

@@ -339,6 +339,8 @@ struct BoxStyle {
     var border: Color? = nil
     var borderWidth: CGFloat = 1
     var dashed = false
+    /// host.js borderStyle `side`: one edge only (Callout's accent rule)
+    var borderSide: Edge? = nil
     var radius: CGFloat = 0
     var clip = false
     var opacity: Double = 1
@@ -399,6 +401,13 @@ struct BoxStyle {
             borderWidth = CGFloat(o["size"]?.double ?? o["width"]?.double ?? 1)
             border = DilTheme.color(o["color"] ?? "default", .border) ?? DilTheme.line
             if o["style"]?.string == "dashed" { dashed = true }
+            switch o["side"]?.string {
+            case "left", "start": borderSide = .leading
+            case "right", "end": borderSide = .trailing
+            case "top": borderSide = .top
+            case "bottom": borderSide = .bottom
+            default: break
+            }
         default: break
         }
     }
@@ -456,7 +465,11 @@ struct BoxModifier: ViewModifier {
             }
             .overlay {
                 if let b = box.border, box.borderWidth > 0 {
-                    shape.stroke(b, style: StrokeStyle(lineWidth: box.borderWidth, dash: box.dashed ? [5, 4] : [])).padding(box.borderWidth / 2)
+                    if let side = box.borderSide {
+                        edge(side, b).clipShape(shape)
+                    } else {
+                        shape.stroke(b, style: StrokeStyle(lineWidth: box.borderWidth, dash: box.dashed ? [5, 4] : [])).padding(box.borderWidth / 2)
+                    }
                 }
             }
             .modifier(ClipIf(on: box.clip, shape: shape))
@@ -478,6 +491,18 @@ struct AspectIf: ViewModifier {
     let ratio: CGFloat?
     func body(content: Content) -> some View {
         if let ratio, ratio > 0 { content.aspectRatio(ratio, contentMode: .fit) } else { content }
+    }
+}
+
+extension BoxModifier {
+    @ViewBuilder
+    fileprivate func edge(_ side: Edge, _ color: Color) -> some View {
+        switch side {
+        case .leading: HStack(spacing: 0) { color.frame(width: box.borderWidth); Spacer(minLength: 0) }
+        case .trailing: HStack(spacing: 0) { Spacer(minLength: 0); color.frame(width: box.borderWidth) }
+        case .top: VStack(spacing: 0) { color.frame(height: box.borderWidth); Spacer(minLength: 0) }
+        case .bottom: VStack(spacing: 0) { Spacer(minLength: 0); color.frame(height: box.borderWidth) }
+        }
     }
 }
 

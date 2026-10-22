@@ -11,6 +11,7 @@ struct WonderApp: App {
                 .environment(app)
                 .task { await app.loadStatus() }
                 .onChange(of: phase) { _, p in if p != .active { app.core.flush() } }
+                .onOpenURL { app.handle(url: $0) }
         }
     }
 }

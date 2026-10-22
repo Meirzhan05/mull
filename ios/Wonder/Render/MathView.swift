@@ -49,7 +49,13 @@ private struct KaTeXView: UIViewRepresentable {
           m.style.fontSize = size + 'px';
           try { katex.render(tex, m, { displayMode: display, throwOnError: true, output: 'html' }); }
           catch (e) { window.webkit.messageHandlers.math.postMessage({ failed: true }); return; }
-          requestAnimationFrame(() => window.webkit.messageHandlers.math.postMessage({ height: Math.ceil(m.getBoundingClientRect().height) }));
+          requestAnimationFrame(() => {
+            // a formula wider than the column shrinks to fit (down to 60%); past that it scrolls
+            const k = m.querySelector('.katex-display > .katex, .katex');
+            const w = k ? k.scrollWidth : m.scrollWidth;
+            if (w > m.clientWidth + 1) m.style.fontSize = Math.max(size * 0.6, size * m.clientWidth / w) + 'px';
+            requestAnimationFrame(() => window.webkit.messageHandlers.math.postMessage({ height: Math.ceil(m.getBoundingClientRect().height) }));
+          });
         }
         </script></body></html>
         """
@@ -64,10 +70,9 @@ private struct KaTeXView: UIViewRepresentable {
         let web = WKWebView(frame: .zero, configuration: config)
         web.isOpaque = false
         web.backgroundColor = .clear
-        web.scrollView.isScrollEnabled = false
+        web.scrollView.isScrollEnabled = false // #m scrolls sideways itself when a formula is still too wide
         web.scrollView.backgroundColor = .clear
         web.navigationDelegate = context.coordinator
-        web.isUserInteractionEnabled = false
         if let page = Self.page {
             web.loadHTMLString(page, baseURL: Bundle.main.resourceURL)
         } else {
