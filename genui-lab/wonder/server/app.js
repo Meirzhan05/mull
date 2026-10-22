@@ -21,7 +21,7 @@ import {
   MODEL, detectMode, createClaudeClient, buildStreamParams, buildStructuredParams, streamText, createStructured,
   isCredentialError, friendlyError, REFUSAL_MESSAGE,
 } from './claude.js';
-import { LESSON_SYSTEM_PROMPT, TUTOR_SYSTEM_PROMPT, TEACHER_SYSTEM_PROMPT, COURSE_SYSTEM_PROMPT, COURSE_PLAN_SCHEMA, lessonUserMessage, tutorLessonContext, joinContext } from './prompts.js';
+import { LESSON_SYSTEM_PROMPT, TUTOR_SYSTEM_PROMPT, TEACHER_SYSTEM_PROMPT, COURSE_SYSTEM_PROMPT, COURSE_PLAN_SCHEMA, lessonUserMessage, tutorLessonContext, joinContext, insightsContext } from './prompts.js';
 import { pickDemoLesson, streamDemoText, buildDemoTutorReply, demoCoursePlan } from './demo.js';
 import { extractPracticeDeterministic, extractPracticeWithClaude } from './practice.js';
 import { createWidgetActionHandler } from './widget-actions.js';
@@ -259,10 +259,13 @@ export function createWonderServer(opts = {}) {
     let result = { status: 'demo' };
     try {
       if (state.mode === 'claude') {
-        const request = lessonUserMessage({ topic, level, course: body.course, lessonTitle: clean(body.lessonTitle, 200), lessonSummary: clean(body.lessonSummary, 400) });
+        const request = lessonUserMessage({ topic, level, course: body.course, lessonTitle: clean(body.lessonTitle, 200), lessonSummary: clean(body.lessonSummary, 400), variant: body.variant });
         const learner = memoryContext(body);
         if (learner) logger.info?.(`[wonder] lesson request personalized with ${Math.min(memory.size, 15)} memory items`);
-        const context = joinContext(learner && `${learner}\nUse this to pick examples and pacing that fit this learner; the lesson itself stays about the requested topic.`);
+        const context = joinContext(
+          learner && `${learner}\nUse this to pick examples and pacing that fit this learner; the lesson itself stays about the requested topic.`,
+          body.memoryEnabled !== false ? insightsContext(body.learnerInsights) : '', // Phase 6
+        );
         let messages = cont
           ? [{ role: 'user', content: steeringUserContent(request, cont.kept, cont.instruction, { mode: cont.mode, fromPage: cont.fromPage }) }]
           : [{ role: 'user', content: request }];

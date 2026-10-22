@@ -6,6 +6,7 @@
 
 import { ICONS } from '../../chatgpt-dil/src/icons.js';
 import { FUNCTION_GRAPH_VOCAB, FUNCTION_GRAPH_LESSON_RULE, GROUNDING_GUIDANCE } from './prompts-extra.js'; // Phases 3+5
+import { STYLE_VARIANTS, isVariant } from '../public/outcomes-core.js'; // Phase 6
 
 const ICON_NAMES = Object.keys(ICONS).sort().join(', ');
 
@@ -108,7 +109,8 @@ Your tools act inside Wonder. Each tool call shows the learner an interactive ca
 - quiz_me: when they ask to be quizzed or you want to check understanding. 2-4 questions; single_select (2-4 options, wrong options are plausible misconceptions) or true_false (options [{"value":"true","label":"True"},{"value":"false","label":"False"}]); exactly one correct value; always a hint and an explanation. Ground it in their recent lessons or stated goal. Don't reveal the answers in your text.
 - remember: save a durable fact that will personalize future lessons: a goal ("wants to get good at statistics in a week"), a preference ("likes worked examples"), a struggle ("confuses variance and standard deviation") or background ("knows basic algebra"). Only facts the learner told you or clearly showed; one fact per call; never save sensitive personal data (health, finances, contact details). Don't re-save what is already in the learner's memory.
 - forget: remove a memory item by its id when the learner asks you to forget something or a fact is no longer true.
-- get_progress: read their review deck, due cards, streak, XP, recent lessons, courses and saved plans. Call it before making a plan, when they ask how they are doing, or when you need to know what they studied.
+- get_progress: read their review deck, due cards, streak, XP, recent lessons, courses and saved plans, plus measured outcomes: each lesson's recall when its cards came back days later, the lessons that are fading (with the cards that keep slipping) and what has worked for this learner. Call it before making a plan, when they ask how they are doing, or when you need to know what they studied.
+- Outcomes beat impressions: a lesson whose recall is low has not been learned yet, whatever its quiz score was. When a lesson is fading, suggest reviewing it or relearning it (create_lesson on the slipping idea, in a different angle) before piling on new topics. Quote recall numbers only as they appear in get_progress.
 Tools are optional: for a simple question just answer. You may call several tools in one turn.
 
 # Format
@@ -217,13 +219,30 @@ export const EXTRACT_SCHEMA = {
   },
 };
 
-export function lessonUserMessage({ topic, level, course, lessonTitle, lessonSummary }) {
+export function lessonUserMessage({ topic, level, course, lessonTitle, lessonSummary, variant }) {
   const parts = [`Write a lesson about: ${topic}`];
   parts.push(`Learner level: ${level || 'beginner'}`);
   if (course?.title) parts.push(`This lesson is part of the course "${course.title}".`);
   if (lessonTitle) parts.push(`Lesson title: ${lessonTitle}`);
   if (lessonSummary) parts.push(`By the end the learner should be able to: ${lessonSummary}`);
+  // Phase 6: the teaching style under test goes in the user turn, never the cached system prompt
+  if (isVariant(variant) && STYLE_VARIANTS[variant].instruction) parts.push(STYLE_VARIANTS[variant].instruction);
   return parts.join('\n');
+}
+
+/**
+ * Phase 6: "what works for this learner", measured client-side from delayed review recall.
+ * Untrusted input: at most 4 single-line strings of 240 chars.
+ */
+export function cleanInsights(raw) {
+  return (Array.isArray(raw) ? raw : []).filter((x) => typeof x === 'string')
+    .map((x) => x.replace(/[\u0000-\u001f<>]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 240)).filter(Boolean).slice(0, 4);
+}
+
+export function insightsContext(raw) {
+  const lines = cleanInsights(raw);
+  if (!lines.length) return '';
+  return `What has worked for this learner, measured from how well they recalled earlier lessons days later:\n${lines.map((l) => `- ${l}`).join('\n')}\nLean toward what they remember best when you choose visuals and structure; keep the lesson about the requested topic.`;
 }
 
 const MAX_CONTEXT_CHARS = 24000;

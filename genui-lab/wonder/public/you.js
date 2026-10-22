@@ -4,10 +4,11 @@
 import { el, icon, toast } from './ui.js';
 import { learnerTotals, activityGrid, DAILY_GOALS, goalOf } from './progress-core.js';
 import { memoryPanel } from './memory-screen.js';
+import { insightsPanel } from './insights-panel.js'; // Phase 6
 
 export const TEXT_SIZES = [['0.92', 'Small'], ['1', 'Default'], ['1.1', 'Large'], ['1.2', 'Larger']];
 
-/** @param {{app: HTMLElement, store: object, shell: object, refresh: Function}} ctx */
+/** @param {{app: HTMLElement, store: object, shell: object, refresh: Function, createLesson: Function}} ctx */
 export function renderYou(ctx) {
   const { app, store, shell } = ctx;
   const d = store.data;
@@ -89,6 +90,6 @@ export function renderYou(ctx) {
         el('div', { class: 'setting-text' }, el('strong', null, 'Stored in this browser'), el('p', { class: 'muted small' }, store.persistent ? 'Lessons, chats, cards and progress live in this browser’s local storage.' : 'Storage is blocked here, so progress lasts only until you close the tab.')),
         el('div', { style: { display: 'flex', gap: '8px', flexWrap: 'wrap' } }, exportBtn, resetBtn))));
 
-  app.replaceChildren(el('div', { class: 'you' }, head, stats, heat, settingsCard, memoryPanel(ctx), dataCard));
+  app.replaceChildren(el('div', { class: 'you' }, head, stats, heat, insightsPanel(ctx), settingsCard, memoryPanel(ctx), dataCard));
   if (location.hash === '#/memory') requestAnimationFrame(() => document.getElementById('memory')?.scrollIntoView({ block: 'start' }));
 }

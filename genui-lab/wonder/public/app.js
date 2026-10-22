@@ -24,6 +24,7 @@ import { renderLibrary } from './library.js';
 import { renderYou, TEXT_SIZES } from './you.js';
 import { needsOnboarding, showOnboarding } from './onboarding.js';
 import { dailyProgress, courseProgress } from './progress-core.js';
+import { pickVariant, insightsForPrompt, lessonOutcome, RECALL_MIN, STYLE_VARIANTS } from './outcomes-core.js'; // Phase 6
 
 const store = createStore();
 const PAGE_ID = uid('page'); // this page load: a 'streaming' lesson owned by another id was interrupted
@@ -164,10 +165,33 @@ function createLesson(fields) {
   const id = uid('lesson');
   const now = new Date().toISOString();
   store.update((d) => {
-    d.lessons[id] = { id, status: 'new', markdown: '', dil: null, appData: null, tutor: [], finished: false, createdAt: now, updatedAt: now, ...fields };
+    // Phase 6: each new lesson is taught in one style of the balanced experiment (outcomes-core)
+    d.lessons[id] = { id, status: 'new', markdown: '', dil: null, appData: null, tutor: [], finished: false, createdAt: now, updatedAt: now, variant: pickVariant(d), ...fields };
     return d;
   });
   return id;
+}
+
+/** Phase 6: "How well it stuck": recall days later, forecast memory and the cards that keep slipping. */
+function stuckPanel(o, lesson) {
+  const pct = (r) => `${Math.round(r * 100)}%`;
+  const style = STYLE_VARIANTS[lesson?.variant]?.label;
+  const measured = o.recall.n >= RECALL_MIN;
+  const delays = Object.entries(o.buckets).filter(([, b]) => b.n).map(([k, b]) => `${pct(b.rate)} after ${k} days`).join(' · ');
+  const body = measured
+    ? `You recalled ${pct(o.recall.rate)} of this lesson’s cards when they came back days later (${o.recall.n} review${o.recall.n === 1 ? '' : 's'}${delays ? `: ${delays}` : ''}).`
+    : o.cards
+      ? `Ask again in a few days: recall is measured when this lesson’s cards come back for review after at least a day (${o.recall.n} of ${RECALL_MIN} so far).`
+      : 'Collect this lesson’s cards to measure how well it sticks.';
+  return el('div', { class: `stuck stuck-${o.verdict}` },
+    el('div', { class: 'stuck-head' }, el('strong', null, icon('target'), ' How well it stuck'), style ? el('span', { class: 'tag' }, style) : null),
+    el('p', { class: 'muted small' }, body),
+    el('div', { class: 'end-stats' },
+      measured ? el('span', { class: `tag ${o.verdict === 'stuck' ? 'green' : 'amber'}` }, `${pct(o.recall.rate)} recall`) : null,
+      o.memoryToday != null ? el('span', { class: 'tag brand', title: 'FSRS estimate of how likely you are to recall a card right now' }, `~${pct(o.memoryToday)} memory today`) : null),
+    o.leeches.length ? el('p', { class: 'small' }, 'Keeps slipping: ', el('em', null, inlineMd(o.leeches[0].prompt)), o.leeches.length > 1 ? ` and ${o.leeches.length - 1} more` : '') : null,
+    o.reviewed && (o.verdict === 'fading' || o.verdict === 'weak' || o.leeches.length)
+      ? el('a', { class: 'btn btn-secondary', href: `#/review/lesson/${o.lessonId}` }, icon('repeat'), 'Refresh this lesson’s cards') : null);
 }
 
 function saveLesson(id, patch) {
@@ -485,6 +509,7 @@ function renderLesson(lessonId) {
       el('h2', { class: 'h-lg' }, 'Lesson finished'),
       el('p', { class: 'muted' }, 'Its cards are in your review deck. Revisit any time, or keep going.'),
       el('div', { class: 'end-stats' }, score),
+      stuckPanel(lessonOutcome(store.data, lessonId), l),
       el('div', { class: 'end-actions' },
         nxt ? el('button', { class: 'btn btn-lg', type: 'button', onclick: () => openCourseLesson(l.courseId, nxt.si, nxt.li) }, icon('play'), `Next: ${nxt.title}`) : null,
         due ? el('a', { class: `btn btn-lg ${nxt ? 'btn-secondary' : ''}`, href: '#/review' }, icon('repeat'), `Review ${due} card${due === 1 ? '' : 's'}`) : null,
@@ -681,6 +706,7 @@ function renderLesson(lessonId) {
     try {
       r = await streamTurn('/api/lesson/stream', {
         topic: l.topic, level: l.level, lessonTitle: l.lessonTitle, lessonSummary: l.lessonSummary, course: l.course, memoryEnabled: memoryEnabled(),
+        variant: l.variant, learnerInsights: memoryEnabled() ? insightsForPrompt(store.data) : [], // Phase 6
         ...(continueFrom ? { continueFrom } : {}),
       }, {
         signal: ac.signal,
@@ -1060,10 +1086,10 @@ function showPack(lesson, data, { onFinished } = {}) {
 
 // ------------------------------------------------------------------ review + routing
 
-function renderReviewScreen() {
+function renderReviewScreen(lessonId = null) {
   const root = el('div', { class: 'review-wrap' });
   app.replaceChildren(root);
-  const cleanup = renderReview(root, { store, onExit: () => { location.hash = '#/'; }, onXp: () => { refreshChrome(); shell.bump(); } });
+  const cleanup = renderReview(root, { store, lessonId, onExit: () => { location.hash = lessonId ? '#/you' : '#/'; }, onXp: () => { refreshChrome(); shell.bump(); } });
   if (typeof cleanup === 'function') teardown.push(cleanup);
 }
 
@@ -1083,6 +1109,7 @@ function route() {
   if ((m = /^#\/lesson\/([\w-]+)$/.exec(h))) { screen = 'lesson'; document.body.dataset.screen = screen; renderLesson(m[1]); }
   else if ((m = /^#\/course\/([\w-]+)$/.exec(h))) { screen = 'course'; document.body.dataset.screen = screen; renderCourse(m[1]); }
   else if (h === '#/review') { screen = 'review'; document.body.dataset.screen = screen; renderReviewScreen(); }
+  else if ((m = /^#\/review\/lesson\/([\w-]+)$/.exec(h))) { screen = 'review'; document.body.dataset.screen = screen; renderReviewScreen(m[1]); }
   else if ((m = /^#\/teacher(?:\/([\w-]+))?$/.exec(h))) { screen = 'teacher'; document.body.dataset.screen = screen; renderTeacher(screenCtx(), m[1] || null); }
   else if (h === '#/library') { screen = 'library'; document.body.dataset.screen = screen; renderLibrary(screenCtx()); }
   else if (h === '#/you' || h === '#/memory') { screen = 'you'; document.body.dataset.screen = screen; renderYou(screenCtx()); }

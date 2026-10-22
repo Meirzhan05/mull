@@ -6,6 +6,7 @@ import { el, icon, toast, progressRing, relTime } from './ui.js';
 import { currentStreak } from './deck.js';
 import { dailyProgress, weekStrip, upNext, suggestedTopics, greeting, courseProgress } from './progress-core.js';
 import { pageCount } from './steering-core.js';
+import { lessonOutcome, outcomeLabel } from './outcomes-core.js'; // Phase 6
 
 const MODES = [
   { id: 'lesson', label: 'Lesson', icon: 'play', placeholder: 'What do you want to learn? e.g. How do vaccines work?', hint: 'A 5–10 minute interactive lesson' },
@@ -197,7 +198,14 @@ export function lessonTile(l, data) {
     el('span', { class: 'lesson-tile-meta' },
       course ? el('span', null, course.title) : el('span', null, (l.level || 'beginner').replace(/^./, (c) => c.toUpperCase())),
       l.quizScore?.total ? el('span', null, `· Quiz ${l.quizScore.score}/${l.quizScore.total}`) : null,
+      l.finished ? recallTag(lessonOutcome(data, l.id)) : null,
       el('span', { style: { marginLeft: 'auto' } }, relTime(l.updatedAt))));
+}
+
+/** Phase 6: "92% recall" (measured days later) or "~80% memory" (FSRS forecast) on a tile. */
+function recallTag(o) {
+  const label = outcomeLabel(o);
+  return label ? el('span', { class: `recall-tag ${o.verdict}`, title: o.recall.n >= 3 ? `Recalled ${o.recall.hits} of ${o.recall.n} times when the cards came back days later` : 'Estimated chance you remember this lesson’s cards today' }, `· ${label}`) : null;
 }
 
 export { courseProgress };

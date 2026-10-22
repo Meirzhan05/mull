@@ -246,10 +246,31 @@ export function sanitizeProgress(p) {
       title: oneLine(l?.title, 160),
       finished: !!l?.finished,
       ...(l?.quiz && Number.isFinite(Number(l.quiz.total)) ? { quiz: { score: n(l.quiz.score), total: n(l.quiz.total) } } : {}),
+      ...(l?.recall != null && Number.isFinite(Number(l.recall)) ? { recall: Math.min(100, n(l.recall)), recallReviews: n(l.recallReviews) } : {}),
       when: oneLine(l?.when, 40),
     })).filter((l) => l.title),
     courses: list(o.courses, 6).map((c) => ({ title: oneLine(c?.title, 160), done: n(c?.done), total: n(c?.total) })).filter((c) => c.title),
     plans: list(o.plans, 3).map((p2) => ({ goal: oneLine(p2?.goal, 160), days: n(p2?.days), opened: n(p2?.opened), total: n(p2?.total) })).filter((x) => x.goal),
+    outcomes: sanitizeOutcomes(o.outcomes),
+  };
+}
+
+const VERDICTS = ['stuck', 'fading', 'weak', 'unknown'];
+/** Phase 6 outcome fields of the snapshot (fading lessons, what works), bounded. */
+function sanitizeOutcomes(o) {
+  const x = o && typeof o === 'object' ? o : {};
+  const pct = (v) => (v != null && Number.isFinite(Number(v)) ? Math.max(0, Math.min(100, Math.round(Number(v)))) : undefined);
+  return {
+    fading: (Array.isArray(x.fading) ? x.fading.slice(0, 4) : []).map((f) => ({
+      title: oneLine(f?.title, 160),
+      verdict: VERDICTS.includes(f?.verdict) ? f.verdict : 'unknown',
+      ...(pct(f?.recall) != null ? { recall: pct(f.recall), reviews: Math.max(0, Math.round(Number(f.reviews) || 0)) } : {}),
+      ...(pct(f?.memoryToday) != null ? { memoryToday: pct(f.memoryToday) } : {}),
+      hardCards: (Array.isArray(f?.hardCards) ? f.hardCards.slice(0, 2) : []).map((c) => oneLine(c, 200)).filter(Boolean),
+    })).filter((f) => f.title),
+    whatWorks: (Array.isArray(x.whatWorks) ? x.whatWorks.slice(0, 4) : []).map((t) => oneLine(t, 240)).filter(Boolean),
+    overallRecall: pct(x.overallRecall) ?? null,
+    delayedReviews: Math.max(0, Math.round(Number(x.delayedReviews) || 0)),
   };
 }
 

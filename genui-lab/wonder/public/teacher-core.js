@@ -3,6 +3,7 @@
 // model knows what it showed and what the learner did, without ever seeing card markup).
 
 import { deckStats, currentStreak, dateKey } from './deck.js';
+import { allOutcomes, outcomeSnapshot, RECALL_MIN } from './outcomes-core.js'; // Phase 6
 
 function courseProgress(data, course) {
   let done = 0;
@@ -15,6 +16,7 @@ function courseProgress(data, course) {
 export function progressSnapshot(data, now = new Date()) {
   const st = deckStats(data.deck || { items: [] }, now);
   const lessons = Object.values(data.lessons || {}).sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || '')).slice(0, 6);
+  const outcomes = new Map(allOutcomes(data, now).map((o) => [o.lessonId, o]));
   const plans = (data.plans || []).slice(0, 3).map((p) => {
     const items = (p.days || []).flatMap((d) => d.items || []);
     return { goal: p.goal, days: (p.days || []).length, opened: items.filter((i) => i.opened).length, total: items.length };
@@ -24,14 +26,19 @@ export function progressSnapshot(data, now = new Date()) {
     xp: data.stats?.xp || 0,
     streak: currentStreak(data.stats || {}, now),
     deck: { total: st.total, due: st.due, mastered: st.review, nextDue: st.nextDue },
-    recentLessons: lessons.map((l) => ({
-      title: l.title || l.topic,
-      finished: !!l.finished,
-      ...(l.quizScore ? { quiz: { score: l.quizScore.score, total: l.quizScore.total } } : {}),
-      when: l.updatedAt || '',
-    })),
+    recentLessons: lessons.map((l) => {
+      const o = outcomes.get(l.id);
+      return {
+        title: l.title || l.topic,
+        finished: !!l.finished,
+        ...(l.quizScore ? { quiz: { score: l.quizScore.score, total: l.quizScore.total } } : {}),
+        ...(o && o.recall.n >= RECALL_MIN ? { recall: Math.round(o.recall.rate * 100), recallReviews: o.recall.n } : {}),
+        when: l.updatedAt || '',
+      };
+    }),
     courses: (data.courses || []).slice(0, 5).map((c) => ({ title: c.title, ...courseProgress(data, c) })),
     plans,
+    outcomes: outcomeSnapshot(data, now), // Phase 6: what faded, what works
   };
 }
 

@@ -1,0 +1,34 @@
+/* Phases 6-7: lesson outcomes, insights, daily brief, dated plans, materials. */
+
+/* "How well it stuck" on a finished lesson */
+.stuck { display: grid; gap: 8px; width: 100%; max-width: 520px; padding: 14px 16px; border-radius: var(--radius-sm); background: var(--bg-deep); text-align: left; }
+.stuck-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+.stuck-head strong { display: inline-flex; align-items: center; gap: 6px; }
+.stuck p { margin: 0; }
+.stuck .btn { justify-self: start; }
+
+/* What works for you */
+.insights { display: grid; gap: 14px; padding: 18px; }
+.insights h3 { margin: 4px 0 0; }
+.ins-findings { margin: 0; padding: 0; list-style: none; display: grid; gap: 8px; }
+.ins-findings li { display: flex; gap: 8px; align-items: flex-start; line-height: 1.45; }
+.ins-findings .icon { flex: 0 0 auto; margin-top: 2px; color: var(--brand); }
+.ins-rows { display: grid; gap: 10px; }
+.ins-row { display: grid; grid-template-columns: minmax(120px, 1.1fr) minmax(60px, 1fr) minmax(110px, auto); gap: 12px; align-items: center; }
+.ins-label, .ins-num { display: grid; gap: 1px; min-width: 0; }
+.ins-num { text-align: right; font-weight: 700; font-variant-numeric: tabular-nums; }
+.ins-bar { display: block; height: 8px; border-radius: 999px; background: var(--line); overflow: hidden; }
+.ins-bar-fill { display: block; height: 100%; border-radius: inherit; background: var(--brand); transition: width 300ms ease; }
+.ins-toggle { border-top: 1px solid var(--line); padding-top: 14px; }
+.ins-fading { display: grid; gap: 10px; margin-top: 14px; }
+.ins-lesson { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; padding: 14px 16px; }
+.ins-lesson-text { display: grid; gap: 2px; min-width: 0; flex: 1 1 220px; }
+.ins-lesson-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+@media (max-width: 560px) {
+  .ins-row { grid-template-columns: 1fr auto; }
+  .ins-row .ins-bar { grid-column: 1 / -1; grid-row: 2; }
+}
+
+.recall-tag { font-weight: 600; }
+.recall-tag.stuck { color: var(--success); }
+.recall-tag.fading, .recall-tag.weak { color: var(--warning); }
