@@ -134,7 +134,7 @@ export function renderYou(ctx) {
     el('div', { class: 'card settings' },
       el('div', { class: 'setting' },
         el('div', { class: 'setting-text' }, el('strong', null, 'Daily goal'), el('p', { class: 'muted small' }, 'XP to earn each day. A finished lesson gives 50 or more; each review 1 to 5.')),
-        radioSeg('Daily goal', DAILY_GOALS.map((g) => [g.xp, `${g.label} · ${g.xp}`]), goal, (v) => { setSetting({ dailyGoal: Number(v) }); toast(`Daily goal: ${v} XP`); })),
+        Object.assign(radioSeg('Daily goal', DAILY_GOALS.map((g) => [g.xp, `${g.label} · ${g.xp}`]), goal, (v) => { setSetting({ dailyGoal: Number(v) }); toast(`Daily goal: ${v} XP`); }), { className: 'seg seg-grid' })),
       el('div', { class: 'setting' },
         el('div', { class: 'setting-text' }, el('strong', null, 'Theme')),
         radioSeg('Theme', [['system', 'System', 'monitor'], ['light', 'Light', 'sun'], ['dark', 'Dark', 'moon']], shell.theme, (v) => shell.setTheme(v))),
