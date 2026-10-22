@@ -168,7 +168,10 @@ Phases 6–8 are implemented on the `feature/ai-features` branch, one commit per
   - ExplainBack typing, grading, XP and mastery;
   - an `explain` review card;
   - Guide me in the tutor.
-- **Not yet verified live:** the critic, grader and judge calls and the new extraction schema still need one real `claude-opus-5-5` run (`npm run eval -- --limit 2`).
+- **Live, `claude-opus-5-5`, 2026-10-22:**
+  - A 2-lesson eval (vaccines and Bayes) passed lint 12/12 on both, with a judge mean of 4.3/5 and accuracy 5/5. The critic found one real minor timing error (sore arm on days 7–14) and confirmed the Bayes arithmetic. No quiz fixes were needed.
+  - The grader scored a partly wrong explanation 2/3 and named the misconception ("clouds absorb violet").
+  - The new extraction schema returned tagged items, including an `explain` item.
 
 ## Verification for each phase
 

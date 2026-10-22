@@ -19,6 +19,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createWonderServer } from '../server/app.js';
 import { createMemoryStore } from '../server/memory.js';
+import { loadUserEnv } from '../server/web.js'; // ~/.config/wonder/.env fallback, as for the Next app
 import { MODEL } from '../server/claude.js';
 import { judgeLesson, summarizeRuns, reportMarkdown } from '../server/judge.js';
 import { ConversationSourceParser, ConversationTurn, CONTENT_TYPE } from '../../chatgpt-dil/src/stream.js';
@@ -84,6 +85,7 @@ export async function runEval(opts, { serverOpts = {}, log = console.log } = {})
   const judging = opts.judge && mode === 'claude';
   const client = serverOpts.client || server.wonder.client;
   const startedAt = new Date().toISOString();
+  log(`Eval: ${topics.length} topic(s) in ${mode} mode${mode === 'demo' ? ' (no API key found: lint and pipeline only)' : `, judge ${judging ? 'on' : 'off'}, critic ${opts.verify ? 'on' : 'off'}`}`);
   try {
     const runs = await pool(topics, opts.concurrency, async ({ topic, level = 'beginner' }, i) => {
       const t0 = Date.now();
@@ -117,8 +119,9 @@ export function writeReport(report, dir) {
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])) {
+  loadUserEnv(); // same ~/.config/wonder/.env fallback as the app
   const opts = parseArgs(process.argv.slice(2));
-  const report = await runEval(opts);
+  const report = await runEval(opts, { log: (line) => console.log(line) });
   const files = writeReport(report, opts.out);
   const m = report.summary.means;
   console.log(`\n${report.summary.ok}/${report.summary.runs} lessons · lint ${m.lint ?? '–'} · judge ${m.judge ?? '–'} · critic issues ${m.issues ?? '–'}`);
