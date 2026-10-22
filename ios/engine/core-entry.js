@@ -376,7 +376,7 @@ const API = {
   reviewQueue: ({ lessonId = null, limit = 20 } = {}) => {
     const now = new Date();
     const q = lessonId ? lessonEntries(d().deck, lessonId, now, limit) : dueEntries(d().deck, now, limit);
-    return q.map((e) => ({ ...e, previews: previewDue(e, now) }));
+    return q.map((e) => ({ ...e, previews: Object.fromEntries(Object.entries(previewDue(e, now)).map(([r, due]) => [r, formatDue(due, now)])) }));
   },
   grade: ({ item, answer }) => gradePracticeItem(item, answer),
   reviewRecord: ({ entryId, rating, correct }) => reviewRecord(entryId, rating, correct),
