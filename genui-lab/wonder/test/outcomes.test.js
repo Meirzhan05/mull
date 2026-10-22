@@ -130,6 +130,10 @@ test('whatWorks: component findings need enough reviews on both sides and a real
   const c = w.components.find((x) => x.name === 'LessonStepper');
   assert.equal(c.with.n, 9);
   assert.equal(c.without.n, 9);
+  assert.equal(w.findings.length, 0, 'one lesson per side is an anecdote, even with enough reviews');
+  d = withLesson(d, 'w2', { cards: 3, markdown: step, later: [Rating.Good, Rating.Good, Rating.Good] });
+  d = withLesson(d, 'n2', { cards: 3, markdown: plain, later: [Rating.Again, Rating.Good, Rating.Again] });
+  w = whatWorks(d, days(16));
   assert.equal(w.findings.length, 1);
   assert.match(w.findings[0].text, /worked example \(LessonStepper\) were remembered better: 100% vs 33%/);
   // a thin comparison is not a finding

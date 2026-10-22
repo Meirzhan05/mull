@@ -177,7 +177,7 @@ function stuckPanel(o, lesson) {
   const pct = (r) => `${Math.round(r * 100)}%`;
   const style = STYLE_VARIANTS[lesson?.variant]?.label;
   const measured = o.recall.n >= RECALL_MIN;
-  const delays = Object.entries(o.buckets).filter(([, b]) => b.n).map(([k, b]) => `${pct(b.rate)} after ${k} days`).join(' · ');
+  const delays = Object.entries(o.buckets).filter(([, b]) => b.n).map(([k, b]) => `${pct(b.rate)} after ${k.replace('-', '–')} days`).join(' · ');
   const body = measured
     ? `You recalled ${pct(o.recall.rate)} of this lesson’s cards when they came back days later (${o.recall.n} review${o.recall.n === 1 ? '' : 's'}${delays ? `: ${delays}` : ''}).`
     : o.cards

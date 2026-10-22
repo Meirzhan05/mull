@@ -5,7 +5,7 @@
 // the teaching-style experiment.
 
 import { el, icon, toast } from './ui.js';
-import { whatWorks, fadingLessons, STYLE_VARIANTS, VARIANT_IDS, RECALL_MIN, FINDING_MIN } from './outcomes-core.js';
+import { whatWorks, fadingLessons, STYLE_VARIANTS, VARIANT_IDS, RECALL_MIN, FINDING_MIN, FINDING_LESSONS } from './outcomes-core.js';
 
 const pct = (r) => `${Math.round(r * 100)}%`;
 const reviews = (n) => `${n} review${n === 1 ? '' : 's'}`;
@@ -45,7 +45,7 @@ export function insightsPanel(ctx) {
   const findings = w.findings.length
     ? el('ul', { class: 'ins-findings' }, ...w.findings.map((f) => el('li', null, icon(f.positive === false ? 'x' : 'sparkles'), el('span', null, f.text))))
     : el('p', { class: 'muted small' }, w.totalReviews
-      ? `No clear pattern yet. A finding needs at least ${FINDING_MIN} delayed reviews on each side and a 10-point gap, so keep reviewing.`
+      ? `No clear pattern yet. A finding needs at least ${FINDING_LESSONS} lessons and ${FINDING_MIN} delayed reviews on each side, and a 10-point gap, so keep reviewing.`
       : 'When a lesson’s cards come back for review a day or more later, Wonder checks what you still remember. Patterns show up here once there is enough data.');
 
   const styles = el('div', { class: 'ins-rows', role: 'list', 'aria-label': 'Recall by teaching style' },
@@ -57,7 +57,7 @@ export function insightsPanel(ctx) {
   const comps = w.components.filter((c) => c.with.n >= RECALL_MIN).slice(0, 5);
   const visuals = comps.length ? el('div', { class: 'ins-rows', role: 'list', 'aria-label': 'Recall with and without each visual' },
     ...comps.map((c) => el('div', { class: 'ins-row', role: 'listitem' },
-      el('span', { class: 'ins-label' }, el('strong', null, c.label.replace(/ \(.*\)$/, '')), el('span', { class: 'muted tiny' }, `in ${c.with.lessons} lesson${c.with.lessons === 1 ? '' : 's'}`)),
+      el('span', { class: 'ins-label' }, el('strong', null, c.label.replace(/ \(.*\)$/, '').replace(/^./, (ch) => ch.toUpperCase())), el('span', { class: 'muted tiny' }, `in ${c.with.lessons} lesson${c.with.lessons === 1 ? '' : 's'}`)),
       bar(c.with.rate, c.with.n, RECALL_MIN),
       el('span', { class: 'ins-num' }, pct(c.with.rate), el('span', { class: 'muted tiny' }, c.without.n >= RECALL_MIN ? `vs ${pct(c.without.rate)} without · ${reviews(c.with.n + c.without.n)}` : reviews(c.with.n)))))) : null;
 

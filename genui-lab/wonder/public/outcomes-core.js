@@ -12,6 +12,7 @@ import { forgettingCurve, State } from '../../wondering-genui/src/fsrs.js';
 export const RECALL_MIN = 3; // delayed reviews before a lesson's recall is shown
 export const FINDING_MIN = 8; // delayed reviews on each side of a comparison
 export const FINDING_GAP = 0.10; // recall difference worth reporting
+export const FINDING_LESSONS = 2; // lessons on each side: one lesson is an anecdote, not a pattern
 export const EXPLOIT_LESSONS = 3; // finished lessons per style before exploiting
 export const EXPLOIT_REVIEWS = 5; // delayed reviews per style before exploiting
 const DAY = 864e5;
@@ -213,7 +214,8 @@ export function pickVariant(data, { now = new Date(), rand = Math.random } = {})
 
 /**
  * Recall by teaching style and by component, plus plain-language findings that clear the
- * thresholds (each side ≥ FINDING_MIN delayed reviews and a gap ≥ FINDING_GAP).
+ * thresholds (each side ≥ FINDING_LESSONS lessons and ≥ FINDING_MIN delayed reviews, and a gap
+ * ≥ FINDING_GAP). These are correlations within one learner's lessons, worded as such.
  */
 export function whatWorks(data, now = new Date()) {
   const outcomes = allOutcomes(data, now).filter((o) => data?.lessons?.[o.lessonId]);
@@ -223,13 +225,13 @@ export function whatWorks(data, now = new Date()) {
   const comps = groupStats(data, outcomes, (l) => lessonRecipe(l).components);
   const components = [];
   for (const [name, w] of comps) {
-    const without = { n: totalN - w.n, hits: totalHits - w.hits };
+    const without = { lessons: outcomes.length - w.lessons, n: totalN - w.n, hits: totalHits - w.hits };
     without.rate = rate(without.hits, without.n);
-    components.push({ name, label: RECIPE_COMPONENTS[name], with: { lessons: w.lessons, n: w.n, rate: w.rate }, without: { n: without.n, rate: without.rate }, delta: w.rate != null && without.rate != null ? w.rate - without.rate : null });
+    components.push({ name, label: RECIPE_COMPONENTS[name], with: { lessons: w.lessons, n: w.n, rate: w.rate }, without: { lessons: without.lessons, n: without.n, rate: without.rate }, delta: w.rate != null && without.rate != null ? w.rate - without.rate : null });
   }
   components.sort((a, b) => Math.abs(b.delta ?? 0) - Math.abs(a.delta ?? 0));
   const findings = [];
-  const measured = variants.filter((v) => v.n >= FINDING_MIN).sort((a, b) => b.rate - a.rate);
+  const measured = variants.filter((v) => v.n >= FINDING_MIN && v.lessons >= FINDING_LESSONS).sort((a, b) => b.rate - a.rate);
   if (measured.length >= 2 && measured[0].rate - measured[measured.length - 1].rate >= FINDING_GAP) {
     const top = measured[0];
     const low = measured[measured.length - 1];
@@ -237,7 +239,7 @@ export function whatWorks(data, now = new Date()) {
   }
   for (const c of components) {
     if (findings.length >= 4) break;
-    if (c.with.n < FINDING_MIN || c.without.n < FINDING_MIN || Math.abs(c.delta) < FINDING_GAP) continue;
+    if (c.with.n < FINDING_MIN || c.without.n < FINDING_MIN || c.with.lessons < FINDING_LESSONS || c.without.lessons < FINDING_LESSONS || Math.abs(c.delta) < FINDING_GAP) continue;
     findings.push(c.delta > 0
       ? { kind: 'component', id: c.name, positive: true, text: `Lessons with a ${c.label} were remembered better: ${pct(c.with.rate)} vs ${pct(c.without.rate)} without (${c.with.n + c.without.n} delayed reviews).` }
       : { kind: 'component', id: c.name, positive: false, text: `Lessons with a ${c.label} were remembered worse: ${pct(c.with.rate)} vs ${pct(c.without.rate)} without (${c.with.n + c.without.n} delayed reviews).` });
