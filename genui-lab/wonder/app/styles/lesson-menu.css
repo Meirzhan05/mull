@@ -1,0 +1,15 @@
+/* Lesson overflow menu (lesson-menu.js): text size, widget reset, Teacher. */
+.overflow { position: relative; flex: 0 0 auto; }
+.overflow-btn svg circle { fill: currentColor; stroke: none; }
+.overflow-btn[aria-expanded="true"] { background: var(--hover); }
+.overflow-menu {
+  position: absolute; right: 0; top: calc(100% + 6px); z-index: 30; width: max-content; min-width: 220px; max-width: min(300px, calc(100vw - 32px));
+  padding: 6px; border-radius: var(--r-lg); background: var(--surface); box-shadow: var(--shadow-pop); animation: overflow-in 140ms ease both;
+}
+.overflow-menu[hidden] { display: none; }
+@keyframes overflow-in { from { opacity: 0; transform: translateY(-3px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { .overflow-menu { animation: none; } }
+.overflow-item { display: grid; gap: 2px; width: 100%; padding: 8px 10px; border: 0; border-radius: var(--r-sm); background: transparent; color: var(--ink); font: inherit; text-align: left; cursor: pointer; }
+.overflow-item:hover, .overflow-item:focus-visible { background: var(--hover); box-shadow: none; }
+.overflow-item-label { font-weight: 500; font-size: 0.875rem; }
+.overflow-item-hint { font-size: 0.75rem; line-height: 1.35; color: var(--ink-3); }

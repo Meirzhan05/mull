@@ -2,7 +2,7 @@
 // the theme switch, the demo notice and the ⌘K command palette. Screens render into #app;
 // the shell only reflects the current route and the learner's stats.
 
-import { el, icon, progressRing, toast } from './ui.js';
+import { el, icon, toast } from './ui.js';
 import { deckStats, currentStreak } from './deck.js';
 import { dailyProgress, matchScore } from './progress-core.js';
 
@@ -27,9 +27,8 @@ export function createShell({ store, getStatus, actions }) {
   const tabbar = document.getElementById('tabbar');
   const banner = document.getElementById('demo-banner');
 
-  const brand = () => el('a', { class: 'brand', href: '#/', 'aria-label': 'Wonder home' },
-    el('span', { class: 'brand-mark', 'aria-hidden': 'true' }, markSvg()),
-    el('span', { class: 'brand-name' }, 'Wonder'));
+  const brand = () => el('a', { class: 'brand', href: '#/', 'aria-label': 'Wonder, today' },
+    el('span', { class: 'brand-name' }, 'Wonder'), el('span', { class: 'brand-dot', 'aria-hidden': 'true' }, '.'));
 
   // -- theme
   let theme = 'system';
@@ -47,7 +46,7 @@ export function createShell({ store, getStatus, actions }) {
     drawThemeBtn();
   };
   const drawThemeBtn = () => {
-    themeBtn.replaceChildren(icon(THEME_ICON[theme]), el('span', { class: 'side-theme-label' }, `Theme: ${theme[0].toUpperCase()}${theme.slice(1)}`));
+    themeBtn.replaceChildren(icon(THEME_ICON[theme]), el('span', { class: 'side-theme-label' }, theme === 'dark' ? 'Night reading' : theme === 'light' ? 'Day reading' : 'Match system'));
     themeBtn.setAttribute('aria-label', `Color theme: ${theme}. Switch theme`);
   };
   themeBtn.addEventListener('click', () => { setTheme(THEMES[(THEMES.indexOf(theme) + 1) % THEMES.length]); toast(`Theme: ${theme}`); });
@@ -62,13 +61,13 @@ export function createShell({ store, getStatus, actions }) {
     return navLinks[n.id];
   }));
   const searchBtn = el('button', { class: 'search-trigger', type: 'button', 'aria-label': 'Search or start a lesson', onclick: () => openPalette() },
-    icon('search'), el('span', { class: 'search-trigger-text' }, 'Search or learn…'), el('kbd', null, isMac() ? '⌘K' : 'Ctrl K'));
+    icon('search'), el('span', { class: 'search-trigger-text' }, 'Search or begin…'), el('kbd', null, isMac() ? '⌘K' : 'Ctrl K'));
   const goalMini = el('a', { class: 'goal-mini', href: '#/you', title: 'Daily goal' });
   sidebar.replaceChildren(brand(), searchBtn, nav, el('div', { class: 'sidebar-foot' }, goalMini, themeBtn));
 
   // -- top bar (mobile)
-  const streakChip = el('a', { class: 'chip chip-streak', href: '#/you', title: 'Day streak' });
-  const xpChip = el('a', { class: 'chip chip-xp', href: '#/you', title: 'XP today' });
+  const streakChip = el('a', { class: 'chip chip-streak', href: '#/you', title: 'Streak' });
+  const xpChip = el('a', { class: 'chip chip-xp', href: '#/you', title: 'Today against your daily goal' });
   topbar.replaceChildren(brand(), el('div', { class: 'topbar-right' }, streakChip, xpChip,
     el('button', { class: 'icon-btn plain', type: 'button', 'aria-label': 'Search or start a lesson', onclick: () => openPalette() }, icon('search'))));
 
@@ -98,15 +97,18 @@ export function createShell({ store, getStatus, actions }) {
     const due = deckStats(d.deck).due;
     for (const b of [navBadges.review, tabBadges.review]) { b.hidden = !due; b.textContent = due > 99 ? '99+' : String(due); }
     streakChip.classList.toggle('lit', streak > 0);
-    streakChip.replaceChildren(icon('flame'), String(streak));
+    streakChip.replaceChildren(el('span', { class: 'chip-unit' }, 'Day'), ` ${streak}`);
     streakChip.setAttribute('aria-label', `${streak} day streak`);
-    xpChip.replaceChildren(icon('bolt'), `${day.xp}`, el('span', { class: 'chip-unit' }, `/${day.goal}`));
+    xpChip.replaceChildren(`${day.xp}`, el('span', { class: 'chip-unit' }, ` / ${day.goal} XP`));
     xpChip.setAttribute('aria-label', `${day.xp} of ${day.goal} XP today`);
+    goalMini.classList.toggle('met', day.met);
+    goalMini.setAttribute('aria-label', `Today ${day.xp} of ${day.goal} XP, ${streak} day streak`);
     goalMini.replaceChildren(
-      progressRing(day.pct, day.met ? icon('check') : icon('bolt'), { label: `Daily goal: ${day.xp} of ${day.goal} XP` }),
       el('span', { class: 'goal-mini-text' },
-        el('strong', null, day.met ? 'Goal reached' : `${day.xp} / ${day.goal} XP`),
-        el('span', { class: 'muted' }, streak ? `${streak}-day streak` : 'Start a streak today')));
+        el('span', { class: 'goal-mini-label' }, 'Today'),
+        el('strong', null, String(day.xp), el('small', null, ` / ${day.goal} XP`))),
+      el('span', { class: `ledger-bar ${day.met ? 'met' : ''}`, 'aria-hidden': 'true' }, el('i', { style: { width: `${Math.round(day.pct * 100)}%` } })),
+      el('span', { class: 'goal-mini-note' }, streak ? `Day ${streak} of the streak` : 'No streak yet'));
   }
 
   function bump() {
@@ -230,14 +232,4 @@ export function createShell({ store, getStatus, actions }) {
   });
 
   return { refresh, setActive, bump, showBanner, openPalette, setTheme, get theme() { return theme; } };
-}
-
-function markSvg() {
-  const NS = 'http://www.w3.org/2000/svg';
-  const svg = document.createElementNS(NS, 'svg');
-  svg.setAttribute('viewBox', '0 0 32 32');
-  const p = document.createElementNS(NS, 'path');
-  p.setAttribute('d', 'M8 11l3.2 11 4.3-8.2L19.8 22 23 11');
-  svg.appendChild(p);
-  return svg;
 }

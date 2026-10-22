@@ -1,0 +1,72 @@
+/* Citations, FunctionGraph controls and the lesson Steer composer, in the Wonder design system. */
+
+/* ---- Cite: a small numbered chip after the cited sentence, and its expanded card */
+.dil-root button[data-d-component="pressable"][data-variant="cite"] {
+  display: inline-flex !important; align-items: center; justify-content: center; width: auto; min-width: 1.15rem; height: 1.05rem; margin-inline-start: 0.2rem; padding: 0 0.3rem;
+  vertical-align: 0.15em; border-radius: 999px; font-family: var(--font); font-size: 0.62rem; line-height: 1; font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap;
+  color: var(--ink-2); background: var(--surface-3); border: 0; transition: background 120ms ease, color 120ms ease;
+}
+.dil-root button[data-d-component="pressable"][data-variant="cite"] > * { display: inline; }
+.dil-root button[data-d-component="pressable"][data-variant="cite"]:hover,
+.dil-root button[data-d-component="pressable"][data-variant="cite"][aria-pressed="true"] { background: var(--accent); color: #fff; }
+.dil-root :has(> [data-dil-catalog="CiteCard"]) { position: relative; }
+.dil-root [data-dil-catalog="CiteCard"] {
+  position: absolute; left: 0; z-index: 6; width: min(420px, 100%); margin-top: 6px; font-size: 0.875rem; line-height: 1.45; text-align: left; font-weight: 400;
+  box-shadow: var(--shadow-pop); animation: cite-in 160ms ease both; border-color: transparent !important;
+}
+.dil-root [data-dil-catalog="CiteCard"] p { margin: 0; }
+@keyframes cite-in { from { opacity: 0; transform: translateY(-3px); } to { opacity: 1; transform: none; } }
+.dil-root [data-dil-catalog="Sources"] { margin-top: 20px; }
+.dil-root button[data-d-component="pressable"][data-variant="source"] { width: 100%; text-align: left; }
+.dil-root button[data-d-component="pressable"][data-variant="source"]:hover { background: var(--hover); }
+
+/* ---- FunctionGraph: −/+ steppers and segmented track */
+.dil-root button[data-d-component="pressable"][data-variant="stepper"] { background: var(--surface); border: 1px solid var(--control-border); color: var(--ink); box-shadow: var(--shadow-sm); }
+.dil-root button[data-d-component="pressable"][data-variant="stepper"]:hover:not([disabled]) { background: var(--hover); }
+.dil-root button[data-d-component="pressable"][data-variant="stepper"][disabled] { opacity: 0.4; }
+.dil-root button[data-d-component="pressable"][data-variant="track"] { background: var(--surface-3); }
+.dil-root button[data-d-component="pressable"][data-variant="track"]:hover { background: var(--line-strong); }
+.dil-root button[data-d-component="pressable"][data-variant="track-on"] { background: var(--ink); }
+.dil-root button[data-d-component="pressable"][data-variant="track-on"][aria-pressed="true"] { background: var(--accent); }
+.dil-root [data-dil-catalog="GraphFormula"] code { white-space: normal; word-break: break-word; }
+
+/* ---- Steer: a small button that opens into suggestions + a field */
+.steer-bar {
+  display: grid; gap: 12px; padding: 14px; border-radius: var(--r-lg); background: var(--surface); flex: 1 0 100%;
+  border: 1px solid var(--line); box-shadow: var(--shadow-card); animation: fade-in 200ms ease both;
+}
+.steer-bar[hidden] { display: none; }
+.steer-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.steer-head > .ui-icon { width: 15px; height: 15px; color: var(--accent); flex: 0 0 auto; }
+.steer-head strong { font-size: 0.875rem; font-weight: 600; white-space: nowrap; }
+.steer-status { color: var(--ink-3); font-size: 0.8125rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.steer-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.steer-chip { border: 1px solid var(--control-border); background: var(--surface); color: var(--ink); padding: 0 11px; height: 28px; border-radius: 999px; font: inherit; font-size: 0.8125rem; cursor: pointer; transition: background 120ms; }
+.steer-chip:hover:not(:disabled) { background: var(--hover); }
+.steer-chip:disabled { opacity: 0.45; cursor: default; }
+.steer-body { display: grid; gap: 10px; }
+.steer-row { display: flex; gap: 8px; align-items: center; }
+.steer-row input { flex: 1; min-width: 0; height: 34px; border: 1px solid var(--control-border); border-radius: var(--r-md); padding: 0 12px; font: inherit; font-size: 0.875rem; background: var(--surface); color: var(--ink); outline: none; box-shadow: var(--shadow-sm); }
+.steer-row input:focus { border-color: var(--accent); box-shadow: var(--ring); }
+.steer-row .btn { height: 34px; }
+
+.steer-open { display: none; }
+.steer-head .steer-resume { margin-left: auto; flex: 0 0 auto; }
+.steer-head .steer-close { margin-left: auto; width: 28px; height: 28px; flex: 0 0 auto; border-color: transparent; background: transparent; }
+.steer-head .steer-resume[hidden], .steer-head .steer-close[hidden] { display: none; }
+.steer-bar[data-mode="resume"] { background: var(--warning-subtle); border-color: color-mix(in srgb, var(--warning) 30%, var(--line)); }
+.steer-bar[data-mode="resume"] .steer-head, .steer-bar[data-mode="revise"] .steer-head { flex-wrap: wrap; row-gap: 4px; }
+.steer-bar[data-mode="resume"] .steer-status, .steer-bar[data-mode="revise"] .steer-status { white-space: normal; order: 5; flex: 1 0 100%; }
+.steer-bar[data-mode="revise"] { position: sticky; bottom: max(12px, env(safe-area-inset-bottom)); z-index: 30; box-shadow: var(--shadow-pop); border-color: transparent; }
+.steer-bar[data-mode="live"]:not(.is-open), .steer-bar[data-mode="revise"]:not(.is-open) { padding: 0; border: 0; background: none; box-shadow: none; animation: none; flex: 0 0 auto; }
+.steer-bar[data-mode="revise"]:not(.is-open) { justify-self: start; }
+.steer-bar:not(.is-open) > :not(.steer-open) { display: none; }
+.steer-bar[data-mode="live"]:not(.is-open) .steer-open, .steer-bar[data-mode="revise"]:not(.is-open) .steer-open {
+  display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 12px; cursor: pointer; border-radius: 999px;
+  border: 1px solid var(--control-border); background: var(--surface); color: var(--ink); font: inherit; font-size: 0.8125rem; font-weight: 500; box-shadow: var(--shadow-sm);
+}
+.steer-bar[data-mode="revise"]:not(.is-open) .steer-open { height: 36px; padding: 0 14px; box-shadow: var(--shadow-pop); border-color: transparent; }
+.steer-open .ui-icon { width: 14px; height: 14px; color: var(--accent); }
+.steer-open:hover { background: var(--hover); }
+@media (min-width: 1240px) { .steer-bar[data-mode="revise"]:not(.is-open) { justify-self: center; } }
+@media (max-width: 1239px) { .steer-bar[data-mode="revise"].is-open { bottom: calc(max(18px, env(safe-area-inset-bottom)) + 58px); } }

@@ -1,0 +1,120 @@
+// The Wonder core over the Fetch API (Request -> Response), for Next.js route handlers.
+// JSON endpoints resolve to a JSON Response; NDJSON endpoints resolve as soon as the stream
+// opens and keep writing into a ReadableStream. A client disconnect (request.signal, or the
+// browser cancelling the body) aborts the turn exactly like a closed node:http response.
+
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { createWonderCore, resolveStatic, MAX_BODY } from './app.js';
+
+const json = (status, body) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' } });
+
+async function readBody(request) {
+  if (request.method === 'GET' || request.method === 'HEAD') return {};
+  const declared = Number(request.headers.get('content-length') || 0);
+  if (declared > MAX_BODY) throw Object.assign(new Error('Request body too large'), { status: 413 });
+  const text = await request.text();
+  if (Buffer.byteLength(text) > MAX_BODY) throw Object.assign(new Error('Request body too large'), { status: 413 });
+  if (!text) return {};
+  try { return JSON.parse(text); } catch { throw Object.assign(new Error('Body must be JSON'), { status: 400 }); }
+}
+
+/**
+ * Handle one /api/* request with a core from createWonderCore.
+ * @param {ReturnType<typeof createWonderCore>} core
+ * @param {Request} request
+ * @param {{logger?: Console}} [opts]
+ * @returns {Promise<Response>}
+ */
+export async function handleWebRequest(core, request, { logger = console } = {}) {
+  const url = new URL(request.url);
+  if (!core.hasRoute(request.method, url.pathname)) return json(404, { ok: false, error: 'Not found' });
+  let body;
+  try { body = await readBody(request); } catch (err) { return json(err.status || 400, { ok: false, error: err.message }); }
+
+  return new Promise((resolve) => {
+    let settled = false;
+    let controller = null;
+    let closed = false;
+    const closers = [];
+    const ac = new AbortController();
+    const finish = () => {
+      if (closed) return;
+      closed = true;
+      try { controller?.close(); } catch { /* already closed or cancelled */ }
+      for (const fn of closers.splice(0)) { try { fn(); } catch {} }
+    };
+    const abort = () => { if (!closed) { ac.abort(); finish(); } };
+    request.signal?.addEventListener?.('abort', abort);
+    const encoder = new TextEncoder();
+    const transport = {
+      url: url.pathname + url.search,
+      json(status, data) {
+        if (settled) return;
+        settled = true;
+        resolve(json(status, data));
+      },
+      openStream(headers) {
+        const stream = new ReadableStream({
+          start(c) { controller = c; },
+          cancel() { abort(); },
+        });
+        settled = true;
+        resolve(new Response(stream, { status: 200, headers }));
+        return {
+          write: (s) => { if (!closed) { try { controller.enqueue(encoder.encode(s)); } catch { /* cancelled */ } } },
+          signal: ac.signal,
+          onClose: (fn) => closers.push(fn),
+        };
+      },
+      end: finish,
+    };
+    core.handle(request.method, url.pathname, body, transport)
+      .catch((err) => {
+        if (!settled) { settled = true; resolve(json(err.status || 500, { ok: false, error: err.status ? err.message : 'Internal error' })); }
+        if (!err.status) logger.error?.('[wonder] request failed', err?.message);
+      })
+      .finally(() => {
+        finish();
+        request.signal?.removeEventListener?.('abort', abort);
+        if (!settled) { settled = true; resolve(json(500, { ok: false, error: 'No response' })); }
+      });
+  });
+}
+
+/** A read-only static module (chatgpt-dil, wondering-genui, KaTeX) as a Response, or a 404. */
+export function staticResponse(pathname, { head = false } = {}) {
+  const hit = resolveStatic(pathname);
+  if (!hit || hit.file.includes(`${path.sep}public${path.sep}`)) return new Response('Not found', { status: 404, headers: { 'Content-Type': 'text/plain; charset=utf-8' } });
+  const headers = { 'Content-Type': hit.type, 'Cache-Control': 'no-cache', 'X-Content-Type-Options': 'nosniff', 'Content-Length': String(hit.size) };
+  return new Response(head ? null : fs.readFileSync(/* turbopackIgnore: true */ hit.file), { status: 200, headers });
+}
+
+/**
+ * Credentials for Claude: Next.js already loads .env / .env.local from the app folder. Like
+ * `npm start` used to, also accept ~/.config/wonder/.env (or $WONDER_ENV_FILE) so the key never
+ * has to sit next to the code. Values are never read or logged here, only handed to the SDK.
+ */
+export function loadUserEnv(env = process.env) {
+  const file = env.WONDER_ENV_FILE || path.join(os.homedir(), '.config', 'wonder', '.env');
+  if (env.ANTHROPIC_API_KEY || !fs.existsSync(/* turbopackIgnore: true */ file)) return;
+  try {
+    process.loadEnvFile(file);
+    if (env.ANTHROPIC_API_KEY === 'YOUR_KEY') delete env.ANTHROPIC_API_KEY; // unedited placeholder
+  } catch (e) {
+    console.warn(`Could not load ${file}: ${e.message}`);
+  }
+}
+
+/** One core per server process (shared by every route, kept across Next dev reloads). */
+export function getWonderCore() {
+  const g = globalThis;
+  if (!g.__wonderCore) {
+    loadUserEnv();
+    g.__wonderCore = createWonderCore();
+    const { mode } = g.__wonderCore.state;
+    console.log(`[wonder] API ready (${mode === 'claude' ? 'Claude mode' : 'demo mode: set ANTHROPIC_API_KEY to use Claude'})`);
+  }
+  return g.__wonderCore;
+}

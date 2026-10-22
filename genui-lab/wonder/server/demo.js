@@ -3,10 +3,10 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { WONDER_ROOT } from './paths.js';
 import { componentsOf, lessonTitle } from './practice.js';
 
-const DEMO_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), 'demo');
+const DEMO_DIR = path.join(WONDER_ROOT, 'server', 'demo');
 
 export const DEMO_LESSONS = Object.freeze([
   { id: 'transformers', file: 'transformers.md', title: 'How transformers predict the next word', keywords: ['transformer', 'gpt', 'llm', 'language model', 'chatgpt', 'claude', 'ai', 'neural', 'attention', 'token', 'next word', 'machine learning', 'deep learning'] },

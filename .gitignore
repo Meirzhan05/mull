@@ -16,6 +16,8 @@ re/screenshot-chatgpt-learn.png
 re/screenshot-chatgpt-weather.png
 .DS_Store
 node_modules/
+.next/
+next-env.d.ts
 
 # Local secrets
 .env

@@ -1,6 +1,6 @@
 {
   "version": "0.0.1",
   "configurations": [
-    { "name": "wonder", "runtimeExecutable": "npm", "runtimeArgs": ["--prefix", "genui-lab/wonder", "start"], "port": 8750 }
+    { "name": "wonder", "runtimeExecutable": "npm", "runtimeArgs": ["--prefix", "genui-lab/wonder", "run", "dev"], "port": 8750 }
   ]
 }

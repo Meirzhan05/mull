@@ -35,12 +35,12 @@ export function createSteerBar({ onContinue, onMode, onOpen } = {}) {
   const sendBtn = el('button', { class: 'btn btn-sm', type: 'submit' }, icon('send'), el('span', null, 'Steer'));
   const chips = STEER_CHIPS.map((c) => el('button', { class: 'steer-chip', type: 'button', onclick: () => steer(c.instruction, c.label) }, c.label));
   const resumeBtn = el('button', { class: 'btn btn-sm steer-resume', type: 'button', onclick: () => resume() }, icon('play'), 'Resume lesson');
-  const openBtn = el('button', { class: 'steer-open', type: 'button', 'aria-expanded': 'false', onclick: () => setOpen(true) }, icon('sparkles'), el('span', { class: 'steer-open-text' }, 'Revise from this page'));
+  const openBtn = el('button', { class: 'steer-open', type: 'button', 'aria-expanded': 'false', onclick: () => setOpen(true) }, icon('edit'), el('span', { class: 'steer-open-text' }, 'Revise from this page'));
   const closeBtn = el('button', { class: 'icon-btn steer-close', type: 'button', 'aria-label': 'Close', onclick: () => setOpen(false) }, icon('x'));
   const body = el('div', { class: 'steer-body' },
     el('div', { class: 'steer-chips' }, ...chips),
     el('div', { class: 'steer-row' }, input, sendBtn));
-  const head = el('div', { class: 'steer-head' }, icon('sparkles'), title, status, resumeBtn, closeBtn);
+  const head = el('div', { class: 'steer-head' }, icon('edit'), title, status, resumeBtn, closeBtn);
   const form = el('form', { class: 'steer-bar', hidden: true, onsubmit: (e) => { e.preventDefault(); steer(input.value, input.value); } },
     openBtn,
     head,

@@ -1,4 +1,6 @@
-// Wonder HTTP server (node:http, no framework). Serves the API and the static client.
+// Wonder's API, as a transport-agnostic core (createWonderCore) with two front ends:
+// Next.js route handlers (server/web.js, app/api/[...route]/route.js) and a small node:http
+// server (createWonderServer) that the test suite drives.
 //
 //   GET  /api/status            -> {mode:"claude"|"demo", model}
 //   POST /api/lesson/stream     -> conversation-source NDJSON (lesson in markdown + DIL); continueFrom resumes/revises
@@ -15,7 +17,7 @@
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { WONDER_ROOT, LAB_ROOT } from './paths.js';
 import { CONTENT_TYPE, createTurnWriter } from './ndjson.js';
 import {
   MODEL, detectMode, createClaudeClient, buildStreamParams, buildStructuredParams, streamText, createStructured,
@@ -35,18 +37,15 @@ import { createSteeringRegistry, cleanInstruction, steeringUserContent, steerDem
 import { groundDemoLesson } from './demo-grounding.js';
 import { pageCount } from '../public/steering-core.js';
 
-const HERE = path.dirname(fileURLToPath(import.meta.url));
-const WONDER_ROOT = path.resolve(HERE, '..');
-const LAB_ROOT = path.resolve(WONDER_ROOT, '..');
-const STATIC_ROOTS = [
+export const STATIC_ROOTS = [
   { prefix: '/chatgpt-dil/src/', dir: path.join(LAB_ROOT, 'chatgpt-dil', 'src'), exts: new Set(['.js', '.css']) },
   { prefix: '/wondering-genui/src/', dir: path.join(LAB_ROOT, 'wondering-genui', 'src'), exts: new Set(['.js']) },
   // KaTeX's dist (math typesetting, public/math.js): read-only, scripts/styles/fonts only
   { prefix: '/vendor/katex/', dir: path.join(WONDER_ROOT, 'node_modules', 'katex', 'dist'), exts: new Set(['.js', '.mjs', '.css', '.woff2', '.woff', '.ttf']) },
   { prefix: '/', dir: path.join(WONDER_ROOT, 'public'), exts: new Set(['.js', '.css', '.html', '.svg', '.png', '.ico', '.json', '.webmanifest']) },
 ];
-const MIME = { '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.html': 'text/html; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon', '.json': 'application/json', '.webmanifest': 'application/manifest+json', '.mjs': 'text/javascript; charset=utf-8', '.woff2': 'font/woff2', '.woff': 'font/woff', '.ttf': 'font/ttf' };
-const MAX_BODY = 2 * 1024 * 1024;
+export const MIME = { '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.html': 'text/html; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon', '.json': 'application/json', '.webmanifest': 'application/manifest+json', '.mjs': 'text/javascript; charset=utf-8', '.woff2': 'font/woff2', '.woff': 'font/woff', '.ttf': 'font/ttf' };
+export const MAX_BODY = 2 * 1024 * 1024;
 const DEFAULT_TUTOR_FOLLOWUPS = ['Quiz me on this lesson', 'Give me a real-world example', 'What should I learn next?'];
 const DEFAULT_TEACHER_FOLLOWUPS = ['What should I study today?', 'Make me a study plan', 'Quiz me'];
 const MEMORY_OFF_CONTEXT = 'The learner turned memory off for this conversation: do not save or forget memory items, and do not assume anything about them beyond this conversation.';
@@ -100,24 +99,32 @@ function readJson(req) {
   });
 }
 
-function serveStatic(req, res, pathname) {
-  let rel = decodeURIComponent(pathname);
+/** A file under one of the read-only static roots for this URL path, or null. */
+export function resolveStatic(pathname, roots = STATIC_ROOTS) {
+  let rel;
+  try { rel = decodeURIComponent(pathname); } catch { return null; }
   if (rel === '/' || rel === '') rel = '/index.html';
-  for (const root of STATIC_ROOTS) {
+  for (const root of roots) {
     if (!rel.startsWith(root.prefix)) continue;
     const file = path.resolve(root.dir, '.' + rel.slice(root.prefix.length - 1));
     if (!file.startsWith(root.dir + path.sep)) break;
     const ext = path.extname(file);
     if (!root.exts.has(ext)) continue;
     let stat;
-    try { stat = fs.statSync(file); } catch { continue; }
+    try { stat = fs.statSync(/* turbopackIgnore: true */ file); } catch { continue; }
     if (!stat.isFile()) continue;
-    res.writeHead(200, { 'Content-Type': MIME[ext] || 'application/octet-stream', 'Cache-Control': 'no-cache', 'X-Content-Type-Options': 'nosniff' });
-    if (req.method === 'HEAD') return res.end(), true;
-    fs.createReadStream(file).pipe(res);
-    return true;
+    return { file, type: MIME[ext] || 'application/octet-stream', size: stat.size };
   }
-  return false;
+  return null;
+}
+
+function serveStatic(req, res, pathname) {
+  const hit = resolveStatic(pathname);
+  if (!hit) return false;
+  res.writeHead(200, { 'Content-Type': hit.type, 'Cache-Control': 'no-cache', 'X-Content-Type-Options': 'nosniff' });
+  if (req.method === 'HEAD') return res.end(), true;
+  fs.createReadStream(/* turbopackIgnore: true */ hit.file).pipe(res);
+  return true;
 }
 
 /** Follow '## ' headings as they stream and narrate progress like ChatGPT's reasoning line. */
@@ -133,9 +140,14 @@ function progressNarrator(writer, { first = 'Writing the introduction…', pages
 }
 
 /**
+ * The API without a transport. Each request is handed a transport `t`:
+ *   t.url                     the request URL (path + query)
+ *   t.json(status, body)      send a JSON response
+ *   t.openStream(headers)  -> {write(string), signal, onClose(fn)}: start a streamed response
+ *   t.end()                   finish the response
  * @param {{client?:object, mode?:'claude'|'demo', env?:object, demoDelayMs?:number, logger?:Console}} [opts]
  */
-export function createWonderServer(opts = {}) {
+export function createWonderCore(opts = {}) {
   const env = opts.env ?? process.env;
   const logger = opts.logger ?? console;
   const state = {
@@ -161,18 +173,15 @@ export function createWonderServer(opts = {}) {
     logger.warn?.(`[wonder] switching to demo mode (${reason})`);
   }
 
-  function startNdjson(req, res, { record, ...writerOpts } = {}) {
-    res.writeHead(200, { 'Content-Type': CONTENT_TYPE, 'Cache-Control': 'no-store', 'X-Accel-Buffering': 'no', Connection: 'keep-alive' });
-    res.flushHeaders?.();
-    const ac = new AbortController();
-    res.on('close', () => { if (!res.writableFinished) ac.abort(); });
+  function startNdjson(t, { record, ...writerOpts } = {}) {
+    const io = t.openStream({ 'Content-Type': CONTENT_TYPE, 'Cache-Control': 'no-store', 'X-Accel-Buffering': 'no' });
     // WONDER_RECORD_DIR: tee the NDJSON of each stream to a file (fixture capture; records hold no credentials)
     let tee = null;
     if (recordDir && record) {
-      try { fs.mkdirSync(recordDir, { recursive: true }); tee = fs.createWriteStream(path.join(recordDir, `${record}-${new Date().toISOString().replace(/[:.]/g, '-')}.ndjson`)); res.on('close', () => tee.end()); } catch { tee = null; }
+      try { fs.mkdirSync(recordDir, { recursive: true }); tee = fs.createWriteStream(path.join(recordDir, `${record}-${new Date().toISOString().replace(/[:.]/g, '-')}.ndjson`)); io.onClose(() => tee.end()); } catch { tee = null; }
     }
-    const writer = createTurnWriter({ write: (s) => { if (!res.destroyed) res.write(s); tee?.write(s); }, ...writerOpts });
-    return { writer, signal: ac.signal };
+    const writer = createTurnWriter({ write: (s) => { io.write(s); tee?.write(s); }, ...writerOpts });
+    return { writer, signal: io.signal };
   }
 
   /** Run Claude, falling back to demo on missing credentials. Returns 'done' | 'demo' | 'failed'. */
@@ -230,16 +239,16 @@ export function createWonderServer(opts = {}) {
     return cont.kept;
   }
 
-  async function lessonStream(req, res, body) {
+  async function lessonStream(t, body) {
     const topic = clean(body.topic, 300);
-    if (!topic) return sendJson(res, 400, { ok: false, error: 'topic is required' });
+    if (!topic) return t.json(400, { ok: false, error: 'topic is required' });
     const cont = normalizeContinueFrom(body.continueFrom);
-    if (cont?.error) return sendJson(res, cont.status, { ok: false, error: cont.error });
+    if (cont?.error) return t.json(cont.status, { ok: false, error: cont.error });
     const level = ['beginner', 'intermediate', 'advanced'].includes(body.level) ? body.level : 'beginner';
     const useWebSearch = body.useWebSearch !== false; // Phase 3: on by default for lessons
     // a continuation seeds the kept pages' sources and numbers new refs after theirs
     const sources = cont ? createContinuationSources({ turnIndex: 0, kept: cont.kept, seed: cont.sources }) : createSourceRegistry({ turnIndex: 0 });
-    const { writer, signal } = startNdjson(req, res, { record: 'lesson', appDataFor: citationAppData(sources), ...(cont?.messageId ? { messageId: cont.messageId } : {}) });
+    const { writer, signal } = startNdjson(t, { record: 'lesson', appDataFor: citationAppData(sources), ...(cont?.messageId ? { messageId: cont.messageId } : {}) });
     writer.start();
     if (cont) applyContinue(writer, cont);
     else writer.reasoning('Planning the lesson…');
@@ -305,21 +314,21 @@ export function createWonderServer(opts = {}) {
       finishGrounded(writer, sources);
       writer.complete({ truncated: result.truncated });
     }
-    res.end();
+    t.end();
   }
 
-  async function lessonSteer(req, res, body) {
+  async function lessonSteer(t, body) {
     const instruction = cleanInstruction(body.instruction);
-    if (!instruction) return sendJson(res, 400, { ok: false, error: 'instruction is required' });
+    if (!instruction) return t.json(400, { ok: false, error: 'instruction is required' });
     const op = steering.get(String(body.operationId || ''));
-    if (!op || op.closed) return sendJson(res, 409, { ok: false, status: 'rejected', reason: 'not_streaming', error: 'This lesson has finished streaming.' });
-    if (!op.steer(instruction)) return sendJson(res, 409, { ok: false, status: 'rejected', reason: op.hasSteer ? 'busy' : 'not_streaming', error: op.hasSteer ? 'Still applying your last change.' : 'This lesson has finished streaming.' });
-    return sendJson(res, 200, { ok: true, status: 'accepted', operationId: op.operationId });
+    if (!op || op.closed) return t.json(409, { ok: false, status: 'rejected', reason: 'not_streaming', error: 'This lesson has finished streaming.' });
+    if (!op.steer(instruction)) return t.json(409, { ok: false, status: 'rejected', reason: op.hasSteer ? 'busy' : 'not_streaming', error: op.hasSteer ? 'Still applying your last change.' : 'This lesson has finished streaming.' });
+    return t.json(200, { ok: true, status: 'accepted', operationId: op.operationId });
   }
 
-  async function tutorStream(req, res, body) {
+  async function tutorStream(t, body) {
     const message = clean(body.message, 4000);
-    if (!message) return sendJson(res, 400, { ok: false, error: 'message is required' });
+    if (!message) return t.json(400, { ok: false, error: 'message is required' });
     const history = (Array.isArray(body.history) ? body.history : [])
       .filter((m) => (m?.role === 'user' || m?.role === 'assistant') && typeof m.content === 'string' && m.content.trim())
       .slice(-12)
@@ -327,7 +336,7 @@ export function createWonderServer(opts = {}) {
     while (history.length && history[0].role !== 'user') history.shift();
     const useWebSearch = body.useWebSearch === true; // Phase 3: off for the tutor unless asked
     const sources = createSourceRegistry({ turnIndex: Math.floor(history.length / 2) + 1 });
-    const { writer, signal } = startNdjson(req, res, { record: 'tutor', appDataFor: citationAppData(sources) });
+    const { writer, signal } = startNdjson(t, { record: 'tutor', appDataFor: citationAppData(sources) });
     writer.start();
     writer.reasoning('Thinking about your question…');
     const onText = (t) => writer.append(t);
@@ -348,55 +357,55 @@ export function createWonderServer(opts = {}) {
     }
     if (result.status === 'done') finishGrounded(writer, sources);
     if (result.status === 'done') writer.complete({ truncated: result.truncated, defaultFollowups: result.refused ? [] : DEFAULT_TUTOR_FOLLOWUPS });
-    res.end();
+    t.end();
   }
 
-  async function coursePlan(req, res, body) {
+  async function coursePlan(t, body) {
     const topic = clean(body.topic, 300);
-    if (!topic) return sendJson(res, 400, { ok: false, error: 'topic is required' });
+    if (!topic) return t.json(400, { ok: false, error: 'topic is required' });
     const level = ['beginner', 'intermediate', 'advanced'].includes(body.level) ? body.level : 'beginner';
     if (state.mode === 'claude') {
       try {
         const plan = await createStructured(state.client, buildStructuredParams({ system: COURSE_SYSTEM_PROMPT, schema: COURSE_PLAN_SCHEMA, user: `Topic: ${topic}\nLevel: ${level}`, effort: 'low' }));
         const sections = (plan.sections || []).map((s) => ({ title: clean(s.title, 120), lessons: (s.lessons || []).map((l) => ({ title: clean(l.title, 160), summary: clean(l.summary, 300) })).filter((l) => l.title).slice(0, 4) })).filter((s) => s.title && s.lessons.length).slice(0, 4);
         if (!sections.length) throw new Error('empty plan');
-        return sendJson(res, 200, { ok: true, plan: { title: clean(plan.title, 120) || topic, description: clean(plan.description, 400), level, sections } });
+        return t.json(200, { ok: true, plan: { title: clean(plan.title, 120) || topic, description: clean(plan.description, 400), level, sections } });
       } catch (err) {
         if (isCredentialError(err)) switchToDemo('credentials-failed');
-        else if (err?.code === 'refusal') return sendJson(res, 200, { ok: false, error: "I can't build a course on that topic. Try something else you're curious about." });
+        else if (err?.code === 'refusal') return t.json(200, { ok: false, error: "I can't build a course on that topic. Try something else you're curious about." });
         else {
           const f = friendlyError(err);
-          if (f.code !== 'internal') return sendJson(res, 502, { ok: false, error: f.message, code: f.code });
+          if (f.code !== 'internal') return t.json(502, { ok: false, error: f.message, code: f.code });
           logger.warn?.('[wonder] course plan fell back to a template');
         }
       }
     }
-    return sendJson(res, 200, { ok: true, plan: demoCoursePlan(topic, level) });
+    return t.json(200, { ok: true, plan: demoCoursePlan(topic, level) });
   }
 
-  async function practiceExtract(req, res, body) {
+  async function practiceExtract(t, body) {
     const markdown = stripGroundingTags(String(body.lessonMarkdown ?? ''));
-    if (!markdown.trim()) return sendJson(res, 400, { ok: false, error: 'lessonMarkdown is required' });
+    if (!markdown.trim()) return t.json(400, { ok: false, error: 'lessonMarkdown is required' });
     if (state.mode === 'claude') {
       try {
-        return sendJson(res, 200, { ok: true, ...(await extractPracticeWithClaude(state.client, markdown)) });
+        return t.json(200, { ok: true, ...(await extractPracticeWithClaude(state.client, markdown)) });
       } catch (err) {
         if (isCredentialError(err)) switchToDemo('credentials-failed');
         logger.warn?.(`[wonder] structured extraction failed (${friendlyError(err).code}); using lesson components`);
       }
     }
-    return sendJson(res, 200, { ok: true, ...extractPracticeDeterministic(markdown) });
+    return t.json(200, { ok: true, ...extractPracticeDeterministic(markdown) });
   }
 
 
-  async function teacherStream(req, res, body) {
+  async function teacherStream(t, body) {
     const message = clean(body.message, 4000);
-    if (!message) return sendJson(res, 400, { ok: false, error: 'message is required' });
+    if (!message) return t.json(400, { ok: false, error: 'message is required' });
     const memoryEnabled = body.memoryEnabled !== false;
     const threadId = typeof body.threadId === 'string' && /^[\w-]{1,80}$/.test(body.threadId) ? body.threadId : undefined;
     const history = cleanHistory(body.history, { map: stripCardMarkup });
     const appData = { opGenui: { componentResults: {}, modelDataBindings: {} } };
-    const { writer, signal } = startNdjson(req, res, { appData, record: 'teacher' });
+    const { writer, signal } = startNdjson(t, { appData, record: 'teacher' });
     writer.start({ conversationId: threadId });
     writer.reasoning('Thinking…');
     const params = buildStreamParams({
@@ -425,48 +434,48 @@ export function createWonderServer(opts = {}) {
     try {
       result = await run(state.mode === 'claude' ? state.client : demoTeacher);
     } catch (err) {
-      if (signal.aborted) return res.end();
+      if (signal.aborted) return t.end();
       if (state.mode === 'claude' && !writer.markdown && isCredentialError(err)) {
         switchToDemo('credentials-failed');
         writer.reasoning('Claude credentials were not accepted. Showing a demo reply…');
-        try { result = await run(demoTeacher); } catch { if (signal.aborted) return res.end(); }
+        try { result = await run(demoTeacher); } catch { if (signal.aborted) return t.end(); }
       }
       if (!result) {
         const f = friendlyError(err);
         const detail = err?.status ? ` (HTTP ${err.status}: ${err?.error?.error?.message || err.message})` : '';
         logger.error?.(`[wonder] Teacher request failed: ${f.code}${detail}`);
         writer.fail(f.message, f.code);
-        return res.end();
+        return t.end();
       }
     }
     if (result.refused) writer.append(REFUSAL_MESSAGE);
     writer.complete({ truncated: result.truncated, defaultFollowups: result.refused ? [] : DEFAULT_TEACHER_FOLLOWUPS });
-    res.end();
+    t.end();
   }
 
   // ---------------------------------------------------------------- memory
 
-  async function memoryList(req, res) {
-    sendJson(res, 200, { ok: true, items: memory.list() });
+  async function memoryList(t) {
+    t.json(200, { ok: true, items: memory.list() });
   }
 
-  async function memoryAdd(req, res, body) {
+  async function memoryAdd(t, body) {
     const r = memory.add({ fact: body.fact, kind: body.kind, source: 'user' });
-    if (!r.ok) return sendJson(res, 400, { ok: false, error: r.error });
-    sendJson(res, 200, { ok: true, item: r.item, duplicate: r.duplicate, items: memory.list() });
+    if (!r.ok) return t.json(400, { ok: false, error: r.error });
+    t.json(200, { ok: true, item: r.item, duplicate: r.duplicate, items: memory.list() });
   }
 
-  async function memoryDelete(req, res, body) {
-    const id = new URL(req.url, 'http://localhost').searchParams.get('id') || body.id;
-    if (body.all === true) return sendJson(res, 200, { ok: true, removed: memory.clear(), items: [] });
-    if (typeof id !== 'string' || !id) return sendJson(res, 400, { ok: false, error: 'id (or all:true) is required' });
+  async function memoryDelete(t, body) {
+    const id = new URL(t.url, 'http://localhost').searchParams.get('id') || body.id;
+    if (body.all === true) return t.json(200, { ok: true, removed: memory.clear(), items: [] });
+    if (typeof id !== 'string' || !id) return t.json(400, { ok: false, error: 'id (or all:true) is required' });
     const item = memory.remove(id);
-    if (!item) return sendJson(res, 404, { ok: false, error: 'No such memory item' });
-    sendJson(res, 200, { ok: true, removed: 1, item, items: memory.list() });
+    if (!item) return t.json(404, { ok: false, error: 'No such memory item' });
+    t.json(200, { ok: true, removed: 1, item, items: memory.list() });
   }
 
-  async function memoryExtract(req, res, body) {
-    if (body.memoryEnabled === false) return sendJson(res, 200, { ok: true, added: [], source: 'disabled' });
+  async function memoryExtract(t, body) {
+    if (body.memoryEnabled === false) return t.json(200, { ok: true, added: [], source: 'disabled' });
     const input = normalizeExtractInput(body);
     const existing = memory.list();
     let facts = null;
@@ -486,7 +495,7 @@ export function createWonderServer(opts = {}) {
       const r = memory.add({ ...f, source: 'lesson' });
       if (r.ok && !r.duplicate) added.push(r.item);
     }
-    sendJson(res, 200, { ok: true, added, source });
+    t.json(200, { ok: true, added, source });
   }
 
   const routes = {
@@ -500,19 +509,54 @@ export function createWonderServer(opts = {}) {
     'POST /api/memory': memoryAdd,
     'DELETE /api/memory': memoryDelete,
     'POST /api/memory/extract': memoryExtract,
-    'POST /api/widget_action': async (req, res, body) => { const r = widgetAction(body); sendJson(res, r.status, r.body); },
+    'POST /api/widget_action': async (t, body) => { const r = widgetAction(body); t.json(r.status, r.body); },
   };
 
+  const status = () => ({ mode: state.mode, model: MODEL, ...(state.mode === 'demo' ? { demoReason: state.demoReason } : {}) });
+
+  /** Run one API request. Resolves when the response has ended; a 404 for unknown API paths. */
+  async function handle(method, pathname, body, t) {
+    if (pathname === '/api/status' && method === 'GET') return t.json(200, status());
+    const route = routes[`${method} ${pathname}`];
+    if (route) return route(t, body);
+    return t.json(404, { ok: false, error: 'Not found' });
+  }
+  /** Does this method + path have a handler (and therefore a body to read)? */
+  const hasRoute = (method, pathname) => (pathname === '/api/status' && method === 'GET') || !!routes[`${method} ${pathname}`];
+
+  return { state, memory, teacherCards, status, handle, hasRoute };
+}
+
+/** Node transport: the core over node:http req/res. */
+function nodeTransport(req, res) {
+  return {
+    url: req.url,
+    json: (status, body) => sendJson(res, status, body),
+    openStream(headers) {
+      res.writeHead(200, { ...headers, Connection: 'keep-alive' });
+      res.flushHeaders?.();
+      const ac = new AbortController();
+      res.on('close', () => { if (!res.writableFinished) ac.abort(); });
+      return { write: (s) => { if (!res.destroyed) res.write(s); }, signal: ac.signal, onClose: (fn) => res.on('close', fn) };
+    },
+    end: () => res.end(),
+  };
+}
+
+/**
+ * Standalone node:http server (the API plus the static client files). The app itself runs on
+ * Next.js; this server exists for the test suite and for running without a Next build.
+ * @param {Parameters<typeof createWonderCore>[0]} [opts]
+ */
+export function createWonderServer(opts = {}) {
+  const core = createWonderCore(opts);
+  const logger = opts.logger ?? console;
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, 'http://localhost');
     try {
-      if (url.pathname === '/api/status' && req.method === 'GET') {
-        return sendJson(res, 200, { mode: state.mode, model: MODEL, ...(state.mode === 'demo' ? { demoReason: state.demoReason } : {}) });
-      }
-      const route = routes[`${req.method} ${url.pathname}`];
-      if (route) {
+      if (core.hasRoute(req.method, url.pathname)) {
         const body = req.method === 'GET' ? {} : await readJson(req);
-        return await route(req, res, body);
+        return await core.handle(req.method, url.pathname, body, nodeTransport(req, res));
       }
       if (url.pathname.startsWith('/api/')) return sendJson(res, 404, { ok: false, error: 'Not found' });
       if ((req.method === 'GET' || req.method === 'HEAD') && serveStatic(req, res, url.pathname)) return;
@@ -524,8 +568,8 @@ export function createWonderServer(opts = {}) {
       if (!err.status) logger.error?.('[wonder] request failed', err?.message);
     }
   });
-  server.wonder = state;
-  server.memory = memory;
-  server.teacherCards = teacherCards;
+  server.wonder = core.state;
+  server.memory = core.memory;
+  server.teacherCards = core.teacherCards;
   return server;
 }

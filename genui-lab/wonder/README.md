@@ -24,14 +24,16 @@ Claude (or demo/*.md)  ──text deltas──▶  server/compile.js  (chatgpt-d
 
 ## Run it
 
+Wonder is a Next.js 16 app (App Router, Turbopack).
+
 ```sh
 cd genui-lab/wonder
 npm install
 cp .env.example .env        # then put your key after ANTHROPIC_API_KEY=
-npm start                   # node --env-file-if-exists=.env server/index.js → http://localhost:8750
+npm run dev                 # next dev → http://localhost:8750
 ```
 
-`ANTHROPIC_API_KEY=... npm start` also works, as does an `ant auth login` profile. The server never reads, prints or logs the key. `GET /api/status` returns only `{mode: "claude"|"demo", model}`. `PORT` changes the port. `WONDER_MODE=demo` forces demo mode even when credentials exist. `WONDER_MEMORY_FILE` moves the learner memory file. `WONDER_RECORD_DIR=<dir>` writes each lesson, tutor and Teacher stream's NDJSON to a file there; that is how the fixtures were captured, and the records contain no credentials.
+For production, `npm run build && npm start` (`next start -p 8750`). `ANTHROPIC_API_KEY=... npm run dev` also works, as does an `ant auth login` profile. The server never reads, prints or logs the key. `GET /api/status` returns only `{mode: "claude"|"demo", model}`. Pass `-p <port>` to `next` to change the port. `WONDER_MODE=demo` forces demo mode even when credentials exist. `WONDER_MEMORY_FILE` moves the learner memory file. `WONDER_RECORD_DIR=<dir>` writes each lesson, tutor and Teacher stream's NDJSON to a file there; that is how the fixtures were captured, and the records contain no credentials.
 
 ### Demo mode
 
@@ -45,6 +47,28 @@ Demo mode streams these through the real compile + NDJSON pipeline in 20–60 ch
 - **Teacher turns.** `server/teacher-demo.js` is a scripted stand-in for Claude that speaks the Messages streaming event protocol (text deltas, `tool_use` blocks with `input_json_delta`, stop reasons). The real tool loop drives it, so demo turns go through the same validation, tool execution, card splicing and NDJSON path. It answers goals/plans (remember → get_progress → plan_study + create_lesson), "quiz me" (a Quiz from your last lesson), "how am I doing", "forget that", facts about yourself, and anything else with a lesson suggestion.
 
 Practice extraction in demo mode is deterministic, built from the lesson's `<KeyTerm>` and `<Quiz>` components. Memory extraction in demo mode notes a struggle when you miss at least a third of a lesson's quiz.
+
+## The app
+
+Five sections, in a sidebar on desktop and a bottom tab bar on phones, plus a ⌘K / Ctrl K (or `/`) command palette that searches lessons, courses and Teacher chats and starts a lesson, course or Teacher chat on whatever you type.
+
+- **Today (`#/`).** A greeting, a command bar with three modes (Lesson, Course, Teacher), and the dashboard described above. Topic suggestions come from the interests picked at onboarding. **Up next** picks the single best next action (`public/progress-core.js` `upNext`): continue an unfinished lesson, review due cards, the next item of the saved study plan, or the next lesson of a course. The saved study plan and recent lessons follow.
+- **Lesson (`#/lesson/<id>`).** A focused reader: the sidebar collapses to an icon rail and the phone tabs hide. The bar shows a segmented progress bar (one segment per page; click to jump), "Page x of n", a contents menu, the tutor toggle and a menu with text size and widget reset. While Claude writes, a status line and a compact **Steer** pill sit above the lesson. Highlight any passage to **Explain** it or **Ask about this** in the tutor. The end of the lesson is a colophon that turns into "Collect the cards", then the index cards, then a **what next** step: the next course lesson, a review, or Today. Reopening a lesson offers to jump back to the page you were on.
+- **Tutor.** A sticky side panel on wide screens, a side drawer on tablets and a bottom sheet on phones, with starter prompts (summarize, real-world example, quiz me, explain like I'm 12).
+- **Library (`#/library`).** Every lesson and course in this browser, with search, filters (in progress, finished, courses) and delete. Courses open as a path (`#/course/<id>`) with a progress ring and a Continue button.
+- **Review (`#/review`).** FSRS review with keyboard shortcuts: 1–5 or A–E to choose, T/F, Space to show an answer, 1–4 to grade, Enter to continue.
+- **Teacher (`#/teacher`).** The agent chat with tool cards (below).
+- **You (`#/you`).** Name, totals, a 22-week activity heatmap, settings (daily goal, theme, lesson text size), learner memory, and data export or erase.
+- **Onboarding.** On first run: a name, interests and a daily goal, all skippable.
+
+**Design.** A neutral design system in light and dark (Vercel-style grays: white and near-black), with one blue accent for focus, links and the current state. Geist for text and Geist Mono for numbers and keys (both self-hosted by `next/font`); soft corners, filled controls with focus rings, pill segmented controls and cards with a hairline border and a light shadow. Each section has its own layout: **Today** is a dashboard (a command bar, the "Up next" queue, suggestion tiles and recent reading, and a rail with today's XP, the streak, the deck and the study plan); **Library** is a pair of sortable tables; **Review** puts the card beside a live session panel (position, accuracy, the queue, the deck, the keys); **Teacher** adds a column showing what it sees (your progress, memory and plan); **You** is a settings page with a section nav. Lessons are a clean article with numbered pages; finishing one turns its ideas into cards. Reading time is estimated from the prose plus about half a minute per interactive widget.
+
+## On Next.js
+
+- **Pages.** `app/layout.js` (fonts, global CSS, metadata, the pre-paint theme script) and `app/page.js` → `app/wonder-app.js`. That client component renders the shell frame and, after hydration, starts the Wonder client (`public/app.js`). The client screens stay unbundled ES modules in `public/`: the lesson renderer runs model-written UI in a sandboxed Web Worker that imports the DIL runtime by URL. Screens route with the URL hash.
+- **API.** `app/api/[...route]/route.js` sends every `/api/*` request to the Wonder core (`createWonderCore` in `server/app.js`) through a Fetch-API adapter (`server/web.js`). JSON endpoints return JSON `Response`s. NDJSON endpoints return a `ReadableStream` that the turn keeps writing into, and a client disconnect aborts the turn. There is one core per server process (`getWonderCore`), so a steer request reaches the lesson stream that is still running.
+- **Read-only module mounts.** `app/chatgpt-dil/src/[...path]`, `app/wondering-genui/src/[...path]` and `app/vendor/katex/[...path]` serve the sibling lab folders and KaTeX with traversal refused. `next.config.mjs` roots Turbopack and output tracing at `genui-lab/` so the server can import `../chatgpt-dil` and `../wondering-genui`.
+- **Tests.** The same core also runs behind a small `node:http` server (`createWonderServer`), which the test suite drives. `test/web.test.js` drives the Fetch-API adapter that Next uses.
 
 ## How the two systems map into Wonder
 
@@ -100,7 +124,7 @@ All of this lives in `server/claude.js`. The client is dependency-injected, so t
 
 `memoryEnabled: false` on lesson, tutor, Teacher and extraction requests leaves memory out of the prompt (and the Teacher's `remember`/`forget` return an error result instead of writing).
 
-The server also serves `public/` and, read-only, `genui-lab/chatgpt-dil/src/*` and `genui-lab/wondering-genui/src/*`. Client modules import those through relative paths such as `../../chatgpt-dil/src/host.js`, which resolve the same way under Node and in the browser.
+Next serves `public/` and, through read-only route handlers, `genui-lab/chatgpt-dil/src/*` and `genui-lab/wondering-genui/src/*`. Client modules import those through relative paths such as `../../chatgpt-dil/src/host.js`, which resolve the same way under Node and in the browser.
 
 ## The learning catalog (what Claude can write)
 
@@ -117,7 +141,7 @@ The server also serves `public/` and, read-only, `genui-lab/chatgpt-dil/src/*` a
 | `BarChart` | Bars with values; one may be highlighted |
 | `ConceptMap` | Concepts linked to a center concept |
 | `Cycle` | SVG ring |
-| `Quiz` | Hints, feedback, explanations, "Explain this" → tutor, results with confetti, retry, server-graded state restore |
+| `Quiz` | Hints, feedback, explanations, "Explain this" → tutor, results (the runtime's confetti is hidden by the Folio stylesheet), retry, server-graded state restore |
 | `Flashcards` | Flip cards; "Save to review deck" |
 | `Celebration` | Confetti moment |
 | `TeacherCard` | **Server-only**: spliced in by `/api/teacher/stream`, never written by the model. Props are just `kind` and the server-assigned `__resolutionId`; the data is `componentResults[__resolutionId].state`. `approval` (Start lesson / Not now / Undo), `plan` (per-item open buttons, Save plan / Unsave), `memory` (Remembered/Forgot chip with Undo/Redo). Shows a skeleton until resolved |
@@ -166,12 +190,12 @@ The Teacher persona (`TEACHER_SYSTEM_PROMPT`) uses Wondering's dial values fixed
   - Post-lesson extraction. "Finish lesson" sends the quiz results and the learner's tutor questions to `/api/memory/extract`: a structured-output call at effort low, giving 0–3 facts that are de-duplicated against memory. A toast says what Wonder will remember.
   - The Memory screen.
 - **Reads.** A compact "About this learner" block with the newest 15 items goes into the lesson, tutor and Teacher system prompts as a system block after the cache breakpoint. The Teacher's copy includes item ids so it can `forget` them.
-- **UI.** `#/memory` lists items by kind, with add, delete and "Forget everything", plus the persisted **Use memory** switch that sets `memoryEnabled` on every request.
+- **UI.** The You screen (`#/you`, also `#/memory`) lists items by kind, with add, delete and "Forget everything", plus the persisted **Use memory** switch that sets `memoryEnabled` on every request.
 
 ## Tests
 
 ```sh
-node --test genui-lab/wonder/test/index.js      # 200 tests, about 15 s, no network
+node --test genui-lab/wonder/test/index.js      # 250 tests, about 15 s, no network
 ```
 
 - **`compile.test.js`**
@@ -214,12 +238,17 @@ node --test genui-lab/wonder/test/index.js      # 200 tests, about 15 s, no netw
   - Inline math in a LessonStepper step and Quiz options; every demo formula typesets with KaTeX (`throwOnError: true`); the Unicode fallback.
   - `/vendor/katex/` serves css, js and fonts (200) and refuses traversal and other files (404).
 - **`view-state.test.js`** covers widget state persistence: a snapshot restores every persisted widget on the first render (also via `setStateSnapshot`), one debounced message per burst of clicks (mock timers), live state and the snapshot survive streamed recompiles, unknown ids/keys and invalid values are ignored, a revision that rewrites or removes a widget drops its state while unchanged widgets keep theirs, reset, server-graded Quiz state wins over local progress, Cite/KeyTerm stay ephemeral, the compound-interest FunctionGraph slider, Stepper and Flashcards round-trip (desktop and 390 px), size caps and eviction, and store persistence with corrupted snapshots.
+- **`web.test.js`** drives the Fetch-API adapter used by the Next route handlers: status and 404s, a demo lesson as NDJSON, memory and course plans, a live steer reaching the in-flight stream, client-disconnect aborts, and the read-only static mounts.
+- **`progress.test.js`** covers the Today and You helpers: the daily goal, the week strip, the activity grid, topic suggestions from interests, the Up next order and the palette matcher.
 - **`deck.test.js`** covers practice grading, FSRS deck scheduling (learning steps, graduation, growing intervals, lapses), XP/streak rules, and localStorage persistence when storage is blocked or corrupted.
 
 ## Files
 
 ```
-server/index.js           entry (npm start)          server/app.js          routes, static files, demo fallback
+app/layout.js, page.js, wonder-app.js, styles/*.css   Next.js page, fonts, CSS, client shell frame
+app/api/[...route]/route.js   every /api/* endpoint   app/{chatgpt-dil,wondering-genui,vendor/katex}/…  read-only module mounts
+server/app.js             core (createWonderCore), node:http test server    server/web.js   Fetch-API adapter, static mounts, env
+server/paths.js           app root on disk (also inside a Next bundle)
 server/claude.js          Claude params/stream/errors server/prompts.js     system prompts + JSON schemas
 server/compile.js         compiler extension         server/lenient-json.js JSON5-ish prop parser
 server/catalog-schema.js  prop validators/fallbacks  server/ndjson.js       conversation-source writer
@@ -228,11 +257,12 @@ server/widget-actions.js  /api/widget_action
 server/teacher.js         Teacher tools, validation, loop, card store + actions
 server/teacher-demo.js    scripted demo "model"      server/memory.js       learner memory store
 server/memory-extract.js  post-lesson memory extraction
-public/index.html, styles.css, app.js (screens), ui.js, review.js, store.js, deck.js, practice-core.js, math.js + math.css (KaTeX)
+public/app.js (routing, course, lesson, tutor, finish), shell.js (sidebar, tabs, ⌘K palette), today.js, library.js, you.js, onboarding.js
+public/progress-core.js (goal, streak week, heatmap, Up next), ui.js, review.js, store.js, deck.js, practice-core.js, math.js (KaTeX)
 server/math-spans.js      math spans hoisted before the stock compiler
 public/teacher-screen.js, teacher-core.js (progress snapshot, history), memory-screen.js
 public/learning-catalog.js (in-sandbox components), learning-runtime.js, wonder-worker.js, dil-surface.js, stream-client.js
-public/view-state.js      widget state snapshots (store, useSaved, caps)   public/lesson-menu.js + .css  lesson overflow menu
+public/view-state.js      widget state snapshots (store, useSaved, caps)   public/lesson-menu.js  lesson overflow menu
 test/*.test.js, test/index.js, test/helpers.js
 ```
 
@@ -277,7 +307,7 @@ Interactive widgets keep their state across reloads and when a lesson is reopene
 
 ## Credentials
 
-`npm start` reads `ANTHROPIC_API_KEY` from `genui-lab/wonder/.env`. If that isn't set, it falls back to `~/.config/wonder/.env`, which lives outside the repo. Set `ANTHROPIC_WORKSPACE_ID` as well when your key is not scoped to a workspace (for example `sk-ant-usr-…` keys). Wonder then sends it as the `anthropic-workspace-id` header.
+Next.js reads `ANTHROPIC_API_KEY` from `genui-lab/wonder/.env` (or `.env.local`). If that isn't set, it falls back to `~/.config/wonder/.env`, which lives outside the repo. Set `ANTHROPIC_WORKSPACE_ID` as well when your key is not scoped to a workspace (for example `sk-ant-usr-…` keys). Wonder then sends it as the `anthropic-workspace-id` header.
 
 Verified against the live API (`claude-opus-5-5`), using an `sk-ant-usr-…` key with a workspace ID:
 - **Lesson:** a full lesson streamed in about 36 s across 543 content revisions. Every component validated: Quiz, LessonStepper, ConceptMap, BarChart, Reveal, Callout and KeyTerm.

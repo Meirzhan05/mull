@@ -44,7 +44,7 @@ export function renderReview(root, { store, onExit, onXp }) {
   if (!queue.length) {
     const stats = deckStats(store.data.deck, now);
     wrap.append(el('div', { class: 'card empty-review' },
-      el('div', { class: 'empty-art', 'aria-hidden': 'true' }, icon('check', 'big-icon')),
+      el('p', { class: 'kicker' }, 'Review'),
       el('h1', { class: 'h-lg' }, stats.total ? 'All caught up' : 'No practice cards yet'),
       el('p', { class: 'muted' }, stats.total
         ? `Your next review is ${stats.nextDue ? formatDue(stats.nextDue, now) : 'later'}. Spacing reviews out is what makes them stick.`
@@ -59,13 +59,50 @@ export function renderReview(root, { store, onExit, onXp }) {
     el('div', { class: 'progress', role: 'progressbar', 'aria-valuemin': '0', 'aria-valuemax': String(queue.length) }, el('span', { class: 'progress-fill' })),
     el('span', { class: 'review-count' }));
   const stage = el('div', { class: 'review-stage' });
-  wrap.append(header, stage);
+  // session panel: where you are, how it is going, what the deck holds, and the keys
+  const deckAtStart = deckStats(store.data.deck, now);
+  const sRows = el('dl', { class: 'kv' });
+  const queueList = el('ol', { class: 'r-queue', 'aria-label': 'This session' }, ...queue.map((e, i) => el('li', { dataset: { i: String(i) } },
+    el('span', { class: 'r-q-mark', 'aria-hidden': 'true' }), el('span', { class: 'r-q-text' }, (e.item.prompt || e.item.front || '').replace(/[*_`]/g, '').replace('____', '…')))));
+  const panel = el('aside', { class: 'review-panel', 'aria-label': 'Session' },
+    el('section', { class: 'stat-panel' }, el('span', { class: 'stat-label' }, 'Session'), sRows),
+    el('section', { class: 'stat-panel' }, el('span', { class: 'stat-label' }, 'Queue', el('span', { class: 'count' }, String(queue.length))), queueList),
+    el('section', { class: 'stat-panel' }, el('span', { class: 'stat-label' }, 'Deck'),
+      el('dl', { class: 'kv' },
+        el('dt', null, 'Due now'), el('dd', null, String(deckAtStart.due)),
+        el('dt', null, 'Learning'), el('dd', null, String(deckAtStart.learning + deckAtStart.new)),
+        el('dt', null, 'Mastered'), el('dd', null, String(deckAtStart.review)),
+        el('dt', null, 'Total'), el('dd', null, String(deckAtStart.total)))),
+    el('section', { class: 'stat-panel keys-panel' }, el('span', { class: 'stat-label' }, 'Keys'),
+      el('dl', { class: 'kv' },
+        el('dt', null, el('kbd', null, '1'), '–', el('kbd', null, '5')), el('dd', null, 'Choose / grade'),
+        el('dt', null, el('kbd', null, 'T'), ' ', el('kbd', null, 'F')), el('dd', null, 'True / false'),
+        el('dt', null, el('kbd', null, 'Space')), el('dd', null, 'Show answer'),
+        el('dt', null, el('kbd', null, '↵')), el('dd', null, 'Continue'))));
+  const main = el('div', { class: 'review-main' }, header, stage);
+  wrap.classList.add('review-layout');
+  wrap.append(main, panel);
+
+  function updatePanel() {
+    const acc = session.answered ? Math.round((session.correct / session.answered) * 100) : null;
+    sRows.replaceChildren(
+      el('dt', null, 'Card'), el('dd', null, `${Math.min(session.index + 1, queue.length)} of ${queue.length}`),
+      el('dt', null, 'Correct'), el('dd', null, `${session.correct} / ${session.answered}`),
+      el('dt', null, 'Accuracy'), el('dd', null, acc == null ? '—' : `${acc}%`),
+      el('dt', null, 'Earned'), el('dd', null, `+${session.xp} XP`));
+    for (const li of queueList.children) {
+      const i = Number(li.dataset.i);
+      const r = session.results[i];
+      li.className = i === session.index ? 'now' : r ? (r.correct ? 'ok' : 'bad') : '';
+    }
+  }
 
   function setProgress() {
     const pct = (session.index / queue.length) * 100;
     header.querySelector('.progress-fill').style.width = `${pct}%`;
     header.querySelector('.progress').setAttribute('aria-valuenow', String(session.index));
     header.querySelector('.review-count').textContent = `${Math.min(session.index + 1, queue.length)} / ${queue.length}`;
+    updatePanel();
   }
 
   function record(entry, rating, correct) {
@@ -84,6 +121,7 @@ export function renderReview(root, { store, onExit, onXp }) {
     session.answered++;
     if (correct) session.correct++;
     session.results.push({ entry, correct, nextDue });
+    updatePanel();
     return nextDue;
   }
 
@@ -95,6 +133,7 @@ export function renderReview(root, { store, onExit, onXp }) {
       el('p', { class: 'next-due' }, icon('clock'), `Next review ${formatDue(nextDue)}`));
     const go = () => { session.index++; show(); };
     const next = el('button', { class: 'btn btn-lg', type: 'button', onclick: go }, session.index === queue.length - 1 ? 'See results' : 'Continue', icon('arrow-right'));
+    for (const r of card.querySelectorAll('.review-actions')) r.remove(); // the answer hints
     card.append(box, el('div', { class: 'review-actions' }, hint(['↵', 'continue']), next));
     keys = { enter: go, space: go };
     next.focus();
@@ -191,9 +230,11 @@ export function renderReview(root, { store, onExit, onXp }) {
     const stats = deckStats(store.data.deck, new Date());
     const acc = session.answered ? Math.round((session.correct / session.answered) * 100) : 0;
     header.remove();
+    panel.remove();
+    wrap.classList.remove('review-layout');
     stage.replaceChildren(el('article', { class: 'card review-done' },
-      el('div', { class: 'empty-art', 'aria-hidden': 'true' }, icon('sparkles', 'big-icon')),
-      el('h1', { class: 'h-lg' }, session.answered ? 'Review complete' : 'Review ended'),
+      el('p', { class: 'kicker' }, 'Review'),
+      el('h1', { class: 'h-lg' }, session.answered ? 'Session complete' : 'Session ended'),
       el('div', { class: 'stat-row' },
         el('div', { class: 'stat' }, el('strong', null, String(session.answered)), el('span', null, 'reviewed')),
         el('div', { class: 'stat' }, el('strong', null, `${acc}%`), el('span', null, 'correct')),

@@ -132,11 +132,9 @@ test('POST /api/course/plan (demo) returns a course outline', async () => {
   assert.equal(data.plan.sections[0].lessons[0].title, 'Compound interest');
 });
 
-test('static client and read-only module mounts are served; traversal is refused', async () => {
-  const index = await fetch(`${base}/`);
-  assert.equal(index.status, 200);
-  assert.match(await index.text(), /<main id="app"/);
-  for (const p of ['/app.js', '/styles.css', '/learning-catalog.js', '/chatgpt-dil/src/host.js', '/chatgpt-dil/src/dil.css', '/wondering-genui/src/fsrs.js']) {
+test('client modules and read-only module mounts are served; traversal is refused', async () => {
+  // the page itself (layout, fonts, CSS) is the Next.js app in app/; this server only serves the modules
+  for (const p of ['/app.js', '/shell.js', '/learning-catalog.js', '/chatgpt-dil/src/host.js', '/chatgpt-dil/src/dil.css', '/wondering-genui/src/fsrs.js']) {
     const r = await fetch(base + p);
     assert.equal(r.status, 200, p);
     await r.arrayBuffer();

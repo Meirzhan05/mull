@@ -8,13 +8,14 @@ import { uid } from './store.js';
 import { DilSurface, mergeComponentResults } from './dil-surface.js';
 import { hasViewState } from './view-state.js';
 import { streamTurn, postJson } from './stream-client.js';
-import { XP } from './deck.js';
+import { XP, deckStats, currentStreak } from './deck.js';
+import { dailyProgress, learnerTotals } from './progress-core.js';
 import { el, icon, toast } from './ui.js';
 import { progressSnapshot, historyForModel, threadTitle } from './teacher-core.js';
 
 const STARTERS = [
   ['calendar', 'I want to get good at statistics in a week. I already know basic algebra.'],
-  ['sparkles', 'What should I study today?'],
+  ['book', 'What should I study today?'],
   ['target', 'Quiz me on my last lesson'],
   ['layers', 'Make me a 5-day plan to learn the basics of Spanish'],
 ];
@@ -60,6 +61,7 @@ export function renderTeacher(ctx, threadId) {
   input.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(input.value); } });
   input.addEventListener('input', () => { input.style.height = 'auto'; input.style.height = `${Math.min(160, input.scrollHeight)}px`; });
   const toggleThreads = el('button', { class: 'icon-btn threads-toggle', type: 'button', 'aria-label': 'Show chats', 'aria-expanded': 'false' }, icon('menu'));
+  const ctxToggle = el('button', { class: 'icon-btn ctx-toggle', type: 'button', 'aria-label': 'What your Teacher sees', 'aria-expanded': 'false', title: 'Context' }, icon('list'));
   const memChip = el('a', { class: `mem-chip ${memoryOn() ? 'on' : ''}`, href: '#/memory', title: 'Learner memory' }, icon('brain'), memoryOn() ? 'Memory on' : 'Memory off');
   const empty = el('div', { class: 'teacher-empty' },
     el('span', { class: 'tutor-avatar big', 'aria-hidden': 'true' }, icon('teacher')),
@@ -73,10 +75,17 @@ export function renderTeacher(ctx, threadId) {
       el('div', { class: 'teacher-head-mid' },
         el('strong', { class: 'teacher-title' }, thread?.title || 'New chat'),
         el('span', { class: 'muted small' }, status.mode === 'claude' ? 'Teacher · Claude' : 'Teacher · demo replies')),
-      memChip),
+      memChip,
+      ctxToggle),
     scroller,
     form);
-  const layout = el('div', { class: 'teacher-layout' }, threadsPanel, main);
+  const contextPanel = buildContext(store);
+  const layout = el('div', { class: 'teacher-layout' }, threadsPanel, main, contextPanel.el);
+  ctxToggle.addEventListener('click', () => {
+    const open = !layout.classList.contains('ctx-open');
+    layout.classList.toggle('ctx-open', open);
+    ctxToggle.setAttribute('aria-expanded', String(open));
+  });
   app.replaceChildren(layout);
   toggleThreads.addEventListener('click', () => {
     const open = !layout.classList.contains('threads-open');
@@ -269,6 +278,7 @@ export function renderTeacher(ctx, threadId) {
       persist();
       store.flush();
       showFollowups(entry.followups);
+      contextPanel.refresh();
       if (r.final?.debug?.truncated) toast('The reply was cut short (length limit).');
     } catch (e) {
       if (!ac.signal.aborted) {
@@ -288,4 +298,43 @@ export function renderTeacher(ctx, threadId) {
 
   if (pendingMessage) { const m = pendingMessage; pendingMessage = null; send(m); }
   else setTimeout(() => input.focus(), 60);
+}
+
+/**
+ * The Teacher's context, shown beside the conversation: the learner memory it reads, the progress
+ * snapshot it receives with every message, and the saved study plan.
+ */
+function buildContext(store) {
+  const memList = el('ul', { class: 'ctx-list' }, el('li', { class: 'faint' }, 'Loading…'));
+  const progress = el('dl', { class: 'kv' });
+  const planBox = el('div', { class: 'ctx-plan' });
+  const root = el('aside', { class: 'teacher-context', 'aria-label': 'What your Teacher sees' },
+    el('p', { class: 'ctx-intro muted small' }, 'Sent with every message, so replies fit where you are.'),
+    el('section', { class: 'stat-panel' }, el('span', { class: 'stat-label' }, 'Progress'), progress),
+    el('section', { class: 'stat-panel' }, el('span', { class: 'stat-label' }, 'Memory', el('a', { class: 'link-btn', href: '#/you' }, 'Edit')), memList),
+    el('section', { class: 'stat-panel' }, el('span', { class: 'stat-label' }, 'Study plan'), planBox));
+  function refresh() {
+    const d = store.data;
+    const t = learnerTotals(d);
+    const day = dailyProgress(d.stats, d.settings);
+    const deck = deckStats(d.deck);
+    progress.replaceChildren(
+      el('dt', null, 'Today'), el('dd', null, `${day.xp} / ${day.goal} XP`),
+      el('dt', null, 'Streak'), el('dd', null, `${currentStreak(d.stats)} days`),
+      el('dt', null, 'Lessons'), el('dd', null, `${t.lessonsFinished} finished`),
+      el('dt', null, 'Cards'), el('dd', null, `${deck.due} due · ${deck.total} total`));
+    const plan = (d.plans || [])[0];
+    if (plan) {
+      const items = (plan.days || []).flatMap((x) => x.items || []);
+      planBox.replaceChildren(el('p', { class: 'ctx-plan-goal' }, plan.goal), el('p', { class: 'faint small' }, `${items.filter((i) => i.opened).length} of ${items.length} items opened`));
+    } else planBox.replaceChildren(el('p', { class: 'faint small' }, 'No saved plan. Ask for one and press Save.'));
+    if (d.settings?.memoryEnabled === false) { memList.replaceChildren(el('li', { class: 'faint small' }, 'Memory is off.')); return; }
+    fetch('/api/memory').then((r) => r.json()).then((r) => {
+      const items = r.items || [];
+      memList.replaceChildren(...(items.length ? items.slice(0, 6).map((i) => el('li', null, el('span', { class: 'ctx-kind' }, i.kind), el('span', null, i.fact)))
+        : [el('li', { class: 'faint small' }, 'Nothing yet. Tell your Teacher about your goals.')]));
+    }).catch(() => memList.replaceChildren(el('li', { class: 'faint small' }, 'Memory is unavailable.')));
+  }
+  refresh();
+  return { el: root, refresh };
 }

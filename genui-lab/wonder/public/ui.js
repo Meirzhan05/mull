@@ -120,50 +120,6 @@ export function lessonTitleFrom(markdown, fallback = 'Lesson') {
   return m ? m[1].replace(/<[^>]*>/g, '').replace(/[*_`]/g, '').trim() : fallback;
 }
 
-/** Circular progress ring: pct 0..1, any node(s) in the middle. */
-export function progressRing(pct, center, { cls = '', label } = {}) {
-  const NS = 'http://www.w3.org/2000/svg';
-  const svg = document.createElementNS(NS, 'svg');
-  svg.setAttribute('viewBox', '0 0 100 100');
-  svg.setAttribute('aria-hidden', 'true');
-  const r = 42;
-  for (const k of ['track', 'fill']) {
-    const ci = document.createElementNS(NS, 'circle');
-    ci.setAttribute('cx', '50');
-    ci.setAttribute('cy', '50');
-    ci.setAttribute('r', String(r));
-    ci.setAttribute('class', `ring-${k}`);
-    ci.setAttribute('pathLength', '100');
-    if (k === 'fill') {
-      ci.style.strokeDasharray = '100';
-      ci.style.strokeDashoffset = '100';
-      requestAnimationFrame(() => requestAnimationFrame(() => { ci.style.strokeDashoffset = String(100 - Math.max(0, Math.min(1, pct)) * 100); }));
-    }
-    svg.appendChild(ci);
-  }
-  return el('span', { class: `ring ${pct >= 1 ? 'met' : ''} ${cls}`, role: label ? 'img' : null, 'aria-label': label || null }, svg, el('span', { class: 'ring-center' }, center));
-}
-
-/** A short burst of confetti (skipped with reduced motion). */
-export function confetti(count = 70) {
-  if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return;
-  const colors = ['var(--brand)', 'var(--flame)', 'var(--success)', 'var(--warning)', 'var(--brand-muted)'];
-  const box = el('div', { class: 'confetti', 'aria-hidden': 'true' });
-  for (let i = 0; i < count; i++) {
-    box.append(el('i', { style: {
-      left: `${Math.random() * 100}%`, background: colors[i % colors.length],
-      animationDelay: `${Math.random() * 300}ms`,
-      transform: `rotate(${Math.random() * 360}deg)`,
-    } }));
-    const p = box.lastChild;
-    p.style.setProperty('--x', `${(Math.random() - 0.5) * 240}px`);
-    p.style.setProperty('--r', `${(Math.random() - 0.5) * 1080}deg`);
-    p.style.setProperty('--d', `${1.3 + Math.random() * 1.1}s`);
-  }
-  document.body.append(box);
-  setTimeout(() => box.remove(), 2800);
-}
-
 /** Relative time: "just now", "5 min ago", "yesterday", "3 days ago", or a date. */
 export function relTime(iso) {
   const ms = Date.now() - Date.parse(iso || 0);

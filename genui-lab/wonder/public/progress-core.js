@@ -191,3 +191,38 @@ export function matchScore(text, query) {
   const words = q.split(/\s+/).filter(Boolean);
   return words.length > 1 && words.every((w) => t.includes(w)) ? 1 : 0;
 }
+
+/** The interest a suggested topic came from (its label), or ''. */
+export function topicInterest(topic) {
+  for (const v of Object.values(INTERESTS)) if (v.topics.includes(topic)) return v.label;
+  return '';
+}
+
+/** Upper-case Roman numerals for small counts (page and section numbering). */
+export function roman(n) {
+  let x = Math.max(0, Math.floor(Number(n) || 0));
+  if (!x) return '';
+  const map = [[1000, 'M'], [900, 'CM'], [500, 'D'], [400, 'CD'], [100, 'C'], [90, 'XC'], [50, 'L'], [40, 'XL'], [10, 'X'], [9, 'IX'], [5, 'V'], [4, 'IV'], [1, 'I']];
+  let out = '';
+  for (const [v, r] of map) while (x >= v) { out += r; x -= v; }
+  return out;
+}
+
+const INLINE_COMPONENTS = new Set(['Cite', 'KeyTerm', 'Followups', 'Sources']);
+
+/**
+ * Minutes to read a lesson's markdown: prose at ~220 words a minute (component tags, their JSON
+ * props, math and code are not words), plus about half a minute per interactive widget.
+ */
+export function readingMinutes(markdown, wpm = 220) {
+  const widgets = [...String(markdown || '').matchAll(/<([A-Z][\w]*)\b/g)].filter((m) => !INLINE_COMPONENTS.has(m[1])).length;
+  const text = String(markdown || '')
+    .replace(/```[\s\S]*?```/g, ' ')
+    .replace(/<([A-Z][\w]*)\b[\s\S]*?(?:\/>|<\/\1>)/g, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/\$\$[\s\S]*?\$\$|\$[^$\n]+\$/g, ' ')
+    .replace(/[#*_>`[\]()|-]/g, ' ');
+  const words = text.split(/\s+/).filter((w) => /[\p{L}\p{N}]/u.test(w)).length;
+  const minutes = words / wpm + widgets * 0.5;
+  return minutes ? Math.max(1, Math.round(minutes)) : 0;
+}

@@ -8,7 +8,7 @@ import { streamTurn, postJson } from './stream-client.js';
 import { addItems, deckStats, awardXp, formatDue, XP } from './deck.js';
 import { normalizePracticeItem } from './practice-core.js';
 import { renderReview } from './review.js';
-import { el, icon, toast, inlineMd, lessonTitleFrom, progressRing, confetti } from './ui.js';
+import { el, icon, toast, inlineMd, lessonTitleFrom } from './ui.js';
 import { observeMath } from './math.js';
 import { renderTeacher, queueTeacherMessage } from './teacher-screen.js';
 import { createSteerBar } from './steer-bar.js'; // Phase 4
@@ -23,7 +23,7 @@ import { renderToday } from './today.js';
 import { renderLibrary } from './library.js';
 import { renderYou, TEXT_SIZES } from './you.js';
 import { needsOnboarding, showOnboarding } from './onboarding.js';
-import { dailyProgress, courseProgress } from './progress-core.js';
+import { dailyProgress, courseProgress, roman, readingMinutes } from './progress-core.js';
 
 const store = createStore();
 const PAGE_ID = uid('page'); // this page load: a 'streaming' lesson owned by another id was interrupted
@@ -134,10 +134,8 @@ function giveXp(amount, why) {
   refreshChrome();
   shell.bump();
   const after = dailyProgress(store.data.stats, store.data.settings);
-  if (!before.met && after.met) {
-    confetti();
-    toast(`Daily goal reached! +${amount} XP`, 3600);
-  } else toast(`+${amount} XP${why ? ` · ${why}` : ''}`);
+  if (!before.met && after.met) toast(`Today’s goal is met · +${amount} XP`, 3600);
+  else toast(`+${amount} XP${why ? ` · ${why}` : ''}`);
 }
 
 async function loadStatus() {
@@ -202,14 +200,17 @@ function renderCourse(courseId) {
     el('header', { class: 'course-head card' },
       el('div', { class: 'course-head-row' },
         el('div', { style: { flex: '1 1 300px', display: 'grid', gap: '10px' } },
-          el('p', { class: 'eyebrow', style: { margin: 0 } }, `${course.level || 'beginner'} course · ${p.total} lessons`),
+          el('p', { class: 'kicker', style: { margin: 0 } }, `A course in ${p.total} lessons · ${course.level || 'beginner'}`),
           el('h1', { class: 'h-xl' }, course.title),
           course.description ? el('p', { class: 'muted' }, course.description) : null),
-        progressRing(pct, [`${Math.round(pct * 100)}%`, el('small', null, `${p.done}/${p.total} done`)], { cls: 'lg' })),
+        el('div', { class: 'course-ledger' },
+          el('span', { class: 'ledger-label' }, 'Progress'),
+          el('span', { class: 'ledger-value' }, String(p.done), el('small', null, ` of ${p.total} lessons`)),
+          el('span', { class: 'ledger-bar', 'aria-hidden': 'true' }, el('i', { style: { width: `${Math.round(pct * 100)}%` } })))),
       firstOpen ? el('div', null, el('button', { class: 'btn btn-lg', type: 'button', onclick: () => openCourseLesson(courseId, firstOpen.si, firstOpen.li) }, icon('play'), p.done ? `Continue: ${firstOpen.title}` : 'Start the course'))
-        : el('p', { class: 'tag green', style: { width: 'fit-content' } }, icon('check'), 'Course complete')),
+        : el('p', { class: 'byline' }, 'Every lesson in this course is finished.')),
     ...course.sections.map((s, si) => el('section', { class: 'path-section' },
-      el('h2', { class: 'h-sm path-title' }, `Part ${si + 1} · ${s.title}`),
+      el('h2', { class: 'rubric path-title' }, `Part ${roman(si + 1)} · ${s.title}`),
       el('ol', { class: 'path' }, ...s.lessons.map((l, li) => {
         n++;
         const lesson = l.lessonId ? store.data.lessons[l.lessonId] : null;
@@ -243,7 +244,7 @@ function renderLesson(lessonId) {
   const mount = el('div', { class: 'lesson-dil' });
   const skeleton = el('div', { class: 'skeleton', 'aria-hidden': 'true' }, el('i', { class: 't' }), el('i'), el('i'), el('i'), el('i'));
   const errorBox = el('div', { class: 'card error-card', hidden: true });
-  const finishBtn = el('button', { class: 'btn btn-lg', type: 'button', disabled: true }, icon('sparkles'), 'Collect cards & finish');
+  const finishBtn = el('button', { class: 'btn btn-lg', type: 'button', disabled: true }, 'Collect the cards');
   const endPanel = el('section', { class: 'card lesson-end pending', 'aria-label': 'End of lesson' });
   // Phase 4: live steer (a pill beside the status line), resume (open, top) and revise (sticky, after the lesson)
   const steerBar = createSteerBar({
@@ -267,7 +268,7 @@ function renderLesson(lessonId) {
       el('button', { class: `toc-item ${cur === 0 ? 'current' : ''}`, type: 'button', role: 'menuitem', onclick: () => { closeToc(); window.scrollTo({ top: 0, behavior: 'smooth' }); } }, el('span', { class: 'toc-num' }, icon('book')), el('span', { class: 'toc-label' }, 'Introduction')),
       ...titles.map((t, i) => el('button', { class: `toc-item ${cur === i + 1 ? 'current' : i + 1 < cur ? 'read' : ''}`, type: 'button', role: 'menuitem', onclick: () => { closeToc(); jumpToPage(i + 1); } },
         el('span', { class: 'toc-num' }, String(i + 1)), el('span', { class: 'toc-label' }, t))),
-      titles.length ? null : el('p', { class: 'muted small', style: { padding: '8px 10px', margin: 0 } }, 'Pages appear here as the lesson is written.'));
+      ...(titles.length ? [] : [el('p', { class: 'muted small', style: { padding: '8px 10px', margin: 0 } }, 'Pages appear here as the lesson is written.')]));
     tocMenu.hidden = false;
     tocBtn.setAttribute('aria-expanded', 'true');
     document.addEventListener('pointerdown', onTocOutside, true);
@@ -379,7 +380,7 @@ function renderLesson(lessonId) {
     segs.setAttribute('aria-valuenow', String(writing ? Math.max(0, total - 1) : end ? total : cur));
     pageLabel.textContent = writing ? (total ? `Writing page ${total}…` : 'Writing…')
       : l?.status !== 'complete' ? (total ? `${total} page${total === 1 ? '' : 's'} so far` : '')
-        : total ? (cur ? `Page ${cur} of ${total}` : `Intro · ${total} pages`) : '';
+        : total ? (cur ? `Page ${cur} of ${total}` : `${total} pages · ${readingMinutes(l?.markdown) || 1} min read`) : '';
   }
   let saveTimer = 0;
   const onScroll = () => {
@@ -411,8 +412,8 @@ function renderLesson(lessonId) {
     const q = selectedQuote();
     if (!q || store.data.lessons[lessonId]?.status !== 'complete') { hideSel(); return; }
     selPop.replaceChildren(
-      el('button', { type: 'button', onmousedown: (e) => e.preventDefault(), onclick: () => { hideSel(); setTutorOpen(true); tutor.send(`Explain this part of the lesson in a different way: “${q.text}”`); window.getSelection()?.removeAllRanges(); } }, icon('sparkles'), 'Explain'),
-      el('button', { type: 'button', onmousedown: (e) => e.preventDefault(), onclick: () => { hideSel(); setTutorOpen(true); tutor.prefill(`About “${q.text.length > 160 ? `${q.text.slice(0, 157)}…` : q.text}”: `); window.getSelection()?.removeAllRanges(); } }, icon('chat'), 'Ask about this'));
+      el('button', { type: 'button', onmousedown: (e) => e.preventDefault(), onclick: () => { hideSel(); setTutorOpen(true); tutor.send(`Explain this part of the lesson in a different way: “${q.text}”`); window.getSelection()?.removeAllRanges(); } }, 'Explain'),
+      el('button', { type: 'button', onmousedown: (e) => e.preventDefault(), onclick: () => { hideSel(); setTutorOpen(true); tutor.prefill(`About “${q.text.length > 160 ? `${q.text.slice(0, 157)}…` : q.text}”: `); window.getSelection()?.removeAllRanges(); } }, 'Ask about this'));
     selPop.hidden = false;
     selPop.style.left = `${Math.max(90, Math.min(window.innerWidth - 90, q.rect.left + q.rect.width / 2)) + window.scrollX}px`;
     selPop.style.top = `${q.rect.top + window.scrollY}px`;
@@ -467,28 +468,28 @@ function renderLesson(lessonId) {
       endPanel.className = 'card lesson-end';
       finishBtn.disabled = false;
       finishBtn.classList.remove('btn-secondary');
-      finishBtn.lastChild.textContent = 'Collect cards & finish';
+      finishBtn.lastChild.textContent = 'Collect the cards';
       endPanel.replaceChildren(
-        el('span', { class: 'end-art', 'aria-hidden': 'true' }, icon('trophy')),
-        el('h2', { class: 'h-lg' }, 'You reached the end'),
-        el('p', { class: 'muted' }, `Collect this lesson’s knowledge cards. Wonder schedules each one for review right before you’d forget it.`),
-        el('div', { class: 'end-stats' }, pages ? el('span', { class: 'tag' }, icon('book'), `${pages} pages`) : null, score, el('span', { class: 'tag amber' }, icon('bolt'), `+${XP.lessonComplete} XP`)),
+        el('p', { class: 'kicker' }, 'End of the lesson'),
+        el('h2', { class: 'h-lg' }, 'File what you have learned'),
+        el('p', { class: 'muted' }, 'The key ideas become index cards in your review deck. Each returns just before you would forget it.'),
+        el('div', { class: 'end-stats' }, pages ? el('span', { class: 'tag' }, `${pages} pages`) : null, score, el('span', { class: 'tag' }, `+${XP.lessonComplete} XP`)),
         el('div', { class: 'end-actions' }, finishBtn,
-          el('button', { class: 'btn btn-secondary btn-lg', type: 'button', onclick: () => setTutorOpen(true) }, icon('chat'), 'Ask a question first')));
+          el('button', { class: 'btn btn-secondary btn-lg', type: 'button', onclick: () => setTutorOpen(true) }, 'Ask the tutor first')));
       return;
     }
     endPanel.className = 'card lesson-end finished';
     const nxt = l.courseId ? nextInCourse(l.courseId, lessonId) : null;
     const due = deckStats(store.data.deck).due;
     endPanel.replaceChildren(
-      el('span', { class: 'end-art', 'aria-hidden': 'true' }, icon('check')),
-      el('h2', { class: 'h-lg' }, 'Lesson finished'),
-      el('p', { class: 'muted' }, 'Its cards are in your review deck. Revisit any time, or keep going.'),
+      el('p', { class: 'kicker' }, 'Finished'),
+      el('h2', { class: 'h-lg' }, 'This lesson is filed'),
+      el('p', { class: 'muted' }, 'Its cards are in your review deck. Come back to the text any time, or continue.'),
       el('div', { class: 'end-stats' }, score),
       el('div', { class: 'end-actions' },
-        nxt ? el('button', { class: 'btn btn-lg', type: 'button', onclick: () => openCourseLesson(l.courseId, nxt.si, nxt.li) }, icon('play'), `Next: ${nxt.title}`) : null,
-        due ? el('a', { class: `btn btn-lg ${nxt ? 'btn-secondary' : ''}`, href: '#/review' }, icon('repeat'), `Review ${due} card${due === 1 ? '' : 's'}`) : null,
-        el('a', { class: `btn btn-lg ${nxt || due ? 'btn-secondary' : ''}`, href: '#/' }, icon('home'), 'Back to Today')));
+        nxt ? el('button', { class: 'btn btn-lg', type: 'button', onclick: () => openCourseLesson(l.courseId, nxt.si, nxt.li) }, `Next: ${nxt.title}`, icon('arrow-right')) : null,
+        due ? el('a', { class: `btn btn-lg ${nxt ? 'btn-secondary' : ''}`, href: '#/review' }, `Review ${due} card${due === 1 ? '' : 's'}`) : null,
+        el('a', { class: `btn btn-lg ${nxt || due ? 'btn-secondary' : ''}`, href: '#/' }, 'Back to Today')));
   }
 
   function markComplete() {
@@ -804,19 +805,19 @@ function createTutor(lessonId) {
   input.addEventListener('input', autosize);
   const closeBtn = el('button', { class: 'icon-btn plain', type: 'button', 'aria-label': 'Close tutor', onclick: () => api.onOpenChange?.(false) }, icon('x'));
   const STARTERS = [
-    ['sparkles', 'Summarize the key ideas', 'Summarize the key ideas of this lesson in a few bullet points.'],
+    ['list', 'Summarize the key ideas', 'Summarize the key ideas of this lesson in a few bullet points.'],
     ['book', 'Give me a real-world example', 'Give me a fresh real-world example of the main idea.'],
     ['target', 'Quiz me on this lesson', 'Quiz me on this lesson.'],
     ['quote', 'Explain it like I’m 12', 'Explain the main idea of this lesson like I am 12.'],
   ];
   const empty = el('div', { class: 'tutor-empty' },
-    el('span', { class: 'tutor-avatar', 'aria-hidden': 'true' }, icon('sparkles')),
+    el('span', { class: 'tutor-avatar', 'aria-hidden': 'true' }, icon('quote')),
     el('p', null, 'Stuck on something? Ask about any part of the lesson, or highlight a passage and tap “Explain”.'),
     el('div', { class: 'tutor-starters' }, ...STARTERS.map(([ic, label, q]) => el('button', { class: 'tutor-starter', type: 'button', onclick: () => api.send(q) }, icon(ic), label))));
   const panel = el('aside', { class: 'tutor', 'aria-label': 'Lesson tutor' },
     el('header', { class: 'tutor-head' },
       el('div', { class: 'tutor-head-id' },
-        el('span', { class: 'tutor-avatar small', 'aria-hidden': 'true' }, icon('sparkles')),
+        el('span', { class: 'tutor-avatar small', 'aria-hidden': 'true' }, icon('quote')),
         el('div', null, el('strong', null, 'Tutor'), el('span', { class: 'muted small' }, status.mode === 'claude' ? 'Knows this lesson · Claude' : 'Knows this lesson · demo replies'))),
       closeBtn),
     el('div', { class: 'tutor-scroll' }, empty, log, followups),
@@ -856,7 +857,7 @@ function createTutor(lessonId) {
     const vsRef = { index, pending: null }; // widget state
     const mount = el('div', { class: 'msg-dil' });
     const typing = el('div', { class: 'typing', 'aria-label': 'Tutor is typing' }, el('i'), el('i'), el('i'));
-    const wrapper = el('div', { class: 'msg msg-bot' }, el('span', { class: 'tutor-avatar small', 'aria-hidden': 'true' }, icon('sparkles')), el('div', { class: 'bot-body' }, typing, mount));
+    const wrapper = el('div', { class: 'msg msg-bot' }, el('span', { class: 'tutor-avatar small', 'aria-hidden': 'true' }, icon('quote')), el('div', { class: 'bot-body' }, typing, mount));
     log.append(wrapper);
     let appData = {};
     let dilRef = null;
@@ -992,31 +993,36 @@ function showPack(lesson, data, { onFinished } = {}) {
   const cards = data.cards || [];
   const items = data.items || [];
   let opened = 0;
-  const addBtn = el('button', { class: 'btn btn-lg', type: 'button' }, icon('cards'), `Add ${items.length} practice card${items.length === 1 ? '' : 's'} to my deck`);
-  const sub = el('p', { class: 'pack-sub muted' }, 'Tap each card to reveal it.');
+  const addBtn = el('button', { class: 'btn btn-lg', type: 'button' }, `File ${items.length} card${items.length === 1 ? '' : 's'} in my deck`);
+  const sub = el('p', { class: 'pack-sub muted' }, 'Turn each card over to read it.');
   const grid = el('div', { class: 'pack-grid' }, ...cards.map((c, i) => {
-    const card = el('button', { class: 'pack-card', type: 'button', style: { animationDelay: `${i * 90}ms` }, 'aria-label': `Reveal card ${i + 1}` },
+    const card = el('button', { class: 'pack-card', type: 'button', style: { animationDelay: `${i * 70}ms` }, 'aria-label': `Turn over card ${i + 1}` },
       el('span', { class: 'pack-inner' },
-        el('span', { class: 'pack-face pack-front' }, el('span', { class: 'pack-mark' }, icon('sparkles')), el('span', null, 'Tap to reveal')),
-        el('span', { class: 'pack-face pack-back' }, el('strong', null, c.term), el('span', null, inlineMd(c.definition)), c.example ? el('em', null, c.example) : null)));
+        el('span', { class: 'pack-face pack-front' },
+          el('span', { class: 'pack-no' }, `No. ${String(i + 1).padStart(2, '0')}`),
+          el('span', { class: 'pack-front-title' }, lesson.title || lesson.topic),
+          el('span', { class: 'pack-turn' }, 'Turn over')),
+        el('span', { class: 'pack-face pack-back' },
+          el('span', { class: 'pack-no' }, `No. ${String(i + 1).padStart(2, '0')}`),
+          el('strong', null, c.term), el('span', { class: 'pack-def' }, inlineMd(c.definition)), c.example ? el('em', null, c.example) : null)));
     card.addEventListener('click', () => {
       if (card.classList.contains('flipped')) return;
       card.classList.add('flipped');
       card.setAttribute('aria-label', `${c.term}: ${c.definition}`);
       opened++;
-      if (opened === cards.length) sub.textContent = 'All revealed. Add them to your deck to review them later.';
+      if (opened === cards.length) sub.textContent = 'All turned. File them to review them later.';
     });
     return card;
   }));
   const panel = el('div', { class: 'pack-panel' },
-    el('p', { class: 'eyebrow' }, 'Lesson complete'),
-    el('h2', { class: 'h-lg' }, `${cards.length} concept${cards.length === 1 ? '' : 's'} unlocked`),
+    el('p', { class: 'kicker' }, lesson.title || 'Lesson complete'),
+    el('h2', { class: 'h-lg' }, `${cards.length} idea${cards.length === 1 ? '' : 's'} worth keeping`),
     sub,
     grid,
     el('div', { class: 'pack-actions' },
-      el('button', { class: 'btn btn-secondary btn-lg', type: 'button', onclick: () => { for (const c of grid.children) c.click(); } }, 'Reveal all'),
+      el('button', { class: 'btn btn-secondary btn-lg', type: 'button', onclick: () => { for (const c of grid.children) c.click(); } }, 'Turn all'),
       addBtn));
-  const overlay = el('div', { class: 'pack-overlay', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'New knowledge cards' }, panel);
+  const overlay = el('div', { class: 'pack-overlay', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'New index cards' }, panel);
   const close = () => { overlay.remove(); document.removeEventListener('keydown', onKey); };
   const onKey = (e) => { if (e.key === 'Escape') close(); };
   document.addEventListener('keydown', onKey);
@@ -1032,26 +1038,28 @@ function showPack(lesson, data, { onFinished } = {}) {
     });
     store.flush();
     const gained = first ? XP.lessonComplete + added * XP.cardsCollected : 0;
-    if (gained) giveXp(gained, 'lesson complete');
-    else toast(added ? `${added} new cards added` : 'These cards are already in your deck');
-    if (first) confetti(90);
+    if (gained) giveXp(gained, 'lesson finished');
+    else toast(added ? `${added} new cards filed` : 'These cards are already in your deck');
     onFinished?.();
     // what next: the next course lesson, a review, or back to Today
     const day = dailyProgress(store.data.stats, store.data.settings);
     const nxt = lesson.courseId ? nextInCourse(lesson.courseId, lesson.id) : null;
     const due = deckStats(store.data.deck).due;
-    const step = (cls, tile, title, sub2, onclick) => el('button', { class: `next-step ${cls}`, type: 'button', onclick: () => { close(); onclick(); } }, tile, el('span', { class: 'next-step-text' }, el('strong', null, title), el('span', { class: 'muted small' }, sub2)), icon('chevron'));
+    const step = (title, sub2, onclick) => el('li', null, el('button', { class: 'numbered-row', type: 'button', onclick: () => { close(); onclick(); } },
+      el('span', { class: 'numbered-kicker' }, sub2), el('span', { class: 'numbered-title' }, title)));
     panel.replaceChildren(el('div', { class: 'pack-done' },
-      progressRing(day.pct, [`+${gained}`, el('small', null, 'XP')], { cls: 'lg', label: `Daily goal ${day.xp} of ${day.goal} XP` }),
-      el('div', { style: { display: 'grid', gap: '6px' } },
-        el('h2', { class: 'h-lg' }, day.met ? 'Daily goal reached!' : 'Nicely done'),
-        el('p', { class: 'muted' }, `${added} card${added === 1 ? '' : 's'} added · ${day.met ? `${day.xp} XP today` : `${day.goal - day.xp} XP to today’s goal`}`)),
-      el('div', { class: 'next-steps' },
-        nxt ? step('primary', el('span', { class: 'icon-tile' }, icon('play')), `Next: ${nxt.title}`, nxt.course.title, () => openCourseLesson(lesson.courseId, nxt.si, nxt.li)) : null,
-        due ? step(nxt ? '' : 'primary', el('span', { class: 'icon-tile amber' }, icon('repeat')), `Review ${due} card${due === 1 ? '' : 's'} now`, 'Lock in what you just learned', () => { location.hash = '#/review'; }) : null,
-        step(nxt || due ? '' : 'primary', el('span', { class: 'icon-tile green' }, icon('home')), 'Back to Today', 'See what’s up next', () => { location.hash = '#/'; }),
-        step('', el('span', { class: 'icon-tile' }, icon('book')), 'Stay on this lesson', 'Reread or ask the tutor', () => {}))));
-    panel.querySelector('.next-step')?.focus();
+      el('p', { class: 'kicker' }, 'Filed'),
+      el('h2', { class: 'h-lg' }, `${added} card${added === 1 ? '' : 's'} added to your deck`),
+      el('div', { class: 'ledger ledger-compact' },
+        el('div', { class: 'ledger-item' }, el('span', { class: 'ledger-label' }, 'Earned'), el('span', { class: 'ledger-value' }, `+${gained}`, el('small', null, ' XP'))),
+        el('div', { class: 'ledger-item' }, el('span', { class: 'ledger-label' }, 'Today'), el('span', { class: 'ledger-value' }, String(day.xp), el('small', null, ` / ${day.goal} XP`)), el('span', { class: `ledger-bar ${day.met ? 'met' : ''}`, 'aria-hidden': 'true' }, el('i', { style: { width: `${Math.round(day.pct * 100)}%` } })))),
+      el('h3', { class: 'rubric' }, 'What next'),
+      el('ol', { class: 'numbered' },
+        nxt ? step(nxt.title, `Next in ${nxt.course.title}`, () => openCourseLesson(lesson.courseId, nxt.si, nxt.li)) : null,
+        due ? step(`Review ${due} card${due === 1 ? '' : 's'} now`, 'Review', () => { location.hash = '#/review'; }) : null,
+        step('Back to Today', 'Today', () => { location.hash = '#/'; }),
+        step('Stay with this lesson', 'Reread, or ask the tutor', () => {}))));
+    panel.querySelector('.numbered-row')?.focus();
   });
   document.body.append(overlay);
   teardown.push(close);
@@ -1069,7 +1077,6 @@ function renderReviewScreen() {
 
 function notFound() {
   app.replaceChildren(el('div', { class: 'card empty-state', style: { maxWidth: '560px', margin: '24px auto 0' } },
-    el('span', { class: 'empty-art', 'aria-hidden': 'true' }, icon('search', 'big-icon')),
     el('h1', { class: 'h-lg' }, 'Not found'),
     el('p', { class: 'muted' }, 'This item is no longer stored in this browser.'),
     el('a', { class: 'btn', href: '#/' }, 'Back to Today')));

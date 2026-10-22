@@ -9,9 +9,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { fileURLToPath } from 'node:url';
+import { WONDER_ROOT } from './paths.js';
 
-export const DEFAULT_MEMORY_FILE = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'data', 'memory.json');
+export const DEFAULT_MEMORY_FILE = path.join(WONDER_ROOT, 'data', 'memory.json');
 export const MEMORY_KINDS = Object.freeze(['goal', 'preference', 'struggle', 'background']);
 export const MEMORY_SOURCES = Object.freeze(['teacher', 'lesson', 'user']);
 export const MAX_ITEMS = 100;
@@ -71,7 +71,7 @@ export function createMemoryStore({ file = DEFAULT_MEMORY_FILE, now = () => new 
     items = [];
     if (!file) return items;
     try {
-      const parsed = JSON.parse(fs.readFileSync(file, 'utf8'));
+      const parsed = JSON.parse(fs.readFileSync(/* turbopackIgnore: true */ file, 'utf8'));
       const list = Array.isArray(parsed?.items) ? parsed.items : [];
       const seen = new Set();
       for (const raw of list) {

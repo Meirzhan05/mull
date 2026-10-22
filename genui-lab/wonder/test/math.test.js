@@ -1,5 +1,6 @@
 // Math: protected LaTeX spans in the compiler, LaTeX-aware JSON escapes, catalog inline math,
 // the KaTeX static route and the Unicode fallback.
+import fs from 'node:fs';
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import katex from 'katex';
@@ -204,7 +205,7 @@ before(async () => {
 after(() => new Promise((r) => { server.closeAllConnections?.(); server.close(r); }));
 
 test('KaTeX is served read-only from /vendor/katex/; traversal is refused', async () => {
-  for (const [p, type] of [['/vendor/katex/katex.min.css', 'text/css'], ['/vendor/katex/katex.min.js', 'text/javascript'], ['/vendor/katex/fonts/KaTeX_Main-Regular.woff2', 'font/woff2'], ['/math.css', 'text/css']]) {
+  for (const [p, type] of [['/vendor/katex/katex.min.css', 'text/css'], ['/vendor/katex/katex.min.js', 'text/javascript'], ['/vendor/katex/fonts/KaTeX_Main-Regular.woff2', 'font/woff2']]) {
     const r = await fetch(base + p);
     assert.equal(r.status, 200, p);
     assert.ok(r.headers.get('content-type').startsWith(type), `${p}: ${r.headers.get('content-type')}`);
@@ -215,6 +216,7 @@ test('KaTeX is served read-only from /vendor/katex/; traversal is refused', asyn
     assert.equal(r.status, 404, p);
     await r.arrayBuffer();
   }
-  const html = await (await fetch(`${base}/`)).text();
-  assert.match(html, /href="\/vendor\/katex\/katex\.min\.css"/);
+  // the page (Next.js layout) bundles KaTeX's stylesheet; the script still loads from /vendor/katex/
+  const layout = fs.readFileSync(new URL('../app/layout.js', import.meta.url), 'utf8');
+  assert.match(layout, /import 'katex\/dist\/katex\.min\.css'/);
 });

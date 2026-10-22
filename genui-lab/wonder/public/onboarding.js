@@ -34,10 +34,10 @@ export function showOnboarding({ store, onDone }) {
       const input = el('input', { class: 'onboard-input', type: 'text', maxlength: '40', placeholder: 'Your first name (optional)', value: pick.name, 'aria-label': 'Your name' });
       const next = el('button', { class: 'btn btn-lg', type: 'submit' }, 'Continue', icon('arrow-right'));
       panel.replaceChildren(steps,
-        el('span', { class: 'brand-mark', style: { width: '48px', height: '48px', borderRadius: '15px' }, 'aria-hidden': 'true' }, markSvg()),
+        el('p', { class: 'brand onboard-brand', 'aria-hidden': 'true' }, el('span', { class: 'brand-name' }, 'Wonder'), el('span', { class: 'brand-dot' }, '.')),
         el('div', { style: { display: 'grid', gap: '8px' } },
           el('h1', { class: 'h-lg', id: 'onboard-title' }, 'Welcome to Wonder'),
-          el('p', { class: 'muted' }, 'Ask about anything and get a short, interactive lesson written for you, with a tutor on hand and reviews spaced so it sticks.')),
+          el('p', { class: 'muted' }, 'Name anything you want to understand. Wonder writes a short lesson for you as you read, with working diagrams, a tutor beside the text, and reviews spaced so it stays with you.')),
         el('form', { style: { display: 'grid', gap: '14px' }, onsubmit: (e) => { e.preventDefault(); pick.name = input.value; step = 1; draw(); } },
           el('label', { class: 'h-sm', style: { textTransform: 'none', letterSpacing: 0, fontSize: '0.9rem', color: 'var(--ink-2)' } }, 'What should we call you?'),
           input,
@@ -50,8 +50,8 @@ export function showOnboarding({ store, onDone }) {
       }, v.label, icon('check'))));
       panel.replaceChildren(steps,
         el('div', { style: { display: 'grid', gap: '8px' } },
-          el('h1', { class: 'h-lg', id: 'onboard-title' }, `What are you curious about${pick.name.trim() ? `, ${pick.name.trim()}` : ''}?`),
-          el('p', { class: 'muted' }, 'Pick a few. Wonder suggests lessons from these; you can learn anything regardless.')),
+          el('h1', { class: 'h-lg', id: 'onboard-title' }, `What do you read about${pick.name.trim() ? `, ${pick.name.trim()}` : ''}?`),
+          el('p', { class: 'muted' }, 'Choose a few subjects. They shape the suggested reading on your front page; you can study anything regardless.')),
         grid,
         el('div', { class: 'onboard-actions' },
           el('button', { class: 'btn btn-ghost btn-sm', type: 'button', onclick: () => { step = 0; draw(); } }, icon('arrow-left'), 'Back'),
@@ -65,24 +65,14 @@ export function showOnboarding({ store, onDone }) {
       panel.replaceChildren(steps,
         el('div', { style: { display: 'grid', gap: '8px' } },
           el('h1', { class: 'h-lg', id: 'onboard-title' }, 'Set a daily goal'),
-          el('p', { class: 'muted' }, 'Small and steady beats big and rare. You can change it any time.')),
+          el('p', { class: 'muted' }, 'A little every day does more than a lot now and then. You can change it later.')),
         opts,
         el('div', { class: 'onboard-actions' },
           el('button', { class: 'btn btn-ghost btn-sm', type: 'button', onclick: () => { step = 1; draw(); } }, icon('arrow-left'), 'Back'),
-          el('button', { class: 'btn btn-lg', type: 'button', onclick: () => finish(false) }, 'Start learning', icon('sparkles'))));
+          el('button', { class: 'btn btn-lg', type: 'button', onclick: () => finish(false) }, 'Begin', icon('arrow-right'))));
       opts.querySelector('[aria-checked="true"]')?.focus();
     }
   }
   draw();
   document.body.append(overlay);
-}
-
-function markSvg() {
-  const NS = 'http://www.w3.org/2000/svg';
-  const svg = document.createElementNS(NS, 'svg');
-  svg.setAttribute('viewBox', '0 0 32 32');
-  const p = document.createElementNS(NS, 'path');
-  p.setAttribute('d', 'M8 11l3.2 11 4.3-8.2L19.8 22 23 11');
-  svg.appendChild(p);
-  return svg;
 }

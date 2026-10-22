@@ -1,17 +1,20 @@
-// Today (#/): the home screen. A greeting with the daily goal ring and the week's streak, one
-// omnibox to start a lesson, plan a course or ask the Teacher, a single best "Up next" action
-// (progress-core upNext), the saved study plan and recent lessons.
+// Today (#/): a working dashboard. A compact header, one command bar (start a lesson, plan a
+// course or write to the Teacher), then two columns: the "Up next" queue, suggestions and recent
+// reading on the left; a rail of panels (today's XP, the streak, the deck, the study plan) on the
+// right. On narrow screens the rail moves above the queue as a strip.
 
-import { el, icon, toast, progressRing, relTime } from './ui.js';
-import { currentStreak } from './deck.js';
-import { dailyProgress, weekStrip, upNext, suggestedTopics, greeting, courseProgress } from './progress-core.js';
+import { el, icon, toast, relTime } from './ui.js';
+import { currentStreak, deckStats, formatDue } from './deck.js';
+import { dailyProgress, weekStrip, upNext, suggestedTopics, greeting, courseProgress, learnerTotals, topicInterest, readingMinutes } from './progress-core.js';
 import { pageCount } from './steering-core.js';
 
 const MODES = [
-  { id: 'lesson', label: 'Lesson', icon: 'play', placeholder: 'What do you want to learn? e.g. How do vaccines work?', hint: 'A 5–10 minute interactive lesson' },
-  { id: 'course', label: 'Course', icon: 'layers', placeholder: 'A bigger subject, e.g. Statistics from scratch', hint: 'A path of short lessons' },
-  { id: 'teacher', label: 'Ask Teacher', icon: 'teacher', placeholder: 'e.g. Plan my week to learn the basics of Spanish', hint: 'Plans, quizzes and advice' },
+  { id: 'lesson', label: 'Lesson', placeholder: 'What do you want to understand?', action: 'Begin' },
+  { id: 'course', label: 'Course', placeholder: 'A subject to study over several lessons', action: 'Plan' },
+  { id: 'teacher', label: 'Teacher', placeholder: 'A goal, a question, or a plan you need', action: 'Send' },
 ];
+const LEVELS = ['beginner', 'intermediate', 'advanced'];
+const cap = (s) => s[0].toUpperCase() + s.slice(1);
 
 /**
  * @param {{app: HTMLElement, store: object, status: object, actions: object}} ctx
@@ -19,185 +22,185 @@ const MODES = [
  *            openPlanItem(planId, dayIndex, itemIndex), openCourseLesson(courseId, si, li)
  */
 export function renderToday(ctx) {
-  const { app, store, status, actions } = ctx;
+  const { app, store, actions } = ctx;
   const d = store.data;
   const settings = d.settings || {};
   const now = new Date();
   const day = dailyProgress(d.stats, settings, now);
   const streak = currentStreak(d.stats, now);
+  const totals = learnerTotals(d, now);
   const name = String(settings.name || '').trim();
 
-  // -- header: greeting + goal ring + week
+  // -- header
   const sub = day.met
-    ? `Daily goal reached${streak > 1 ? ` · ${streak} days in a row` : ''}. Anything else is a bonus.`
+    ? 'Today’s goal is met.'
     : day.xp > 0
-      ? `${day.goal - day.xp} XP to go for today’s goal.`
-      : streak > 0
-        ? `Keep your ${streak}-day streak going: any lesson or review counts.`
-        : 'Pick up where you left off, or learn something new.';
-  const head = el('header', { class: 'today-head' },
-    el('div', null,
-      el('p', { class: 'eyebrow' }, now.toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' })),
-      el('h1', { class: 'h-xl' }, `${greeting(now)}${name ? ', ' : '.'}`, name ? el('em', null, name) : null, name ? '.' : null),
-      el('p', { class: 'today-sub' }, sub)),
-    el('a', { class: 'card goal-card', href: '#/you', 'aria-label': `Daily goal ${day.xp} of ${day.goal} XP, ${streak} day streak` },
-      progressRing(day.pct, [String(day.xp), el('small', null, `of ${day.goal} XP`)], { cls: 'lg' }),
-      el('div', { class: 'goal-card-text' },
-        el('strong', null, icon('flame'), ' ', streak ? `${streak}-day streak` : 'No streak yet'),
-        el('div', { class: 'week', 'aria-hidden': 'true' }, ...weekStrip(d.stats, settings, now).map((w) => el('span', { class: `week-day ${w.active ? 'active' : ''} ${w.met ? 'met' : ''} ${w.today ? 'today' : ''}`, title: `${w.key}: ${w.xp} XP` },
-          el('span', { class: 'week-dot' }, w.met ? icon('check') : null), w.label))),
-        el('span', { class: 'muted small' }, day.met ? 'Goal met today' : 'Reach your goal to fill the dot'))));
+      ? `${day.goal - day.xp} XP to today’s goal.`
+      : streak > 0 ? `Keep the ${streak}-day streak going.` : 'Pick up where you left off, or start something new.';
+  const head = el('header', { class: 't-head' },
+    el('p', { class: 't-date' }, now.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' }), totals.activeDays ? ` · Day ${totals.activeDays}` : ''),
+    el('h1', { class: 't-title' }, `${greeting(now)}${name ? `, ${name}` : ''}`),
+    el('p', { class: 't-sub' }, sub));
 
-  // -- omnibox
+  // -- command bar
   let mode = 'lesson';
   let level = 'beginner';
-  const input = el('textarea', { rows: '1', maxlength: '300', 'aria-label': 'What do you want to learn?' });
-  const sendBtn = el('button', { class: 'btn omni-send', type: 'submit', 'aria-label': 'Start' }, icon('arrow-right'));
-  const levelSeg = el('div', { class: 'seg', role: 'radiogroup', 'aria-label': 'Level' },
-    ...['beginner', 'intermediate', 'advanced'].map((lv) => el('button', { type: 'button', role: 'radio', 'aria-checked': String(lv === level), class: 'seg-btn', onclick: (e) => {
-      level = lv;
-      for (const b of levelSeg.children) b.setAttribute('aria-checked', String(b === e.currentTarget));
-    } }, lv[0].toUpperCase() + lv.slice(1))));
-  const hint = el('span', { class: 'omni-hint' });
-  const tabs = el('div', { class: 'omni-tabs', role: 'tablist', 'aria-label': 'What to start' }, ...MODES.map((m) => el('button', {
-    class: 'omni-tab', type: 'button', role: 'tab', 'aria-selected': String(m.id === mode), dataset: { mode: m.id },
+  const input = el('input', { type: 'text', maxlength: '300', autocomplete: 'off', 'aria-label': 'What do you want to understand?' });
+  const go = el('button', { class: 'btn cmd-go', type: 'submit' }, el('span', null, 'Begin'), el('kbd', { class: 'cmd-kbd' }, '↵'));
+  const modeSeg = el('div', { class: 'seg cmd-modes', role: 'tablist', 'aria-label': 'What to start' }, ...MODES.map((m) => el('button', {
+    class: 'seg-btn', type: 'button', role: 'tab', 'aria-selected': String(m.id === mode), dataset: { mode: m.id },
     onclick: () => { setMode(m.id); input.focus(); },
-  }, icon(m.icon), m.label)));
+  }, m.label)));
+  const levelSel = el('select', { class: 'cmd-level', 'aria-label': 'Level', onchange: (e) => { level = e.target.value; } }, ...LEVELS.map((lv) => el('option', { value: lv }, cap(lv))));
   function setMode(m) {
     mode = m;
     const def = MODES.find((x) => x.id === m);
-    for (const b of tabs.children) b.setAttribute('aria-selected', String(b.dataset.mode === m));
+    for (const b of modeSeg.children) b.setAttribute('aria-selected', String(b.dataset.mode === m));
     input.placeholder = def.placeholder;
-    hint.replaceChildren(icon(def.icon), def.hint);
-    levelSeg.hidden = m === 'teacher';
+    go.firstChild.textContent = def.action;
+    levelSel.hidden = m === 'teacher';
   }
   setMode('lesson');
-  const autosize = () => { input.style.height = 'auto'; input.style.height = `${Math.min(180, input.scrollHeight)}px`; };
-  input.addEventListener('input', autosize);
   async function submit() {
     const t = input.value.trim();
-    if (!t) { input.focus(); toast(mode === 'teacher' ? 'Type a message first' : 'Type a topic first'); return; }
+    if (!t) { input.focus(); toast(mode === 'teacher' ? 'Write a message first' : 'Name a subject first'); return; }
     if (mode === 'lesson') actions.startLesson(t, level);
     else if (mode === 'teacher') actions.askTeacher(t);
     else {
-      sendBtn.disabled = true;
-      sendBtn.classList.add('loading');
-      hint.replaceChildren(el('span', { class: 'reasoning-dot', 'aria-hidden': 'true' }), 'Planning your course…');
+      go.disabled = true;
+      go.firstChild.textContent = 'Planning…';
       const ok = await actions.planCourse(t, level);
-      if (!ok) { sendBtn.disabled = false; sendBtn.classList.remove('loading'); setMode('course'); }
+      if (!ok) { go.disabled = false; setMode('course'); }
     }
   }
-  input.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submit(); } });
-  const omni = el('form', { class: 'card omni', onsubmit: (e) => { e.preventDefault(); submit(); } },
-    tabs,
-    el('div', { class: 'omni-field' }, input, sendBtn),
-    el('div', { class: 'omni-foot' }, hint, levelSeg));
-  const suggestions = el('div', { class: 'suggest-row', 'aria-label': 'Suggested topics' },
-    el('span', { class: 'h-sm' }, settings.interests?.length ? 'For you' : 'Try'),
-    ...suggestedTopics(settings, d.lessons, now, 5).map((t) => el('button', { class: 'topic-chip', type: 'button', onclick: () => actions.startLesson(t, level) }, t)));
+  const cmd = el('form', { class: 'cmd', onsubmit: (e) => { e.preventDefault(); submit(); } },
+    modeSeg,
+    el('label', { class: 'cmd-field' }, icon('search'), input),
+    levelSel,
+    go);
 
-  // -- up next
+  // -- left column: queue, suggestions, recent
   const next = upNext(d, now);
-  const upSection = el('section', { class: 'section', 'aria-label': 'Up next' },
-    el('div', { class: 'section-head' }, el('h2', { class: 'h-md' }, 'Up next')),
-    el('div', { class: 'up-grid' }, heroCard(next[0], ctx), next.length > 1 ? el('div', { class: 'up-side' }, ...next.slice(1, 4).map((n) => sideItem(n, ctx))) : quickLinks(ctx)));
+  const queue = el('section', { class: 'panel-section' },
+    sectionHead('Up next', next[0]?.kind === 'start' ? null : `${next.length}`),
+    el('ol', { class: 'queue' }, ...next.map((n, i) => queueRow(n, i, ctx)), ...(next[0]?.kind === 'start' ? quickRows(ctx) : [])));
 
-  // -- saved study plan
-  const plan = (d.plans || [])[0];
-  const planSection = plan ? el('section', { class: 'section' },
-    el('div', { class: 'section-head' }, el('h2', { class: 'h-md' }, 'Your study plan'), plan.threadId ? el('a', { class: 'link-btn', href: `#/teacher/${plan.threadId}` }, 'Open chat', icon('arrow-right')) : null),
-    el('div', { class: 'card plan-card' },
-      el('strong', { class: 'plan-goal' }, plan.goal),
-      el('ol', { class: 'plan-days' }, ...(plan.days || []).map((dd, di) => {
-        const done = (dd.items || []).every((i) => i.opened);
-        return el('li', { class: 'plan-day' },
-          el('span', { class: `plan-num ${done ? 'done' : ''}` }, done ? icon('check') : String(dd.day || di + 1)),
-          el('div', { class: 'plan-body' },
-            el('span', { class: 'plan-focus' }, dd.focus),
-            el('div', { class: 'plan-items' }, ...(dd.items || []).map((it, ii) => el('button', { class: `plan-item ${it.opened ? 'opened' : ''}`, type: 'button', onclick: () => actions.openPlanItem(plan.id, di, ii) },
-              it.opened ? icon('check') : icon(it.kind === 'review' ? 'repeat' : it.kind === 'quiz' ? 'sparkles' : 'book'), it.title)))));
-      })))) : null;
+  const topics = suggestedTopics(settings, d.lessons, now, 6);
+  const suggested = el('section', { class: 'panel-section' },
+    sectionHead(settings.interests?.length ? 'Suggested for you' : 'Suggested', null, el('a', { class: 'link-btn', href: '#/you' }, 'Interests')),
+    el('ul', { class: 'tiles' }, ...topics.map((t) => el('li', null, el('button', { type: 'button', class: 'tile', onclick: () => actions.startLesson(t, level) },
+      el('span', { class: 'tile-tag' }, topicInterest(t) || 'General'),
+      el('span', { class: 'tile-title' }, t),
+      el('span', { class: 'tile-go' }, 'Start lesson', icon('arrow-right')))))));
 
-  // -- recent lessons
-  const recent = Object.values(d.lessons).sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || '')).slice(0, 6);
-  const recentSection = recent.length ? el('section', { class: 'section' },
-    el('div', { class: 'section-head' }, el('h2', { class: 'h-md' }, 'Recent'), el('a', { class: 'link-btn', href: '#/library' }, 'Library', icon('arrow-right'))),
-    el('div', { class: 'rail' }, ...recent.map((l) => lessonTile(l, d)))) : null;
+  const recent = Object.values(d.lessons).sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || '')).slice(0, 5);
+  const recentSec = recent.length ? el('section', { class: 'panel-section' },
+    sectionHead('Recent', null, el('a', { class: 'link-btn', href: '#/library' }, 'Library', icon('arrow-right'))),
+    el('ul', { class: 'rows' }, ...recent.map((l) => el('li', null, readRow(l, d))))) : null;
 
-  app.replaceChildren(el('div', { class: 'today' }, head, el('div', null, omni, suggestions), upSection, planSection, recentSection));
-  if (status.mode && !recent.length) setTimeout(() => input.focus({ preventScroll: true }), 60);
+  // -- right rail
+  const week = weekStrip(d.stats, settings, now);
+  const deck = deckStats(d.deck, now);
+  const rail = el('aside', { class: 't-rail', 'aria-label': 'Your progress' },
+    el('a', { class: 'stat-panel', href: '#/you' },
+      el('span', { class: 'stat-label' }, 'Today'),
+      el('span', { class: 'stat-big' }, String(day.xp), el('small', null, ` / ${day.goal} XP`)),
+      el('span', { class: `ledger-bar ${day.met ? 'met' : ''}`, 'aria-hidden': 'true' }, el('i', { style: { width: `${Math.round(day.pct * 100)}%` } })),
+      el('span', { class: 'stat-note' }, day.met ? 'Goal met' : `${day.goal - day.xp} XP to go`)),
+    el('a', { class: 'stat-panel', href: '#/you' },
+      el('span', { class: 'stat-label' }, 'Streak'),
+      el('span', { class: 'stat-big' }, String(streak), el('small', null, streak === 1 ? ' day' : ' days')),
+      el('span', { class: 'week7', 'aria-label': `Last seven days: ${week.filter((w) => w.active).length} active` },
+        ...week.map((w) => el('span', { class: `w ${w.active ? 'on' : ''} ${w.met ? 'met' : ''} ${w.today ? 'today' : ''}`, title: `${w.key}: ${w.xp} XP` }, el('i'), el('b', null, w.label))))),
+    el('a', { class: 'stat-panel', href: '#/review' },
+      el('span', { class: 'stat-label' }, 'Deck'),
+      el('span', { class: 'stat-big' }, String(deck.due), el('small', null, ' due')),
+      el('span', { class: 'stat-lines' },
+        el('span', null, el('b', null, String(deck.total)), ' cards'),
+        el('span', null, el('b', null, String(deck.review)), ' mastered'),
+        el('span', null, deck.due ? 'Review now' : deck.nextDue ? `Next ${formatDue(deck.nextDue)}` : 'No cards yet'))),
+    planPanel(d, actions));
+
+  app.replaceChildren(el('div', { class: 'today' }, head, cmd,
+    el('div', { class: 't-grid' }, el('div', { class: 't-main' }, queue, suggested, recentSec), rail)));
 }
 
-function heroCard(n, ctx) {
+function sectionHead(title, count, extra) {
+  return el('div', { class: 'section-head' }, el('h2', { class: 'rubric' }, title, count ? el('span', { class: 'count' }, count) : null), extra || null);
+}
+
+function queueRow(n, i, ctx) {
   const { actions, store } = ctx;
-  const card = (eyebrow, title, body, buttons, meta) => el('article', { class: 'card up-hero' },
-    el('div', { style: { display: 'grid', gap: '10px' } }, el('p', { class: 'eyebrow' }, eyebrow), el('h3', { class: 'h-lg' }, title), body ? el('p', { class: 'muted' }, body) : null),
-    el('div', { style: { display: 'grid', gap: '14px' } }, meta || null, el('div', { class: 'up-hero-actions' }, ...buttons)));
+  const row = ({ kind, title, meta, body, cta, onclick, href }) => {
+    const act = href ? el('a', { class: `btn ${i ? 'btn-secondary' : ''} btn-sm`, href }, cta) : el('button', { class: `btn ${i ? 'btn-secondary' : ''} btn-sm`, type: 'button', onclick }, cta);
+    return el('li', { class: `q ${i === 0 ? 'q-first' : ''}` },
+      el('span', { class: 'q-idx' }, String(i + 1).padStart(2, '0')),
+      el('div', { class: 'q-body' },
+        el('span', { class: 'q-kind' }, kind),
+        el('span', { class: 'q-title' }, title),
+        body && i === 0 ? el('span', { class: 'q-text' }, body) : null,
+        meta ? el('span', { class: 'q-meta' }, meta) : null),
+      act);
+  };
   if (n.kind === 'continue') {
     const l = store.data.lessons[n.lessonId];
     const pages = pageCount(l?.markdown);
     const course = n.courseId ? store.data.courses.find((c) => c.id === n.courseId) : null;
-    return card(n.interrupted ? 'Pick up where it stopped' : 'Continue reading', n.title,
-      n.interrupted ? 'This lesson stopped before the end. Resume it and Wonder carries on from the last paragraph.' : null,
-      [el('a', { class: 'btn btn-lg', href: `#/lesson/${n.lessonId}` }, icon('play'), n.interrupted ? 'Resume lesson' : 'Continue')],
-      el('div', { class: 'up-meta' },
-        pages ? el('span', { class: 'tag brand' }, icon('book'), n.page > 1 ? `Page ${n.page} of ${pages}` : `${pages} pages`) : null,
-        course ? el('span', null, course.title) : null,
-        l?.updatedAt ? el('span', { class: 'faint' }, relTime(l.updatedAt)) : null));
+    return row({ kind: n.interrupted ? 'Unfinished lesson' : 'Continue reading', title: n.title,
+      body: n.interrupted ? 'Stopped before the end. Resume continues from the last complete paragraph.' : null,
+      meta: [pages ? `${pages} pages` : null, readingMinutes(l?.markdown) ? `${readingMinutes(l.markdown)} min` : null, n.page > 1 ? `on page ${n.page}` : null, course?.title, l?.updatedAt ? relTime(l.updatedAt) : null].filter(Boolean).join(' · '),
+      cta: n.interrupted ? 'Resume' : 'Continue', href: `#/lesson/${n.lessonId}` });
   }
   if (n.kind === 'review') {
-    return card('Review', `${n.due} card${n.due === 1 ? ' is' : 's are'} ready to review`, 'A few minutes now, right before you would forget, is what makes it stick.',
-      [el('a', { class: 'btn btn-lg', href: '#/review' }, icon('repeat'), 'Start review')],
-      el('div', { class: 'up-meta' }, el('span', { class: 'tag amber' }, icon('clock'), `About ${Math.max(1, Math.round(Math.min(n.due, 12) * 0.4))} min`)));
+    return row({ kind: 'Review', title: `${n.due} card${n.due === 1 ? '' : 's'} due`, body: 'Recall each card just before you would forget it.',
+      meta: `about ${Math.max(1, Math.round(Math.min(n.due, 12) * 0.4))} min`, cta: 'Review', href: '#/review' });
   }
   if (n.kind === 'plan') {
-    return card(`Day ${n.day} of your plan`, n.title, n.goal,
-      [el('button', { class: 'btn btn-lg', type: 'button', onclick: () => actions.openPlanItem(n.planId, n.dayIndex, n.itemIndex) }, icon(n.itemKind === 'review' ? 'repeat' : n.itemKind === 'quiz' ? 'sparkles' : 'play'), n.itemKind === 'quiz' ? 'Quiz me' : n.itemKind === 'review' ? 'Review' : 'Start')]);
+    return row({ kind: `Study plan · day ${n.day}`, title: n.title, body: n.goal, cta: n.itemKind === 'quiz' ? 'Quiz' : 'Open', onclick: () => actions.openPlanItem(n.planId, n.dayIndex, n.itemIndex) });
   }
   if (n.kind === 'course') {
-    return card(n.courseTitle, n.title, n.summary,
-      [el('button', { class: 'btn btn-lg', type: 'button', onclick: () => actions.openCourseLesson(n.courseId, n.si, n.li) }, icon('play'), n.done ? 'Next lesson' : 'Start course'),
-        el('a', { class: 'btn btn-ghost', href: `#/course/${n.courseId}` }, 'View course')],
-      el('div', { class: 'course-progress' }, el('span', { class: 'progress small-progress' }, el('span', { class: 'progress-fill', style: { width: `${n.total ? (n.done / n.total) * 100 : 0}%` } })), el('span', { class: 'small muted' }, `${n.done} of ${n.total}`)));
+    return row({ kind: n.courseTitle, title: n.title, body: n.summary, meta: `lesson ${n.done + 1} of ${n.total}`, cta: n.done ? 'Next lesson' : 'Start', onclick: () => actions.openCourseLesson(n.courseId, n.si, n.li) });
   }
-  const topics = suggestedTopics(store.data.settings, store.data.lessons, new Date(), 2);
-  return card(n.first ? 'Start here' : 'All caught up', n.first ? 'Your first lesson takes about 10 minutes' : 'Nothing due. Learn something new?',
-    'Lessons are written for you on the spot, with interactive diagrams, a quiz at the end, and a tutor you can ask anything.',
-    topics.map((t, i) => el('button', { class: `btn ${i ? 'btn-secondary' : ''}`, type: 'button', onclick: () => actions.startLesson(t, 'beginner') }, i ? null : icon('play'), t)));
+  const t = suggestedTopics(store.data.settings, store.data.lessons, new Date(), 1)[0];
+  return row({ kind: n.first ? 'First lesson' : 'All caught up', title: n.first ? `Start with “${t}”` : `Read “${t}”`,
+    body: 'Lessons are written for you as you read: short pages, working diagrams, a quiz, and a tutor beside the text.', meta: 'about 10 min', cta: 'Start', onclick: () => actions.startLesson(t, 'beginner') });
 }
 
-function sideItem(n, ctx) {
+function quickRows(ctx) {
   const { actions } = ctx;
-  const row = (tile, title, sub, onclick, href) => {
-    const attrs = { class: 'card up-item' };
-    const kids = [tile, el('span', { class: 'up-item-text' }, el('strong', null, title), el('span', { class: 'muted small' }, sub)), icon('chevron')];
-    return href ? el('a', { ...attrs, href }, ...kids) : el('button', { ...attrs, type: 'button', onclick }, ...kids);
-  };
-  if (n.kind === 'review') return row(el('span', { class: 'icon-tile amber' }, icon('repeat')), `Review ${n.due} card${n.due === 1 ? '' : 's'}`, 'Due now', null, '#/review');
-  if (n.kind === 'plan') return row(el('span', { class: 'icon-tile green' }, icon('calendar')), n.title, `Day ${n.day} of your plan`, () => actions.openPlanItem(n.planId, n.dayIndex, n.itemIndex));
-  if (n.kind === 'course') return row(el('span', { class: 'icon-tile' }, icon('layers')), n.title, `Next in ${n.courseTitle}`, () => actions.openCourseLesson(n.courseId, n.si, n.li));
-  if (n.kind === 'continue') return row(el('span', { class: 'icon-tile' }, icon('book')), n.title, 'Continue reading', null, `#/lesson/${n.lessonId}`);
-  return el('span');
+  const r = (i, kind, title, cta, onclick, href) => el('li', { class: 'q' },
+    el('span', { class: 'q-idx' }, String(i).padStart(2, '0')),
+    el('div', { class: 'q-body' }, el('span', { class: 'q-kind' }, kind), el('span', { class: 'q-title' }, title)),
+    href ? el('a', { class: 'btn btn-secondary btn-sm', href }, cta) : el('button', { class: 'btn btn-secondary btn-sm', type: 'button', onclick }, cta));
+  return [
+    r(2, 'Teacher', 'Plan a week of study around a goal', 'Plan', null, '#/teacher'),
+    r(3, 'Teacher', 'Ask what to study today', 'Ask', () => actions.askTeacher('What should I study today?')),
+  ];
 }
 
-function quickLinks(ctx) {
-  const { actions } = ctx;
-  return el('div', { class: 'up-side' },
-    el('a', { class: 'card up-item', href: '#/teacher' }, el('span', { class: 'icon-tile' }, icon('teacher')), el('span', { class: 'up-item-text' }, el('strong', null, 'Plan with your Teacher'), el('span', { class: 'muted small' }, 'A study plan around your goal')), icon('chevron')),
-    el('button', { class: 'card up-item', type: 'button', onclick: () => actions.askTeacher('What should I study today?') }, el('span', { class: 'icon-tile green' }, icon('sparkles')), el('span', { class: 'up-item-text' }, el('strong', null, 'What should I study today?'), el('span', { class: 'muted small' }, 'Ask the Teacher')), icon('chevron')),
-    el('a', { class: 'card up-item', href: '#/you' }, el('span', { class: 'icon-tile flame' }, icon('target')), el('span', { class: 'up-item-text' }, el('strong', null, 'Set your daily goal'), el('span', { class: 'muted small' }, 'And what Wonder remembers')), icon('chevron')));
+function planPanel(d, actions) {
+  const plan = (d.plans || [])[0];
+  if (!plan) return null;
+  const items = (plan.days || []).flatMap((day, di) => (day.items || []).map((it, ii) => ({ ...it, di, ii, day: day.day || di + 1 })));
+  const done = items.filter((x) => x.opened).length;
+  return el('section', { class: 'stat-panel plan-panel' },
+    el('span', { class: 'stat-label' }, 'Study plan', el('span', { class: 'count' }, `${done}/${items.length}`)),
+    el('span', { class: 'plan-goal' }, plan.goal),
+    el('ul', { class: 'checklist' }, ...items.slice(0, 8).map((it) => el('li', null, el('button', { type: 'button', class: `check ${it.opened ? 'done' : ''}`, onclick: () => actions.openPlanItem(plan.id, it.di, it.ii) },
+      el('span', { class: 'box', 'aria-hidden': 'true' }, it.opened ? icon('check') : null),
+      el('span', { class: 'check-day' }, `D${it.day}`),
+      el('span', { class: 'check-title' }, it.title))))),
+    plan.threadId ? el('a', { class: 'link-btn', href: `#/teacher/${plan.threadId}` }, 'Open the conversation', icon('arrow-right')) : null);
 }
 
-export function lessonTile(l, data) {
+/** One line of reading history: status, title, metadata. */
+export function readRow(l, data) {
   const course = l.courseId ? data.courses.find((c) => c.id === l.courseId) : null;
-  const state = l.finished ? ['green', 'check', 'Finished'] : l.status === 'complete' ? ['brand', 'book', 'In progress'] : l.status === 'failed' ? ['amber', 'x', 'Failed'] : ['amber', 'clock', l.status === 'new' ? 'Not started' : 'Unfinished'];
-  return el('a', { class: 'card lesson-tile', href: `#/lesson/${l.id}` },
-    el('span', { class: `tag ${state[0]}` }, icon(state[1]), state[2]),
-    el('span', { class: 'lesson-tile-title' }, l.title || l.topic),
-    el('span', { class: 'lesson-tile-meta' },
-      course ? el('span', null, course.title) : el('span', null, (l.level || 'beginner').replace(/^./, (c) => c.toUpperCase())),
-      l.quizScore?.total ? el('span', null, `· Quiz ${l.quizScore.score}/${l.quizScore.total}`) : null,
-      el('span', { style: { marginLeft: 'auto' } }, relTime(l.updatedAt))));
+  const state = l.finished ? 'Finished' : l.status === 'complete' ? (l.readPage > 1 ? `Page ${l.readPage}` : 'In progress') : l.status === 'failed' ? 'Failed' : l.status === 'new' ? 'Not started' : 'Unfinished';
+  return el('a', { class: 'row', href: `#/lesson/${l.id}` },
+    el('span', { class: `dotmark ${l.finished ? 'done' : l.status === 'complete' ? 'ready' : ''}`, 'aria-hidden': 'true' }),
+    el('span', { class: 'row-title' }, l.title || l.topic),
+    el('span', { class: 'row-meta' }, [state, readingMinutes(l.markdown) ? `${readingMinutes(l.markdown)} min` : null, course?.title, relTime(l.updatedAt)].filter(Boolean).join(' · ')));
 }
 
-export { courseProgress };
+export { courseProgress, deckStats };

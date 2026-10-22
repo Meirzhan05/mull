@@ -91,3 +91,21 @@ test('learner totals and palette matching', () => {
   assert.equal(matchScore('Why the sky is blue', 'blue why'), 1);
   assert.equal(matchScore('Why the sky is blue', 'red'), 0);
 });
+
+test('topic labels and roman numerals', async () => {
+  const { topicInterest, roman } = await import('../public/progress-core.js');
+  assert.equal(topicInterest('Compound interest'), 'Money');
+  assert.equal(topicInterest('Something else'), '');
+  assert.deepEqual([1, 4, 9, 14, 40, 0].map(roman), ['I', 'IV', 'IX', 'XIV', 'XL', '']);
+});
+
+test('reading time counts prose, not component markup', async () => {
+  const { readingMinutes } = await import('../public/progress-core.js');
+  const prose = Array.from({ length: 440 }, () => 'word').join(' ');
+  assert.equal(readingMinutes(`# Title\n\n${prose}`), 2);
+  const widget = `<Quiz questions={[${Array.from({ length: 300 }, () => '"x"').join(',')}]}/>`;
+  assert.equal(readingMinutes(`# T\n\n${prose}\n\n${widget}`), 3, 'widget props are not words; the widget adds ~half a minute');
+  assert.equal(readingMinutes(`# T\n\n${prose} <KeyTerm term="x" definition="y"/> <Cite refs={[1]}/>`), 2, 'inline marks add no time');
+  assert.equal(readingMinutes(''), 0);
+  assert.equal(readingMinutes('# A short one'), 1);
+});
