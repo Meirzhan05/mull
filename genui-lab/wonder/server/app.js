@@ -37,6 +37,8 @@ import { createSteeringRegistry, cleanInstruction, steeringUserContent, steerDem
 import { groundDemoLesson } from './demo-grounding.js';
 import { masteryContext } from './learner-model.js'; // Phase 6
 import { lintLesson, critiqueLesson, applyQuizFixes, qualityReport } from './critic.js'; // Phase 7
+import { createGrader } from './grader.js'; // Phase 8
+import { SOCRATIC_TUTOR_MODE } from './prompts-extra.js'; // Phase 8
 import { pageCount } from '../public/steering-core.js';
 
 export const STATIC_ROOTS = [
@@ -163,7 +165,8 @@ export function createWonderCore(opts = {}) {
   if (state.mode === 'demo' && !state.demoReason) state.demoReason = 'no-credentials';
   const memory = opts.memory ?? createMemoryStore({ file: opts.memoryFile === undefined ? (env.WONDER_MEMORY_FILE || DEFAULT_MEMORY_FILE) : opts.memoryFile, logger });
   const teacherCards = createCardStore();
-  const widgetAction = createWidgetActionHandler({ cards: teacherCards, memory });
+  const grade = createGrader({ getClient: () => state.client, getMode: () => state.mode, logger }); // Phase 8
+  const widgetAction = createWidgetActionHandler({ cards: teacherCards, memory, grade });
   const demoTeacher = opts.demoTeacherClient ?? createDemoTeacherClient({ delayMs: state.demoDelayMs });
   const recordDir = opts.recordDir ?? env.WONDER_RECORD_DIR ?? null;
   const memoryContext = (body, { withIds = false } = {}) => (body?.memoryEnabled === false ? '' : memory.promptBlock({ withIds }));
@@ -380,14 +383,14 @@ export function createWonderCore(opts = {}) {
     if (state.mode === 'claude') {
       const params = withWebSearch(buildStreamParams({
         system: TUTOR_SYSTEM_PROMPT,
-        context: joinContext(tutorLessonContext({ ...body.lessonContext, markdown: stripGroundingTags(body.lessonContext?.markdown) }), memoryContext(body), learnerKnows(body, 'tutor')),
+        context: joinContext(tutorLessonContext({ ...body.lessonContext, markdown: stripGroundingTags(body.lessonContext?.markdown) }), memoryContext(body), learnerKnows(body, 'tutor'), body.mode === 'socratic' ? SOCRATIC_TUTOR_MODE : ''),
         messages: [...history, { role: 'user', content: message }],
         effort: 'medium',
       }), useWebSearch);
       result = await runClaude(writer, params, onText, signal, useWebSearch ? groundedStream(writer, sources) : undefined);
     }
     if (result.status === 'demo') {
-      const reply = buildDemoTutorReply({ lessonContext: body.lessonContext, message });
+      const reply = buildDemoTutorReply({ lessonContext: body.lessonContext, message, mode: body.mode });
       const r = await streamDemoText(reply, { onText, delayMs: state.demoDelayMs, signal, seed: message.length });
       result = { status: r.aborted ? 'aborted' : 'done', truncated: false };
     }
@@ -545,7 +548,7 @@ export function createWonderCore(opts = {}) {
     'POST /api/memory': memoryAdd,
     'DELETE /api/memory': memoryDelete,
     'POST /api/memory/extract': memoryExtract,
-    'POST /api/widget_action': async (t, body) => { const r = widgetAction(body); t.json(r.status, r.body); },
+    'POST /api/widget_action': async (t, body) => { const r = await widgetAction(body); t.json(r.status, r.body); }, // Phase 8: free-response grading is async
   };
 
   const status = () => ({ mode: state.mode, model: MODEL, ...(state.mode === 'demo' ? { demoReason: state.demoReason } : {}) });

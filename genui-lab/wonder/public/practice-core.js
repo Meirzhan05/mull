@@ -6,8 +6,9 @@
 //   cloze          {type, prompt:"... ____ ...", answer, acceptableAnswers[], explanation}
 //   binary_choice  {type, prompt (a statement), answer:boolean, explanation}
 //   flashcard      {type, front, back}
+//   explain        {type, prompt, rubric[1-5], sampleAnswer} (Phase 8: free response, graded on the server)
 
-export const PRACTICE_ITEM_TYPES = Object.freeze(['mcq', 'cloze', 'binary_choice', 'flashcard']);
+export const PRACTICE_ITEM_TYPES = Object.freeze(['mcq', 'cloze', 'binary_choice', 'flashcard', 'explain']);
 export const RATING = Object.freeze({ again: 1, hard: 2, good: 3, easy: 4 }); // == fsrs.js Rating
 
 const t = (v) => (typeof v === 'string' ? v.trim() : typeof v === 'number' ? String(v) : '');
@@ -55,6 +56,11 @@ export function normalizePracticeItem(raw) {
     const back = t(raw.back);
     if (!front || !back) return null;
     item = { type, front, back };
+  } else if (type === 'explain') {
+    const prompt = t(raw.prompt);
+    const rubric = (Array.isArray(raw.rubric) ? raw.rubric : []).map(t).filter(Boolean).map((c) => c.slice(0, 160)).slice(0, 5);
+    if (!prompt || !rubric.length) return null;
+    item = { type, prompt: prompt.slice(0, 400), rubric, sampleAnswer: t(raw.sampleAnswer || raw.sample_answer).slice(0, 800) };
   }
   if (!item) return null;
   item.id = t(raw.id) || `${type}-${hashId(JSON.stringify(item))}`;
@@ -108,6 +114,11 @@ export function gradePracticeItem(item, answer) {
     case 'flashcard': {
       const rating = RATING[answer] ?? RATING.good;
       return { correct: rating >= RATING.hard, rating, expected: item.back };
+    }
+    case 'explain': {
+      // graded on the server (server/grader.js); `answer` is that grade {score 0-3}
+      const score = Math.max(0, Math.min(3, Number(answer?.score) || 0));
+      return { correct: score >= 2, rating: [RATING.again, RATING.hard, RATING.good, RATING.easy][score], expected: item.sampleAnswer || '' };
     }
     default:
       return { correct: false, rating: RATING.again, expected: '' };

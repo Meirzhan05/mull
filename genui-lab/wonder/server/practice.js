@@ -44,6 +44,7 @@ export function extractPracticeDeterministic(markdown) {
     raw.push({ type: 'binary_choice', prompt: `"${a.term}" means: ${lowerFirst(b.definition)}`, answer: false, explanation: `That describes ${b.term}. ${a.term} means ${lowerFirst(a.definition)}`, concept: a.term });
   }
   terms.slice(0, 3).forEach((k) => raw.push({ type: 'flashcard', front: `What does "${k.term}" mean?`, back: k.definition, concept: k.term }));
+  for (const e of componentsOf(markdown, 'ExplainBack').slice(0, 1)) raw.push({ type: 'explain', prompt: e.prompt, rubric: e.rubric, sampleAnswer: e.sampleAnswer, concept: e.concept }); // Phase 8
   const items = raw.map(normalizePracticeItem).filter(Boolean).slice(0, 12);
   return { title: lessonTitle(markdown), cards, items, source: 'lesson-components' };
 }
@@ -57,6 +58,7 @@ export function itemsFromStructured(data) {
     else if (it.type === 'cloze') raw = { type: 'cloze', prompt: it.prompt, answer: it.answer, explanation: it.explanation };
     else if (it.type === 'binary_choice') raw = { type: 'binary_choice', prompt: it.statement || it.prompt, answer: it.is_true, explanation: it.explanation };
     else if (it.type === 'flashcard') raw = { type: 'flashcard', front: it.front, back: it.back };
+    else if (it.type === 'explain') raw = { type: 'explain', prompt: it.prompt, rubric: it.rubric, sampleAnswer: it.sample_answer }; // Phase 8
     const n = raw && normalizePracticeItem({ ...raw, concept: it.concept });
     if (n) out.push(n);
   }

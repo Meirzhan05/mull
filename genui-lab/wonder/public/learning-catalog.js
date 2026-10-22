@@ -17,7 +17,7 @@ import { createUseSaved } from './view-state.js';
 
 export const LEARNING_COMPONENT_NAMES = Object.freeze([
   'LessonStepper', 'Reveal', 'CompareToggle', 'InputOutputSlider', 'Flowchart', 'Timeline', 'BarChart',
-  'ConceptMap', 'Cycle', 'Quiz', 'Flashcards', 'KeyTerm', 'Callout', 'Celebration', 'TeacherCard',
+  'ConceptMap', 'Cycle', 'Quiz', 'Flashcards', 'KeyTerm', 'Callout', 'Celebration', 'TeacherCard', 'ExplainBack',
 ]);
 
 export function learningCatalog(__dil, DIL, GenUI, useSavedImpl) {
@@ -473,6 +473,80 @@ export function learningCatalog(__dil, DIL, GenUI, useSavedImpl) {
           answer ? h('button', { size: 'md', onClick: () => setSt({ ...st, i: st.i + 1, picked: [], hint: false }) }, st.i === n - 1 ? 'See results' : 'Next question') : null)));
   }
 
+  // ------------------------------------------------------------------ ExplainBack (Phase 8)
+  // Free response: the learner explains an idea in their own words and the server grades it
+  // against the rubric (widget action explain_grade -> componentResults[rid].state =
+  // {attempt, answer, grade} or {attempt, error}). The draft persists (useSaved); the first
+  // grade of each attempt is reported once (client action explain_graded: XP + mastery).
+  const GRADE_WORDS = ['Not yet', 'Partly there', 'Nearly there', 'Spot on'];
+  const MAX_EXPLAIN = 1500;
+  function ExplainBack(props) {
+    const rid = props.__resolutionId;
+    const rubric = arr(props.rubric);
+    const server = DIL.useAppData((ad) => ad?.opGenui?.componentResults?.[rid]?.state || null);
+    const [st, setSt] = useSaved(props, 'explain',
+      () => ({ draft: str(server?.answer), attempt: server?.attempt || 0, sent: !!server?.grade, reported: !!server?.grade, model: false }),
+      (v) => (v && typeof v === 'object' && typeof v.draft === 'string'
+        ? { draft: v.draft.slice(0, MAX_EXPLAIN), attempt: Number.isInteger(v.attempt) && v.attempt >= 0 ? v.attempt : 0, sent: v.sent === true, reported: v.reported === true, model: v.model === true }
+        : undefined));
+    const mine = server && server.attempt === st.attempt ? server : null;
+    const g = st.sent && mine?.grade ? mine.grade : null;
+    const error = st.sent && !g && mine?.error ? str(mine.error) : '';
+    const pending = st.sent && !g && !error;
+    DIL.useEffect(() => {
+      if (!g || st.reported) return;
+      setSt((s) => ({ ...s, reported: true }));
+      GenUI.dispatchAction({ handler: 'client', type: 'explain_graded', payload: { resolutionId: rid, attempt: st.attempt, score: g.score, total: 3, concept: str(props.concept), prompt: str(props.prompt) } });
+    }, [g ? st.attempt : -1, st.reported]);
+    const len = st.draft.trim().length;
+    const submit = () => {
+      if (len < 12 || pending) return;
+      setSt({ ...st, sent: true, reported: false });
+      GenUI.dispatchWidgetAction({ type: 'explain_grade', componentName: 'ExplainBack', nativeWidgetResolutionId: rid, payload: { attempt: st.attempt, answer: st.draft, item: { prompt: props.prompt, rubric, concept: props.concept, sampleAnswer: props.sampleAnswer } } });
+    };
+    const head = h(Header, { icon: 'lightbulb', title: str(props.title) || 'Explain it back', right: props.concept ? h('badge', { color: 'default' }, str(props.concept)) : null });
+    const prompt = h('box', null, md(props.prompt, { size: 'lg', weight: 'semibold' }));
+    const model = st.model && props.sampleAnswer
+      ? h('col', { gap: 1, padding: 4, radius: 'xl', background: 'surface-secondary', key: 'model' },
+        h('text', { size: 'xs', weight: 'semibold', color: 'secondary' }, 'A model answer'), md(props.sampleAnswer, { size: 'sm' }))
+      : null;
+    const modelBtn = props.sampleAnswer ? h('button', { variant: 'ghost', size: 'md', onClick: () => setSt({ ...st, model: !st.model }) }, st.model ? 'Hide model answer' : 'Show a model answer') : null;
+
+    if (!g) {
+      return h(Card, { name: 'ExplainBack', gap: 4 }, head, prompt,
+        h('text-input', { value: st.draft, rows: 4, maxLength: MAX_EXPLAIN, disabled: pending, ariaLabel: 'Your explanation', placeholder: 'Explain it in your own words. A few sentences is plenty.', onChange: (v) => setSt((s) => ({ ...s, draft: str(v).slice(0, MAX_EXPLAIN) })) }),
+        error ? h('text', { size: 'sm', color: 'danger' }, error) : null,
+        h('row', { gap: 2, justify: 'between', align: 'center', wrap: true },
+          h('text', { size: 'xs', color: 'tertiary', tabularNums: true }, pending ? 'Grading your answer…' : len < 12 ? 'Write a sentence or two, then check it.' : `${len} characters`),
+          h('row', { gap: 2, wrap: true, justify: 'end' },
+            st.attempt > 0 || error ? modelBtn : null,
+            pending ? h('button', { variant: 'ghost', size: 'md', onClick: () => setSt({ ...st, sent: false }) }, 'Cancel') : null,
+            h('button', { size: 'md', disabled: len < 12 || pending, onClick: submit }, pending ? 'Checking…' : 'Check my answer'))),
+        model);
+    }
+
+    const crit = arr(g.criteria);
+    return h(Card, { name: 'ExplainBack', gap: 4 }, head, prompt,
+      h('col', { gap: 1, padding: { x: 4, y: 3 }, radius: 'xl', border: { size: 1, color: 'default' } },
+        h('text', { size: 'xs', weight: 'semibold', color: 'secondary' }, 'Your answer'), h('text', { size: 'sm' }, st.draft)),
+      h('row', { gap: 3, align: 'center' },
+        h('row', { gap: 1 }, ...[0, 1, 2].map((i) => h('box', { key: `dot${i}`, size: 14, radius: 'full', background: i < g.score ? (g.score === 3 ? 'success' : g.score === 2 ? 'brand' : 'warning') : 'surface-tertiary' }))),
+        h('text', { weight: 'bold' }, GRADE_WORDS[g.score] || ''),
+        h('text', { size: 'xs', color: 'tertiary' }, `${g.score} / 3`)),
+      crit.length ? h('col', { gap: 2 }, ...crit.map((c, i) => h('row', { key: `c${i}`, gap: 2, align: 'start' },
+        h('box', { size: 22, radius: 'full', align: 'center', justify: 'center', flex: '0 0 auto', background: c.met ? 'success' : 'surface-tertiary' },
+          h('icon', { name: c.met ? 'check' : 'minus', size: 'xs', color: c.met ? 'white' : 'secondary' })),
+        h('col', { gap: 0, flex: 1, minWidth: 0 }, md(c.criterion, { size: 'sm', color: c.met ? 'default' : 'secondary' }), c.met && c.evidence ? h('text', { size: 'xs', color: 'tertiary' }, `“${str(c.evidence)}”`) : null)))) : null,
+      g.feedback ? h('box', { padding: 4, radius: 'xl', background: g.score >= 2 ? 'success-subtle' : 'callout-tip' }, md(g.feedback, { size: 'sm' })) : null,
+      g.misconception ? h('row', { gap: 2, align: 'start' }, h('icon', { name: 'alert-triangle', size: 'sm', color: 'warning' }), md(g.misconception, { size: 'sm' })) : null,
+      g.followup ? h('row', { gap: 2, align: 'start' }, h('icon', { name: 'sparkles', size: 'sm', color: 'brand-strong' }), md(`Think about: ${str(g.followup)}`, { size: 'sm', color: 'secondary' })) : null,
+      model,
+      h('row', { gap: 2, wrap: true, justify: 'end' },
+        modelBtn,
+        h('button', { variant: 'outline', size: 'md', onClick: () => GenUI.issueNewTurn(`I tried to explain: "${str(props.prompt)}". My answer was: "${st.draft}". Can you help me improve it?`, { source: 'ExplainBack' }) }, 'Ask the tutor'),
+        g.score < 3 ? h('button', { size: 'md', onClick: () => setSt({ ...st, attempt: st.attempt + 1, sent: false, reported: false }) }, 'Try again') : null));
+  }
+
   // ------------------------------------------------------------------ Flashcards
   function Flashcards(props) {
     const cards = arr(props.cards);
@@ -593,7 +667,7 @@ export function learningCatalog(__dil, DIL, GenUI, useSavedImpl) {
     return h('text', { __component: 'TeacherCard', size: 'sm', color: 'secondary' }, str(s.summary || s.kind));
   }
 
-  return { LessonStepper, Reveal, CompareToggle, InputOutputSlider, Flowchart, Timeline, BarChart, ConceptMap, Cycle, Quiz, Flashcards, KeyTerm, Callout, Celebration, TeacherCard };
+  return { LessonStepper, Reveal, CompareToggle, InputOutputSlider, Flowchart, Timeline, BarChart, ConceptMap, Cycle, Quiz, Flashcards, KeyTerm, Callout, Celebration, TeacherCard, ExplainBack };
 }
 
 /** Program prelude that binds the learning components as free identifiers for compiled code. */

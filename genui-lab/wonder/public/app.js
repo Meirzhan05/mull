@@ -24,7 +24,7 @@ import { renderLibrary } from './library.js';
 import { renderYou, TEXT_SIZES } from './you.js';
 import { needsOnboarding, showOnboarding } from './onboarding.js';
 import { dailyProgress, courseProgress, roman, readingMinutes } from './progress-core.js';
-import { storeEvidence, quizEvidence, requestMastery } from './mastery-core.js'; // Phase 6
+import { storeEvidence, quizEvidence, explainEvidence, requestMastery } from './mastery-core.js'; // Phase 6 + 8
 import { qualitySummary } from './quality-core.js'; // Phase 7
 
 const store = createStore();
@@ -799,6 +799,15 @@ function handleClientAction(a, { lessonId, openTutor, tutor }) {
       giveXp((Number(p.score) || 0) * XP.quizCorrect, `${p.score}/${p.total} on the quiz`);
       break;
     }
+    case 'explain_graded': { // Phase 8: once per ExplainBack attempt
+      const key = `${lessonId}:explain:${p.resolutionId}:${Number(p.attempt) || 0}`;
+      if (store.data.awarded?.[key]) break;
+      store.update((d) => { d.awarded = { ...(d.awarded || {}), [key]: true }; return d; });
+      if (memoryEnabled()) storeEvidence(store, explainEvidence(p, { topic: store.data.lessons[lessonId]?.title || '' }));
+      const pts = Math.max(0, Math.min(3, Number(p.score) || 0));
+      if (pts && !(Number(p.attempt) > 0)) giveXp(pts * XP.explainPoint, `${pts}/3 on your explanation`);
+      break;
+    }
     case 'save_flashcards': {
       const items = (p.cards || []).map((c) => normalizePracticeItem({ type: 'flashcard', front: c.front, back: c.back })).filter(Boolean);
       const title = store.data.lessons[lessonId]?.title || '';
@@ -836,12 +845,23 @@ function createTutor(lessonId) {
     el('span', { class: 'tutor-avatar', 'aria-hidden': 'true' }, icon('quote')),
     el('p', null, 'Stuck on something? Ask about any part of the lesson, or highlight a passage and tap “Explain”.'),
     el('div', { class: 'tutor-starters' }, ...STARTERS.map(([ic, label, q]) => el('button', { class: 'tutor-starter', type: 'button', onclick: () => api.send(q) }, icon(ic), label))));
+  // Phase 8: "Guide me" = Socratic tutoring (guiding questions before answers), remembered in settings
+  const guided = () => store.data.settings?.tutorMode === 'socratic';
+  const guideBtn = el('button', { class: 'guide-toggle', type: 'button', role: 'switch', 'aria-checked': String(guided()), title: 'Guide me: the tutor asks guiding questions instead of giving answers right away' },
+    el('span', { class: 'switch small', 'aria-hidden': 'true' }, el('span', { class: 'switch-knob' })), 'Guide me');
+  guideBtn.addEventListener('click', () => {
+    store.update((d) => { d.settings = { ...(d.settings || {}), tutorMode: guided() ? 'direct' : 'socratic' }; return d; });
+    guideBtn.setAttribute('aria-checked', String(guided()));
+    input.placeholder = guided() ? 'Ask, and the tutor will guide you to the answer…' : 'Ask anything about this lesson…';
+    toast(guided() ? 'Guide me is on: the tutor asks before it tells' : 'Guide me is off');
+  });
+  if (guided()) input.placeholder = 'Ask, and the tutor will guide you to the answer…';
   const panel = el('aside', { class: 'tutor', 'aria-label': 'Lesson tutor' },
     el('header', { class: 'tutor-head' },
       el('div', { class: 'tutor-head-id' },
         el('span', { class: 'tutor-avatar small', 'aria-hidden': 'true' }, icon('quote')),
         el('div', null, el('strong', null, 'Tutor'), el('span', { class: 'muted small' }, status.mode === 'claude' ? 'Knows this lesson · Claude' : 'Knows this lesson · demo replies'))),
-      closeBtn),
+      el('div', { class: 'tutor-head-actions' }, guideBtn, closeBtn)),
     el('div', { class: 'tutor-scroll' }, empty, log, followups),
     form);
   const scrim = el('div', { class: 'tutor-scrim', 'aria-hidden': 'true', onclick: () => api.onOpenChange?.(false) });
@@ -956,7 +976,7 @@ function createTutor(lessonId) {
       ac = new AbortController();
       try {
         const useWebSearch = /\b(sources?|cite|citations?|latest|current(ly)?|recent(ly)?|news|today|this year|search|look (it )?up)\b/i.test(message); // Phase 3: tutor searches only when asked
-        const r = await streamTurn('/api/tutor/stream', { message, history, lessonContext: { title: l.title, markdown: l.markdown }, useWebSearch, memoryEnabled: memoryEnabled(), mastery: requestMastery(store.data) }, {
+        const r = await streamTurn('/api/tutor/stream', { message, history, lessonContext: { title: l.title, markdown: l.markdown }, useWebSearch, memoryEnabled: memoryEnabled(), mastery: requestMastery(store.data), mode: guided() ? 'socratic' : 'direct' }, {
           signal: ac.signal,
           onContent: (msg, rec) => {
             if (rec.dil) { bot.typing.remove(); bot.render(rec.dil, rec.status !== 'complete'); }

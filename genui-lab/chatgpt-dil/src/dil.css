@@ -209,3 +209,13 @@
 /* table */
 .dil-root table[data-d-component="table"] { border-collapse: collapse; width: 100%; font-size: 0.875rem; }
 .dil-root td[data-d-component="table-cell"] { border-bottom: 1px solid var(--d-border-subtle); padding: 0.4rem 0.5rem; }
+
+/* text-input (Wonder extension): multi-line free-response field */
+.dil-root textarea[data-d-component="text-input"] {
+  font: inherit; font-size: 0.9375rem; line-height: 1.5; color: var(--d-text-primary); background: var(--d-surface);
+  width: 100%; min-width: 0; box-sizing: border-box; resize: vertical; min-height: 4.5rem;
+  border: 1px solid var(--d-border-strong); border-radius: 0.75rem; padding: 0.625rem 0.75rem; outline: none;
+}
+.dil-root textarea[data-d-component="text-input"]::placeholder { color: var(--d-text-tertiary); }
+.dil-root textarea[data-d-component="text-input"]:focus { border-color: var(--d-accent); box-shadow: 0 0 0 3px var(--d-accent-subtle, rgba(37, 99, 235, 0.15)); }
+.dil-root textarea[data-d-component="text-input"][disabled] { opacity: 0.6; }

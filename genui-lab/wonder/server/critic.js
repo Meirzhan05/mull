@@ -75,6 +75,7 @@ export function lintLesson(markdown) {
     { id: 'quiz_questions', ok: quizzes.length === 1 && questions.length === 3, detail: `${questions.length} quiz questions (want 3)` },
     { id: 'quiz_concepts', ok: questions.length > 0 && questions.every((q) => q.concept), detail: `${questions.filter((q) => q.concept).length}/${questions.length} questions tagged with a concept` },
     { id: 'key_terms', ok: terms.size >= 2 && terms.size <= 5, detail: `${terms.size} distinct KeyTerms (want 2-5)` },
+    { id: 'explain_back', ok: valid.filter((c) => c.name === 'ExplainBack').length === 1, detail: `${valid.filter((c) => c.name === 'ExplainBack').length} ExplainBack (want 1, on the last content page)` },
     { id: 'worked_example', ok: valid.some((c) => c.name === 'LessonStepper'), detail: valid.some((c) => c.name === 'LessonStepper') ? 'has a LessonStepper' : 'no LessonStepper worked example' },
     { id: 'valid_components', ok: invalid.length === 0, detail: invalid.length ? `${invalid.length} invalid component(s) replaced by text: ${invalid.map((c) => c.name).join(', ')}` : 'all components valid' },
   ];

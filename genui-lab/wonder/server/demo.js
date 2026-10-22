@@ -123,9 +123,10 @@ export function isQuizRequest(message) {
 }
 
 /** Build a demo tutor reply (markdown + DIL) grounded in the lesson the learner is reading. */
-export function buildDemoTutorReply({ lessonContext, message }) {
+export function buildDemoTutorReply({ lessonContext, message, mode }) {
   const markdown = String(lessonContext?.markdown || '');
   const title = String(lessonContext?.title || lessonTitle(markdown) || 'this lesson').replace(/[<>{}"\\]/g, '');
+  if (mode === 'socratic' && !isQuizRequest(message)) return socraticDemoReply(markdown, message);
   if (isQuizRequest(message)) {
     const quiz = quizFromLesson(markdown);
     const count = (quiz.match(/"prompt"/g) || []).length;
@@ -135,6 +136,23 @@ export function buildDemoTutorReply({ lessonContext, message }) {
   if (missed) return missed;
   const terms = componentsOf(markdown, 'KeyTerm');
   return readDemo('tutor-explain.md').replaceAll('{{title}}', title).replace('{{reveal}}', revealFromTerms(terms));
+}
+
+/** Phase 8 "Guide me": a guiding question built from the lesson's KeyTerms instead of an answer. */
+function socraticDemoReply(markdown, message) {
+  const safe = (s) => String(s).replace(/[<>{}"]/g, '');
+  const terms = componentsOf(markdown, 'KeyTerm');
+  const msg = String(message || '').toLowerCase();
+  const term = terms.find((k) => msg.includes(k.term.toLowerCase())) || terms[0];
+  const tell = /just tell me|give me the answer|what is the answer/.test(msg);
+  if (tell && term) {
+    return [`Fair enough. **${safe(term.term)}**: ${safe(term.definition)}`, '', 'Now try it the other way round: in one sentence of your own, how does that connect to your question?', '', '<Followups items={["Here is my sentence…","Give me an example"]}/>', ''].join('\n');
+  }
+  const lines = term
+    ? [`Good question. Before I answer, let's see how far you can get on your own.`, '', `Think about **${safe(term.term)}** from the lesson. What do you remember it doing, and how might that explain what you're asking?`]
+    : ['Good question. What do you already know that might be part of the answer? Start there and we will build on it.'];
+  lines.push('', `<Followups items={["Give me a hint","I think it's because…","Just tell me"]}/>`, '');
+  return lines.join('\n');
 }
 
 /** "I answered X to Y but the answer is Z" (sent by the Quiz's "Explain this" button). */

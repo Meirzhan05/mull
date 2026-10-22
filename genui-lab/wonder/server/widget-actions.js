@@ -7,14 +7,18 @@ import { normalizeQuestion } from './catalog-schema.js';
 import { normalizePracticeItem, gradePracticeItem } from '../public/practice-core.js';
 import { TEACHER_ACTIONS, handleTeacherAction, createCardStore } from './teacher.js';
 import { createMemoryStore } from './memory.js';
+import { validateExplainBack, gradeDeterministic, gradeRating, MIN_ANSWER } from './grader.js'; // Phase 8
 
 const MAX_TRACKED = 2000;
 
 /**
- * @param {{cards?: ReturnType<typeof createCardStore>, memory?: ReturnType<typeof createMemoryStore>}} [deps]
- *   Teacher card state (per resolution id) and the learner memory store, shared with /api/teacher/stream.
+ * @param {{cards?: ReturnType<typeof createCardStore>, memory?: ReturnType<typeof createMemoryStore>, grade?: Function}} [deps]
+ *   Teacher card state (per resolution id) and the learner memory store, shared with /api/teacher/stream;
+ *   `grade` (server/grader.js createGrader) grades free-response answers (Phase 8). Without it,
+ *   the keyword grader is used. Free-response actions return a Promise; the rest are synchronous.
  */
-export function createWidgetActionHandler({ cards = createCardStore(), memory = createMemoryStore({ file: null }) } = {}) {
+export function createWidgetActionHandler({ cards = createCardStore(), memory = createMemoryStore({ file: null }), grade = null } = {}) {
+  const gradeAnswer = grade || (async (item) => (String(item.answer || '').trim().length < MIN_ANSWER ? { ok: false, error: 'Write a sentence or two first.' } : { ok: true, grade: gradeDeterministic(item) }));
   const states = new Map(); // resolutionId -> quiz state
 
   function quizState(rid, attempt) {
@@ -70,9 +74,27 @@ export function createWidgetActionHandler({ cards = createCardStore(), memory = 
 
     if (TEACHER_ACTIONS.has(type)) return handleTeacherAction({ cards, memory }, { action_type: type, payload, resolutionId });
 
+    // Phase 8: free-response answer for an ExplainBack widget, graded against its rubric
+    if (type === 'explain_grade') {
+      if (typeof resolutionId !== 'string' || !resolutionId) return { status: 400, body: { ok: false, error: 'resolutionId is required' } };
+      const v = validateExplainBack(payload.item || {});
+      if (!v.ok) return { status: 400, body: { ok: false, error: v.error } };
+      const attempt = Number.isInteger(payload.attempt) && payload.attempt >= 0 ? payload.attempt : 0;
+      const answer = String(payload.answer ?? '').slice(0, 1500);
+      return gradeAnswer({ ...v.props, answer }).then((r) => {
+        const state = r.ok ? { attempt, answer, grade: r.grade } : { attempt, answer, error: r.error };
+        return { status: 200, body: { ok: true, ...(r.ok ? { result: r.grade } : {}), componentResults: { [resolutionId]: { status: 'resolved', state } } } };
+      });
+    }
+
     if (type === 'practice_grade') {
       const item = normalizePracticeItem(payload.item);
       if (!item) return { status: 400, body: { ok: false, error: 'invalid practice item' } };
+      if (item.type === 'explain') {
+        return gradeAnswer({ prompt: item.prompt, rubric: item.rubric, sampleAnswer: item.sampleAnswer, answer: String(payload.answer ?? '') }).then((r) => (r.ok
+          ? { status: 200, body: { ok: true, result: { correct: r.grade.score >= 2, rating: gradeRating(r.grade.score), expected: item.sampleAnswer || '', grade: r.grade } } }
+          : { status: 400, body: { ok: false, error: r.error } }));
+      }
       return { status: 200, body: { ok: true, result: gradePracticeItem(item, payload.answer) } };
     }
 

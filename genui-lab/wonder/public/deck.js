@@ -10,7 +10,7 @@ export { Rating, State };
 const scheduler = fsrs(); // shipped defaults: retention .9, short-term steps on, no fuzz
 const MAX_LOGS = 2000;
 
-export const XP = Object.freeze({ lessonComplete: 50, quizCorrect: 10, reviewCorrect: 5, reviewAttempt: 1, cardsCollected: 2 });
+export const XP = Object.freeze({ lessonComplete: 50, quizCorrect: 10, reviewCorrect: 5, reviewAttempt: 1, cardsCollected: 2, explainPoint: 5 });
 
 export function emptyDeck() {
   return { items: [], logs: [] };

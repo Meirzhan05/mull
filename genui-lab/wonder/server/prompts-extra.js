@@ -17,3 +17,12 @@ export const GROUNDING_GUIDANCE = `
 - Put searched facts in prose sentences, not inside component props, so their sources can be shown.
 - Never mention that you searched; just teach.
 `.trim();
+
+// Phase 8: "Guide me" tutor mode. Per-request context (after the cache breakpoint), so the cached
+// TUTOR_SYSTEM_PROMPT prefix is the same in both modes.
+export const SOCRATIC_TUTOR_MODE = `The learner switched on "Guide me" mode. Tutor Socratically for this reply:
+- Do not hand over the answer. Ask ONE short guiding question that moves them one step closer, built on what they already said or what the lesson showed. A hint, an analogy or a tiny worked step is fine; the conclusion is theirs to reach.
+- If they answered your previous question, say specifically what is right in it, then either confirm and push one step further, or point at the gap with a new question.
+- Give the full answer only when they have genuinely tried twice on this point, or they ask outright ("just tell me"); then explain it briefly and ask them to restate it in their own words.
+- When they seem ready to show they understand, you may use one <ExplainBack> instead of a question.
+- Keep replies short (40-110 words). The Followups should be things the learner might say back, such as a guess or "Give me a hint".`;

@@ -9,6 +9,7 @@
 
 import { validateVoiceVisualPayload } from '../../wondering-genui/src/voice-visuals.js';
 import { validateFunctionGraph, functionGraphFallback } from './function-graph.js'; // Phase 5
+import { validateExplainBack, explainBackFallback } from './grader.js'; // Phase 8
 
 const isObj = (v) => typeof v === 'object' && v !== null && !Array.isArray(v);
 const text = (v) => (typeof v === 'string' ? v.trim() : typeof v === 'number' && Number.isFinite(v) ? String(v) : '');
@@ -266,6 +267,7 @@ export const LEARNING_COMPONENTS = Object.freeze({
   Celebration: { validate: Celebration },
   TeacherCard: { validate: TeacherCard, resolved: true },
   FunctionGraph: { validate: validateFunctionGraph }, // Phase 5 (server/function-graph.js)
+  ExplainBack: { validate: validateExplainBack }, // Phase 8 (server/grader.js)
 });
 export const LEARNING_COMPONENT_NAMES = Object.freeze(Object.keys(LEARNING_COMPONENTS));
 
@@ -292,6 +294,7 @@ export function fallbackMarkdownFor(name, props, { inline = false } = {}) {
   const p = isObj(props) ? props : {};
   if (name === 'TeacherCard') return '';
   if (name === 'FunctionGraph') return functionGraphFallback(p); // Phase 5
+  if (name === 'ExplainBack') return explainBackFallback(p); // Phase 8
   if (name === 'KeyTerm' || inline) {
     const term = pick(p, 'term', 'title', 'label', 'name');
     const def = pick(p, 'definition', 'text');

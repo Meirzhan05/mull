@@ -6,9 +6,11 @@ import { el, icon, inlineMd } from './ui.js';
 import { dueEntries, reviewEntry, previewDue, deckStats, awardXp, currentStreak, formatDue, XP, Rating } from './deck.js';
 import { gradePracticeItem } from './practice-core.js';
 import { recordEvidence, ratingScore } from './mastery-core.js';
+import { postJson } from './stream-client.js';
 
 const SESSION_SIZE = 12;
-const TYPE_LABEL = { mcq: 'Multiple choice', cloze: 'Fill the blank', binary_choice: 'True or false', flashcard: 'Recall' };
+const TYPE_LABEL = { mcq: 'Multiple choice', cloze: 'Fill the blank', binary_choice: 'True or false', flashcard: 'Recall', explain: 'Explain it' };
+const GRADE_WORDS = ['Not yet', 'Partly there', 'Nearly there', 'Spot on'];
 
 function shuffle(list, seed) {
   const a = list.slice();
@@ -130,11 +132,12 @@ export function renderReview(root, { store, onExit, onXp }) {
     return nextDue;
   }
 
-  function feedback(card, { correct, expected, explanation, nextDue, typo }) {
+  function feedback(card, { correct, expected, explanation, nextDue, typo, title, extra }) {
     const box = el('div', { class: `feedback ${correct ? 'ok' : 'bad'}`, role: 'status' },
-      el('div', { class: 'feedback-title' }, icon(correct ? 'check' : 'x'), correct ? (typo ? 'Correct (watch the spelling)' : 'Correct!') : 'Not quite'),
+      el('div', { class: 'feedback-title' }, icon(correct ? 'check' : 'x'), title || (correct ? (typo ? 'Correct (watch the spelling)' : 'Correct!') : 'Not quite')),
       !correct && expected !== '' ? el('p', null, 'Answer: ', el('strong', null, String(expected))) : null,
       explanation ? el('p', { class: 'muted' }, inlineMd(explanation)) : null,
+      extra || null,
       el('p', { class: 'next-due' }, icon('clock'), `Next review ${formatDue(nextDue)}`));
     const go = () => { session.index++; show(); };
     const next = el('button', { class: 'btn btn-lg', type: 'button', onclick: go }, session.index === queue.length - 1 ? 'See results' : 'Continue', icon('arrow-right'));
@@ -204,6 +207,36 @@ export function renderReview(root, { store, onExit, onXp }) {
         const due = record(entry, g.rating, g.correct);
         feedback(card, { ...g, explanation: item.explanation, nextDue: due });
       } }, el('p', { class: 'review-prompt cloze-text' }, inlineMd(before), input, inlineMd(after)), el('div', { class: 'review-actions' }, check));
+      card.append(form);
+      setTimeout(() => input.focus(), 30);
+    } else if (item.type === 'explain') {
+      // Phase 8: free response, graded on the server against the item's rubric
+      card.append(el('p', { class: 'muted small' }, 'Explain it in your own words.'), el('h2', { class: 'review-prompt' }, inlineMd(item.prompt)));
+      const input = el('textarea', { class: 'explain-input', rows: '4', maxlength: '1500', placeholder: 'A few sentences is plenty.', 'aria-label': 'Your explanation' });
+      const check = el('button', { class: 'btn', type: 'submit' }, 'Check my answer');
+      const status = el('p', { class: 'muted small explain-status', role: 'status' });
+      const form = el('form', { class: 'explain-form', onsubmit: async (e) => {
+        e.preventDefault();
+        if (input.value.trim().length < 12) { status.textContent = 'Write a sentence or two first.'; input.focus(); return; }
+        input.disabled = true;
+        check.disabled = true;
+        status.textContent = 'Grading your answer…';
+        try {
+          const r = await postJson('/api/widget_action', { componentName: 'Review', action_type: 'practice_grade', payload: { item, answer: input.value } });
+          const grade = r.result?.grade || { score: 0, criteria: [], feedback: '' };
+          status.remove();
+          const g = gradePracticeItem(item, grade);
+          const due = record(entry, g.rating, g.correct);
+          const extra = el('div', { class: 'explain-grade' },
+            el('ul', { class: 'explain-criteria' }, ...(grade.criteria || []).map((c) => el('li', { class: c.met ? 'met' : '' }, icon(c.met ? 'check' : 'x'), el('span', null, c.criterion)))),
+            item.sampleAnswer ? el('details', { class: 'explain-model' }, el('summary', null, 'Show a model answer'), el('p', null, inlineMd(item.sampleAnswer))) : null);
+          feedback(card, { correct: g.correct, expected: '', explanation: grade.feedback, nextDue: due, title: `${GRADE_WORDS[grade.score] || ''} · ${grade.score}/3`, extra });
+        } catch (err) {
+          input.disabled = false;
+          check.disabled = false;
+          status.textContent = err.message || 'Could not grade that. Try again.';
+        }
+      } }, input, el('div', { class: 'review-actions' }, status, check));
       card.append(form);
       setTimeout(() => input.focus(), 30);
     } else {

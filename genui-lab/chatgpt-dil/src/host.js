@@ -198,6 +198,15 @@ export function computePresentation(type, props, ctx = {}) {
       if (p.disabled) { attrs.disabled = ''; attrs['aria-disabled'] = 'true'; if (p.dimWhenDisabled) style.opacity = '0.45'; }
       break;
     }
+    // Wonder extension (not in the captured client): a multi-line text field for free-response
+    // widgets. Its value is set in renderTextInput; typing reaches the program through onChange.
+    case 'text-input':
+      attrs.rows = String(Math.max(1, Math.min(12, Number(p.rows) || 3)));
+      if (p.placeholder) attrs.placeholder = String(p.placeholder);
+      if (p.maxLength) attrs.maxlength = String(Math.max(1, Math.min(10000, Number(p.maxLength) || 2000)));
+      if (p.disabled) { attrs.disabled = ''; attrs['aria-disabled'] = 'true'; }
+      attrs.spellcheck = 'true';
+      break;
     case 'button':
       attrs['data-variant'] = p.variant || 'solid';
       attrs['data-size'] = p.size || 'md';
@@ -271,6 +280,7 @@ function tagFor(type, props, parentType) {
     case 'list-item': return 'li';
     case 'pressable': return 'button';
     case 'button': return 'button';
+    case 'text-input': return 'textarea'; // Wonder extension
     case 'link': return 'a';
     case 'blockquote': return 'blockquote';
     case 'table': return 'table';
@@ -380,7 +390,16 @@ export function createHost(mount, opts) {
     if (type === 'link') el.setAttribute('href', p.href || '#');
     if (type === 'image' || type === 'search-image') renderImage(rec);
     if (type === 'button') renderButtonLabel(rec);
+    if (type === 'text-input') renderTextInput(rec);
     if (type === 'celebration') maybeCelebrate(rec);
+  }
+
+  // Controlled value, except while the learner is typing: a re-render that arrives between a
+  // keystroke and its echo must not move the caret or drop characters.
+  function renderTextInput(rec) {
+    const el = rec.el;
+    const v = rec.props.value == null ? '' : String(rec.props.value);
+    if (el.value !== v && el.ownerDocument.activeElement !== el) el.value = v;
   }
 
   function bindEvents(rec) {

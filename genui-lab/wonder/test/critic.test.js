@@ -109,7 +109,7 @@ test('lesson stream: demo mode lints only; verify:false skips the check; a faili
   await withServer({ mode: 'demo' }, async (base) => {
     const { report } = await lessonTurn(base, { topic: 'Why the sky is blue' });
     assert.equal(report.critic.skipped, true);
-    assert.equal(report.lint.total, 11);
+    assert.equal(report.lint.total, 12);
     assert.equal(qualitySummary(report).tone, 'lint');
     const off = await lessonTurn(base, { topic: 'Why the sky is blue', verify: false });
     assert.equal(off.report, undefined);
@@ -126,7 +126,7 @@ test('lesson stream: demo mode lints only; verify:false skips the check; a faili
 });
 
 test('qualitySummary: ok / fixed / warn / lint tones and headlines', () => {
-  const lint = { score: 1, passed: 11, total: 11, checks: [] };
+  const lint = { score: 1, passed: 12, total: 12, checks: [] };
   assert.equal(qualitySummary(null), null);
   assert.equal(qualitySummary(qualityReport({ lint, critique: { verdict: 'pass', summary: '', issues: [] }, checked: true })).tone, 'ok');
   const fixed = qualitySummary(qualityReport({ lint, critique: { verdict: 'minor_issues', summary: '', issues: [{ severity: 'minor', kind: 'quiz_key', page: 5, problem: 'key' }] }, applied: [{ question_id: 'q2', from: ['a'], to: ['c'] }], checked: true }));

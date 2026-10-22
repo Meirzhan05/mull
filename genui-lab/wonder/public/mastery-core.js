@@ -143,3 +143,13 @@ export function requestMastery(data, now = new Date()) {
   const s = masterySummary(data?.mastery, now);
   return s.total ? s : undefined;
 }
+
+/**
+ * Phase 8: a graded free-response answer (client action explain_graded). Only the first attempt
+ * is evidence, like a quiz: a retry after reading the feedback says less about mastery.
+ */
+export function explainEvidence(payload, { topic = '' } = {}) {
+  const score = Number(payload?.score);
+  if (!cleanConcept(payload?.concept) || !Number.isFinite(score) || Number(payload?.attempt) > 0) return [];
+  return [{ concept: payload.concept, score: Math.max(0, Math.min(3, score)) / 3, source: 'explain', topic }];
+}

@@ -12,7 +12,7 @@ import { XP, deckStats, currentStreak } from './deck.js';
 import { dailyProgress, learnerTotals } from './progress-core.js';
 import { el, icon, toast } from './ui.js';
 import { progressSnapshot, historyForModel, threadTitle } from './teacher-core.js';
-import { storeEvidence, quizEvidence, requestMastery } from './mastery-core.js'; // Phase 6
+import { storeEvidence, quizEvidence, explainEvidence, requestMastery } from './mastery-core.js'; // Phase 6 + 8
 
 const STARTERS = [
   ['calendar', 'I want to get good at statistics in a week. I already know basic algebra.'],
@@ -186,6 +186,15 @@ export function renderTeacher(ctx, threadId) {
         store.update((d) => { d.awarded = { ...(d.awarded || {}), [key]: true }; return d; });
         if (memoryOn()) storeEvidence(store, quizEvidence(p.results, { source: 'teacher_quiz' }));
         ctx.giveXp((Number(p.score) || 0) * XP.quizCorrect, `${p.score}/${p.total} on the quiz`);
+        break;
+      }
+      case 'explain_graded': { // Phase 8
+        const key = `teacher:${thread?.id}:explain:${p.resolutionId}:${Number(p.attempt) || 0}`;
+        if (store.data.awarded?.[key]) break;
+        store.update((d) => { d.awarded = { ...(d.awarded || {}), [key]: true }; return d; });
+        if (memoryOn()) storeEvidence(store, explainEvidence(p));
+        const pts = Math.max(0, Math.min(3, Number(p.score) || 0));
+        if (pts && !(Number(p.attempt) > 0)) ctx.giveXp(pts * XP.explainPoint, `${pts}/3 on your explanation`);
         break;
       }
       case 'open_url': if (/^https?:\/\//i.test(p.url || '')) window.open(p.url, '_blank', 'noopener,noreferrer'); break;

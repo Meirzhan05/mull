@@ -47,6 +47,7 @@ Use these sparingly for small custom cards, stat rows and side-by-side layouts. 
 - <Cycle title="..." centerLabel="..." stages={[{"label":"...","description":"..."}]}/>: 3-6 stages of a loop.
 - <Quiz title="Check your understanding" questions={[{"id":"q1","prompt":"...","question_type":"single_select","options":[{"value":"a","label":"..."},{"value":"b","label":"..."}],"correct_values":["b"],"hint":"...","explanation":"...","concept":"..."}]}/>: 1-5 questions; question_type single_select (2-4 options) or true_false (options [{"value":"true","label":"True"},{"value":"false","label":"False"}]); exactly one correct value; always give a hint and an explanation. Make wrong options plausible misconceptions. Tag every question with "concept": the one idea it tests in 1-4 words, reusing the KeyTerm wording when there is one (e.g. "Standard deviation"); Wonder tracks the learner's mastery per concept.
 - <Flashcards cards={[{"front":"...","back":"..."}]}/>: 1-12 cards.
+- <ExplainBack prompt="In your own words, why does ...?" concept="..." rubric={["mentions ...","explains that ..."]} sampleAnswer="..."/>: the learner types a short explanation and gets it graded against the rubric. 2-4 rubric criteria, each one checkable point a good answer makes (not wording); a 2-3 sentence sampleAnswer; concept tags it like a Quiz question. Ask "why" or "how" questions that need understanding, not recall.
 - <Celebration message="..."/>: a small confetti moment; at most once, at the very end.
 ${FUNCTION_GRAPH_VOCAB}
 `.trim();
@@ -63,6 +64,7 @@ ${DIL_VOCABULARY}
 - Introduce vocabulary with inline <KeyTerm .../> the first time a word appears.
 - Include one worked example (a LessonStepper with real numbers or a real case) somewhere in the lesson.
 - Use at most one Callout per page.
+- On the last content page (before the check page), include exactly one <ExplainBack> that asks the learner to explain the lesson's central idea in their own words.
 - Finish with a "## Check your understanding" page that contains exactly one <Quiz> with 3 questions covering different pages. Do not write anything after the Quiz except an optional one-line sign-off.
 - Pick the visual that fits the idea: processes -> LessonStepper or Flowchart; change over time -> Timeline; quantities -> BarChart; cause and effect with a dial -> InputOutputSlider; two contrasting views -> CompareToggle; relationships -> ConceptMap; loops -> Cycle; misconceptions -> Reveal.
 - Match the learner's level (beginner: no jargon without a KeyTerm; advanced: precise terms, formulas welcome).
@@ -79,7 +81,7 @@ ${DIL_VOCABULARY}
 
 # How to reply
 - Be brief: usually 60-160 words. Answer the actual question first, in second person, then deepen it with one example or analogy.
-- When a picture would help, add exactly one visual from the learning catalog (a Flowchart, Reveal, BarChart, CompareToggle, LessonStepper...). When the learner asks to be quizzed or tested, reply with one short sentence and a <Quiz> of 2-3 questions grounded in the lesson.
+- When a picture would help, add exactly one visual from the learning catalog (a Flowchart, Reveal, BarChart, CompareToggle, LessonStepper...). When the learner asks to be quizzed or tested, reply with one short sentence and a <Quiz> of 2-3 questions grounded in the lesson; when they want to check they really understand something, use one <ExplainBack> instead.
 - If the learner got something wrong, be warm and specific about the misconception.
 - Stay on the lesson's topic; if a question is unrelated, answer briefly and connect it back.
 - End every reply with one line containing 2-3 short follow-up questions the learner might tap next, written as:
@@ -151,7 +153,7 @@ You design short self-paced courses. Given a topic and a level, plan a course of
 export const EXTRACT_SYSTEM_PROMPT = `
 You turn a finished lesson into spaced-repetition material.
 - cards: 3-6 knowledge cards for the most important concepts (term, a one-sentence definition in plain words, a short concrete example).
-- items: 4-8 practice items mixing types (each tagged with "concept": the one idea it tests in 1-4 words, reusing a card term when it fits): "mcq" (prompt, 3-4 choices, correct_index), "cloze" (prompt containing exactly one "____" blank, answer is the missing word or short phrase), "binary_choice" (statement plus is_true), "flashcard" (front and back). Every item gets a one-sentence explanation. Fill fields that do not apply to an item's type with "" (strings), [] (choices), 0 (correct_index) or false (is_true).
+- items: 4-8 practice items mixing types (each tagged with "concept": the one idea it tests in 1-4 words, reusing a card term when it fits): "mcq" (prompt, 3-4 choices, correct_index), "cloze" (prompt containing exactly one "____" blank, answer is the missing word or short phrase), "binary_choice" (statement plus is_true), "flashcard" (front and back), and exactly one "explain" (prompt asks the learner to explain the lesson's central idea in their own words; rubric is 2-4 short criteria a good answer meets; sample_answer is a 2-3 sentence model answer). Every item gets a one-sentence explanation. Fill fields that do not apply to an item's type with "" (strings), [] (choices, rubric), 0 (correct_index) or false (is_true).
 Test understanding, not trivia. Only use facts stated in the lesson.
 `.trim();
 
@@ -199,10 +201,12 @@ export const EXTRACT_SCHEMA = {
       items: {
         type: 'object',
         additionalProperties: false,
-        required: ['type', 'concept', 'prompt', 'choices', 'correct_index', 'answer', 'statement', 'is_true', 'front', 'back', 'explanation'],
+        required: ['type', 'concept', 'prompt', 'choices', 'correct_index', 'answer', 'statement', 'is_true', 'front', 'back', 'rubric', 'sample_answer', 'explanation'],
         properties: {
           concept: { type: 'string' },
-          type: { type: 'string', enum: ['mcq', 'cloze', 'binary_choice', 'flashcard'] },
+          type: { type: 'string', enum: ['mcq', 'cloze', 'binary_choice', 'flashcard', 'explain'] },
+          rubric: { type: 'array', items: { type: 'string' } },
+          sample_answer: { type: 'string' },
           prompt: { type: 'string' },
           choices: { type: 'array', items: { type: 'string' } },
           correct_index: { type: 'integer' },
