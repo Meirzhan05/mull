@@ -257,7 +257,7 @@ npm run eval -- --limit 3
 ## Tests
 
 ```sh
-node --test genui-lab/wonder/test/index.js      # 272 tests, about 15 s, no network
+node --test genui-lab/wonder/test/index.js      # 280 tests, about 15 s, no network
 ```
 
 - **`mastery.test.js`, `critic.test.js`, `freeresponse.test.js`** cover phases 6–8: the estimator and decay, evidence, prompt injection, the lint, quiz fixes and the `replace` record, the eval harness end to end (demo and fake Claude), the grader, the ExplainBack widget in the sandbox, explain practice items and Guide me.

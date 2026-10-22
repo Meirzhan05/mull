@@ -21,14 +21,14 @@ export function practiceConcepts(actions, labels) {
 
 export function masteryPanel(ctx) {
   const { store } = ctx;
-  const wrap = el('section', { class: 'section mastery', id: 'mastery', 'aria-label': 'What you know' });
+  const wrap = el('div', { class: 'mastery', id: 'mastery', 'aria-label': 'What you know' });
 
   function draw() {
     const list = masteryList(store.data.mastery);
     const weak = weakestConcepts(store.data.mastery);
     const head = el('div', { class: 'section-head' },
-      el('h2', { class: 'h-md' }, 'What you know'),
-      weak.length ? el('button', { class: 'btn btn-sm', type: 'button', onclick: () => practiceConcepts(ctx.actions, weak) }, icon('target'), 'Practice weak spots') : null);
+      el('h2', { class: 'rubric' }, 'What you know', list.length ? el('span', { class: 'count' }, String(list.length)) : null),
+      weak.length ? el('button', { class: 'btn btn-secondary btn-sm', type: 'button', onclick: () => practiceConcepts(ctx.actions, weak) }, 'Practice weak spots') : null);
     if (!list.length) {
       wrap.replaceChildren(head, el('div', { class: 'card mastery-empty' }, el('p', { class: 'muted' },
         'Answer a lesson quiz or review a few cards and Wonder will start estimating how well you know each concept. Lessons, the tutor and your Teacher use it to recap what is shaky and skip what you already know.')));
@@ -39,7 +39,9 @@ export function masteryPanel(ctx) {
       if (!items.length) return null;
       if (status === 'mastered') items.reverse();
       return el('div', { class: 'mastery-group', dataset: { status } },
-        el('div', { class: 'mastery-group-head' }, el('h3', { class: 'h-sm' }, `${STATUS_LABEL[status]} · ${items.length}`), el('span', { class: 'muted small' }, STATUS_NOTE[status])),
+        el('div', { class: 'mastery-group-head' },
+          el('h3', { class: 'mastery-group-title' }, el('span', { class: 'status-dot', 'aria-hidden': 'true' }), STATUS_LABEL[status], el('span', { class: 'count' }, String(items.length))),
+          el('span', { class: 'muted small' }, STATUS_NOTE[status])),
         el('ul', { class: 'mastery-items' }, ...items.slice(0, 24).map((c) => {
           const pct = Math.round(c.mastery * 100);
           const srcs = [...new Set((store.data.mastery?.[c.key]?.events || []).map((e) => SOURCE_NOTE[e.source]).filter(Boolean))];
@@ -50,7 +52,7 @@ export function masteryPanel(ctx) {
             el('div', { class: 'mastery-bar', role: 'meter', 'aria-valuemin': '0', 'aria-valuemax': '100', 'aria-valuenow': String(pct), 'aria-label': `${c.label}: ${pct}% mastery` },
               el('span', { class: 'mastery-fill', style: { width: `${pct}%` } })),
             el('span', { class: 'mastery-pct' }, `${pct}%`),
-            el('button', { class: 'icon-btn', type: 'button', 'aria-label': `Reset ${c.label}`, title: 'Reset this concept', onclick: () => {
+            el('button', { class: 'icon-btn plain', type: 'button', 'aria-label': `Reset ${c.label}`, title: 'Reset this concept', onclick: () => {
               store.update((d) => { d.mastery = forgetConcept(d.mastery, c.key); return d; });
               toast(`Reset ${c.label}`);
               draw();

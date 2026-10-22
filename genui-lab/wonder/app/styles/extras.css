@@ -70,3 +70,79 @@
 .steer-open:hover { background: var(--hover); }
 @media (min-width: 1240px) { .steer-bar[data-mode="revise"]:not(.is-open) { justify-self: center; } }
 @media (max-width: 1239px) { .steer-bar[data-mode="revise"].is-open { bottom: calc(max(18px, env(safe-area-inset-bottom)) + 58px); } }
+
+/* ---------------------------------------------------------------- Phases 6-8 (AI layer) */
+
+/* What you know (learner model), a You section */
+.mastery { display: grid; gap: 12px; }
+.mastery-empty { padding: 16px; }
+.mastery-empty p { margin: 0; font-size: 0.875rem; }
+.mastery-card { display: grid; padding: 4px 0; }
+.mastery-group { display: grid; gap: 4px; padding: 12px 16px; }
+.mastery-group + .mastery-group { border-top: 1px solid var(--line); }
+.mastery-group-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; }
+.mastery-group-title { margin: 0; display: inline-flex; align-items: center; gap: 8px; font-size: 0.8125rem; font-weight: 600; color: var(--ink); }
+.mastery-group[data-status="shaky"] .status-dot { background: var(--danger); }
+.mastery-group[data-status="fading"] .status-dot { background: var(--warning); }
+.mastery-group[data-status="learning"] .status-dot { background: var(--accent); }
+.mastery-group[data-status="mastered"] .status-dot { background: var(--success); }
+.mastery-items { list-style: none; margin: 0; padding: 0; display: grid; }
+.mastery-item { display: grid; grid-template-columns: minmax(0, 1fr) minmax(64px, 140px) 3em 32px; align-items: center; gap: 12px; padding: 6px 0; }
+.mastery-text { display: grid; gap: 1px; min-width: 0; }
+.mastery-text strong { font-weight: 500; font-size: 0.875rem; overflow-wrap: anywhere; }
+.mastery-text .small { color: var(--ink-3); }
+.mastery-bar { height: 6px; border-radius: 999px; background: var(--surface-3); overflow: hidden; }
+.mastery-fill { display: block; height: 100%; border-radius: inherit; background: var(--accent); }
+.mastery-group[data-status="shaky"] .mastery-fill { background: var(--danger); }
+.mastery-group[data-status="fading"] .mastery-fill { background: var(--warning); }
+.mastery-group[data-status="mastered"] .mastery-fill { background: var(--success); }
+.mastery-pct { font-family: var(--font-mono); font-size: 0.75rem; text-align: right; color: var(--ink-2); font-variant-numeric: tabular-nums; }
+.mastery-item .icon-btn { width: 32px; height: 32px; color: var(--ink-3); }
+.mastery-item .icon-btn:hover { color: var(--danger); }
+@media (max-width: 520px) {
+  .mastery-item { grid-template-columns: minmax(0, 1fr) 3em 32px; row-gap: 6px; }
+  .mastery-bar { grid-column: 1 / -1; grid-row: 2; }
+}
+
+/* Lesson quality check, last child of the end panel */
+.quality-note { width: 100%; max-width: 520px; margin-top: 6px; text-align: left; font-size: 0.8125rem; color: var(--ink-2); border: 1px solid var(--line); border-radius: var(--r-md); padding: 10px 12px; background: var(--surface); }
+.quality-note p, .quality-note summary { margin: 0; display: flex; gap: 8px; align-items: flex-start; }
+.quality-note summary { cursor: pointer; list-style: none; border-radius: var(--r-sm); }
+.quality-note summary::-webkit-details-marker { display: none; }
+.quality-note summary:focus-visible { outline: none; box-shadow: var(--ring); }
+.quality-note .ui-icon { width: 15px; height: 15px; flex: 0 0 auto; margin-top: 2px; color: var(--ink-3); }
+.quality-note.ok .ui-icon, .quality-note.fixed .ui-icon { color: var(--success); }
+.quality-note.warn .ui-icon { color: var(--warning); }
+.quality-note ul { margin: 8px 0 0; padding-left: 23px; display: grid; gap: 4px; }
+.quality-note li strong { font-weight: 600; color: var(--ink); }
+.quality-note li.major strong { color: var(--danger); }
+
+/* Free-response review cards */
+.explain-form { display: grid; gap: 10px; }
+.explain-input {
+  width: 100%; box-sizing: border-box; min-height: 112px; resize: vertical; font: inherit; font-size: 0.9375rem; line-height: 1.5; color: var(--ink);
+  border: 1px solid var(--control-border); border-radius: var(--r-md); padding: 10px 12px; background: var(--surface); outline: none; box-shadow: var(--shadow-sm);
+}
+.explain-input:focus { border-color: var(--accent); box-shadow: var(--ring); }
+.explain-input::placeholder { color: var(--ink-3); }
+.explain-status { margin: 0; flex: 1; }
+.explain-grade { display: grid; gap: 8px; }
+.explain-criteria { list-style: none; margin: 0; padding: 0; display: grid; gap: 5px; font-size: 0.8125rem; }
+.explain-criteria li { display: flex; gap: 8px; align-items: flex-start; color: var(--ink-3); }
+.explain-criteria li.met { color: var(--ink); }
+.explain-criteria .ui-icon { width: 14px; height: 14px; flex: 0 0 auto; margin-top: 3px; }
+.explain-criteria li.met .ui-icon { color: var(--success); }
+.explain-model { font-size: 0.8125rem; }
+.explain-model summary { cursor: pointer; font-weight: 500; color: var(--accent); width: fit-content; }
+.explain-model p { margin: 6px 0 0; }
+
+/* Tutor header: "Guide me" (Socratic mode) */
+.tutor-head-actions { display: flex; align-items: center; gap: 4px; }
+.guide-toggle { display: inline-flex; align-items: center; gap: 8px; height: 32px; padding: 0 8px; border: 0; border-radius: var(--r-md); background: transparent; color: var(--ink-2); font: inherit; font-size: 0.8125rem; font-weight: 500; cursor: pointer; white-space: nowrap; }
+.guide-toggle:hover { background: var(--hover); color: var(--ink); }
+.guide-toggle:focus-visible { outline: none; box-shadow: var(--ring); }
+.guide-toggle[aria-checked="true"] { color: var(--accent); }
+.guide-toggle .switch.small { display: inline-block; width: 28px; height: 16px; }
+.guide-toggle .switch.small .switch-knob { top: 2px; left: 2px; width: 12px; height: 12px; }
+.guide-toggle[aria-checked="true"] .switch.small { background: var(--accent); }
+.guide-toggle[aria-checked="true"] .switch.small .switch-knob { transform: translateX(12px); }

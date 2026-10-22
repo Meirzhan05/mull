@@ -161,7 +161,7 @@ Phases 1–5 are implemented, merged into `main` and verified:
 - **Teacher:** verified live on its own, with remember, a study plan and lesson cards.
 
 Phases 6–8 are implemented on the `feature/ai-features` branch, one commit per phase:
-- **Tests:** 272 pass (17 new for phases 6–8, plus updated fixtures), with no network.
+- **Tests:** 280 pass on top of the Next.js redesign (26 new for phases 6–8), with no network; `next build` is clean.
 - **Browser, demo mode:**
   - quiz answers → "What you know" → Strengthen → a Teacher quiz;
   - the quality note at the end of a lesson;
