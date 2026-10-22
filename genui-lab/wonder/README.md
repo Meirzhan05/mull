@@ -110,13 +110,13 @@ All of this lives in `server/claude.js`. The client is dependency-injected, so t
 | Endpoint | Response |
 |---|---|
 | `GET /api/status` | `{mode, model}` |
-| `POST /api/lesson/stream {topic, level?, lessonTitle?, lessonSummary?, course?, continueFrom?}` | NDJSON lesson. `continueFrom: {markdown, instruction?, fromPage?, messageId?, sources?}` resumes or revises a persisted lesson (Phase 4) |
+| `POST /api/lesson/stream {topic, level?, lessonTitle?, lessonSummary?, course?, continueFrom?, mastery?, verify?}` | NDJSON lesson. `continueFrom: {markdown, instruction?, fromPage?, messageId?, sources?}` resumes or revises a persisted lesson (Phase 4). Ends with a `quality-report` control unless `verify: false` (Phase 7) |
 | `POST /api/lesson/steer {operationId, instruction}` | JSON `{ok, status: accepted\|rejected}`; the result streams on the lesson's own NDJSON (Phase 4) |
-| `POST /api/tutor/stream {lessonContext:{title, markdown}, history, message}` | NDJSON reply; the final content record carries `followupPrompts` |
+| `POST /api/tutor/stream {lessonContext:{title, markdown}, history, message, mastery?, mode?}` | NDJSON reply; the final content record carries `followupPrompts`. `mode: "socratic"` is Guide me (Phase 8) |
 | `POST /api/course/plan {topic, level}` | JSON `{plan:{title, description, sections:[{title, lessons:[{title, summary}]}]}}`; the client renders it as a course path |
-| `POST /api/widget_action {componentName, action_type, payload, resolutionId}` | JSON `{componentResults?, issueTurn?, result?}` |
+| `POST /api/widget_action {componentName, action_type, payload, resolutionId}` | JSON `{componentResults?, issueTurn?, result?}`. `explain_grade` and `practice_grade` on an `explain` item call the grader (Phase 8) |
 | `POST /api/practice/extract {lessonMarkdown}` | JSON `{cards:[{term, definition, example}], items:[…]}` |
-| `POST /api/teacher/stream {threadId, history, message, progress, memoryEnabled}` | NDJSON Teacher turn. Cards live in the final `dil.appData.opGenui.componentResults`; `followupPrompts` on the final record |
+| `POST /api/teacher/stream {threadId, history, message, progress, memoryEnabled, mastery?}` | NDJSON Teacher turn. Cards live in the final `dil.appData.opGenui.componentResults`; `followupPrompts` on the final record |
 | `GET /api/memory` | `{items:[{id, fact, kind, source, createdAt}]}` (newest first) |
 | `POST /api/memory {fact, kind}` | Adds a user fact (de-duplicated) |
 | `DELETE /api/memory?id=…` or `DELETE /api/memory {all:true}` | Removes one item, or forgets everything |
@@ -144,6 +144,7 @@ Next serves `public/` and, through read-only route handlers, `genui-lab/chatgpt-
 | `Quiz` | Hints, feedback, explanations, "Explain this" → tutor, results (the runtime's confetti is hidden by the Folio stylesheet), retry, server-graded state restore |
 | `Flashcards` | Flip cards; "Save to review deck" |
 | `Celebration` | Confetti moment |
+| `ExplainBack` | Free-response answer graded against a rubric on the server (Phase 8) |
 | `TeacherCard` | **Server-only**: spliced in by `/api/teacher/stream`, never written by the model. Props are just `kind` and the server-assigned `__resolutionId`; the data is `componentResults[__resolutionId].state`. `approval` (Start lesson / Not now / Undo), `plan` (per-item open buttons, Save plan / Unsave), `memory` (Remembered/Forgot chip with Undo/Redo). Shows a skeleton until resolved |
 
 Claude can also use the DIL layout primitives (`box/row/col/grid/text/title/icon/badge/divider/math/…`), with icon names taken from `chatgpt-dil/src/icons.js`.
@@ -192,11 +193,74 @@ The Teacher persona (`TEACHER_SYSTEM_PROMPT`) uses Wondering's dial values fixed
 - **Reads.** A compact "About this learner" block with the newest 15 items goes into the lesson, tutor and Teacher system prompts as a system block after the cache breakpoint. The Teacher's copy includes item ids so it can `forget` them.
 - **UI.** The You screen (`#/you`, also `#/memory`) lists items by kind, with add, delete and "Forget everything", plus the persisted **Use memory** switch that sets `memoryEnabled` on every request.
 
+## Learner model (Phase 6)
+
+Memory holds free-text facts. The learner model tracks what the learner actually knows, per concept, from graded answers.
+
+- **Concept tags.** Lesson Quiz questions, Teacher `quiz_me` questions (a required `concept` field), extracted practice items and ExplainBack widgets each name the one concept they test.
+- **Estimate (`public/mastery-core.js`).**
+  - Every graded answer is an evidence event with a score between 0 and 1 and a weight: quiz, Teacher quiz and review count 1, an explanation counts 1.5.
+  - Mastery is the mean of a Beta(1, 1) posterior over those events, each decayed with a 21-day half-life. Old evidence fades, so a concept that is not practiced drifts to "fading".
+  - Statuses: `mastered` (≥ 0.8 with enough evidence), `shaky` (< 0.55 with at least 1.5 units of evidence), `fading` (practiced before, little recent evidence), `learning`.
+- **Evidence:**
+  - the first attempt at each lesson or Teacher quiz;
+  - every FSRS review of a tagged card (Again 0, Hard 0.6, Good and Easy 1);
+  - the first attempt at each explanation (score / 3).
+- **Storage.** The model lives in localStorage as `mastery` (merged per concept across tabs). The server never stores it.
+- **Prompts.**
+  - Lesson, tutor and Teacher requests carry a compact summary (up to 8 concepts per status). `server/learner-model.js` re-validates it and adds a "What this learner knows" block after the cache breakpoint, with an instruction for each surface: lessons recap shaky prerequisites and skip what is mastered.
+  - The Teacher also sees the summary in `get_progress`.
+  - The summary follows the **Use memory** switch.
+- **UI.**
+  - "What you know" on the You screen (`#/mastery`): concepts grouped by status with mastery bars, a per-concept reset, and **Practice weak spots**, which asks the Teacher for a quiz.
+  - A **Strengthen** item in Up next.
+
+## Lesson quality and evals (Phase 7)
+
+- **Lint (`server/critic.js`).** Deterministic checks of the finished lesson against the prompt's own rules:
+  - title and hook;
+  - 3–4 pages;
+  - a visual on every page;
+  - page length;
+  - a check page with one 3-question Quiz, every question tagged;
+  - 2–5 KeyTerms;
+  - one ExplainBack;
+  - a worked example;
+  - no invalid components.
+- **Critic.** After a Claude lesson streams (not refused, not truncated), a second Claude call (structured output, effort medium, 120 s timeout) reviews the lesson:
+  - It checks answer keys, facts, arithmetic and cited claims (shown the cited text), plus level fit and widget sense.
+  - It returns issues and `quizFixes`. A fix is applied to the Quiz props only if the rewritten Quiz still validates, and the lesson is then updated with one `replace` record.
+  - A `quality-report` control record carries the lint result, the critic verdict, the issues and the fixes. The lesson's end panel shows it as a collapsible note.
+  - Demo mode runs the lint only. `verify: false` on the request skips both checks.
+- **Eval harness (`npm run eval`).**
+  - Generates a lesson per topic in `evals/topics.json` through an in-process server, so it runs the real prompts, compile, lint and critic. It uses an empty in-memory learner memory, and web search is off unless `--web` is passed.
+  - Scores each lesson with an LLM judge (`server/judge.js`), 1–5 with a rationale on accuracy, clarity, level fit, interactivity and quiz quality.
+  - Writes `evals/reports/<timestamp>.json` and `.md`: per-lesson rows, means, the most-failed format checks, and notes.
+  - Options: `--limit n`, `--concurrency n`, `--topics file`, `--no-judge`, `--no-verify`, `--web`, `--out dir`. `--demo` runs with no API calls.
+  - A Claude run costs about 3 calls per lesson: lesson, critic and judge.
+
+```sh
+npm run eval -- --limit 3
+```
+
+## Free response and "Guide me" (Phase 8)
+
+- **`text-input` primitive.** A Wonder extension to the chatgpt-dil host, rendered as a `textarea`. Typing reaches the program through `onChange`. The host never overwrites the value while the field has focus.
+- **`<ExplainBack prompt concept rubric={[…]} sampleAnswer/>`.** The learner explains the idea in their own words and taps "Check my answer", which sends `explain_grade` to `/api/widget_action`. `server/grader.js` grades the answer:
+  - **Claude mode:** one structured call at effort low, with the answer fenced as data. It returns a 0–3 score, each rubric criterion met or missed with quoted evidence, feedback, the misconception and a follow-up question.
+  - **Demo mode,** or when the call fails: a keyword grader.
+
+  The widget then shows the score, criteria, feedback, "Show a model answer", "Ask the tutor" and "Try again". The first attempt awards XP (5 per point) and becomes mastery evidence. Lessons include one ExplainBack on their last content page.
+- **Review.** Extraction adds one `explain` practice item per lesson. The review screen grades it through the same grader (`practice_grade`), and the score maps to an FSRS rating (0 Again … 3 Easy).
+- **"Guide me."** A switch in the tutor header (saved as `settings.tutorMode`) sends `mode: "socratic"`. The tutor then asks one guiding question at a time and gives the answer only after two real tries or when asked outright. The rules (`SOCRATIC_TUTOR_MODE`) go after the cache breakpoint, so the cached tutor prompt is the same in both modes. Demo replies follow the same pattern.
+
 ## Tests
 
 ```sh
-node --test genui-lab/wonder/test/index.js      # 250 tests, about 15 s, no network
+node --test genui-lab/wonder/test/index.js      # 272 tests, about 15 s, no network
 ```
+
+- **`mastery.test.js`, `critic.test.js`, `freeresponse.test.js`** cover phases 6–8: the estimator and decay, evidence, prompt injection, the lint, quiz fixes and the `replace` record, the eval harness end to end (demo and fake Claude), the grader, the ExplainBack widget in the sandbox, explain practice items and Guide me.
 
 - **`compile.test.js`**
   - Lenient JSON, and proof that it never evaluates code.

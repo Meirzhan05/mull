@@ -9,6 +9,14 @@ Reverse engineering of two AI "intelligent UI" systems from their shipped web cl
 ## Wonder: the combined app (`genui-lab/wonder/`)
 Wonder is a Next.js, Wondering-style learning app (courses, lessons, a tutor, FSRS review, XP and streaks). Its lessons and tutor replies are written by Claude (`claude-opus-5-5`) as ChatGPT-style DIL markup. The server compiles that markup and streams it as conversation-source NDJSON, and the client renders it in the sandboxed DIL runtime. Wondering's learning widgets (Quiz, LessonStepper, Flashcards, Flowchart, Timeline, InputOutputSlider and more) are available to the model as DIL catalog components.
 
+The AI layer also includes:
+- a per-concept learner model that adapts lessons, the tutor and the Teacher;
+- a second Claude pass that checks each lesson and fixes wrong quiz answer keys;
+- free-response answers graded against a rubric;
+- a Socratic "Guide me" tutor mode.
+
+Lesson quality is measured with an eval harness (`npm run eval`, in `genui-lab/wonder`).
+
 To run it:
 
 ```bash

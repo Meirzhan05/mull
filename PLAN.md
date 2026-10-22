@@ -160,6 +160,16 @@ Phases 1–5 are implemented, merged into `main` and verified:
 - **Live check:** one real `claude-opus-5-5` lesson used learner memory (4 items), web search (15 `Cite` pills plus `Sources`) and a mid-stream "Simpler" steer together.
 - **Teacher:** verified live on its own, with remember, a study plan and lesson cards.
 
+Phases 6–8 are implemented on the `feature/ai-features` branch, one commit per phase:
+- **Tests:** 272 pass (17 new for phases 6–8, plus updated fixtures), with no network.
+- **Browser, demo mode:**
+  - quiz answers → "What you know" → Strengthen → a Teacher quiz;
+  - the quality note at the end of a lesson;
+  - ExplainBack typing, grading, XP and mastery;
+  - an `explain` review card;
+  - Guide me in the tutor.
+- **Not yet verified live:** the critic, grader and judge calls and the new extraction schema still need one real `claude-opus-5-5` run (`npm run eval -- --limit 2`).
+
 ## Verification for each phase
 
 - **Unit tests.** `node:test` covering compile, catalog, server endpoints, and tool loops with a fake client.
