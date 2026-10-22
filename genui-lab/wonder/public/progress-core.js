@@ -4,6 +4,8 @@
 
 import { dateKey, deckStats, currentStreak } from './deck.js';
 import { weakestConcepts } from './mastery-core.js';
+import { nextPlanItem } from './plan-core.js'; // Phase 10
+import { fadingLessons, RECALL_MIN } from './outcomes-core.js'; // Phase 9
 
 export const DAILY_GOALS = Object.freeze([
   { xp: 10, label: 'Casual', hint: 'A few minutes a day' },
@@ -144,7 +146,8 @@ export function courseProgress(data, course) {
  *   continue  an unfinished lesson (still being read, or interrupted)
  *   review    due practice cards
  *   strengthen  shaky or fading concepts in the learner model (a Teacher quiz on them)
- *   plan      the next unopened item of the saved study plan
+ *   refresh   a finished lesson whose cards are not sticking (Phase 9: delayed recall)
+ *   plan      the saved study plan's next item by calendar day: overdue, today's, or ahead
  *   course    the next lesson of a course in progress
  *   start     nothing in flight: start a first / new lesson
  */
@@ -160,12 +163,18 @@ export function upNext(data, now = new Date()) {
   // Phase 6: shaky / fading concepts from the learner model
   const weak = data?.settings?.memoryEnabled === false ? [] : weakestConcepts(data?.mastery, now, 3);
   if (weak.length) out.push({ kind: 'strengthen', concepts: weak });
+  // Phase 9: the worst-fading lesson, measured from recall days later (or FSRS's forecast)
+  const fading = fadingLessons(data, now, 1)[0];
+  if (fading && fading.reviewed) {
+    out.push({ kind: 'refresh', lessonId: fading.lessonId, title: fading.title, slipping: fading.leeches.length,
+      ...(fading.recall.n >= RECALL_MIN ? { recall: Math.round(fading.recall.rate * 100), reviews: fading.recall.n } : {}),
+      ...(fading.memoryToday != null ? { memoryToday: Math.round(fading.memoryToday * 100) } : {}) });
+  }
   const plan = (data?.plans || [])[0];
   if (plan) {
-    for (const [di, day] of (plan.days || []).entries()) {
-      const ii = (day.items || []).findIndex((it) => !it.opened);
-      if (ii >= 0) { out.push({ kind: 'plan', planId: plan.id, dayIndex: di, itemIndex: ii, day: day.day || di + 1, title: day.items[ii].title, itemKind: day.items[ii].kind || 'lesson', goal: plan.goal }); break; }
-    }
+    // Phase 10: by calendar day: overdue items first, then today's, then (ahead) the next day's
+    const n = nextPlanItem(plan, now);
+    if (n) out.push({ kind: 'plan', planId: plan.id, dayIndex: n.dayIndex, itemIndex: n.itemIndex, day: plan.days[n.dayIndex].day || n.dayIndex + 1, date: n.date, when: n.when, title: n.item.title, itemKind: n.item.kind || 'lesson', goal: plan.goal });
   }
   for (const course of data?.courses || []) {
     const c = courseNext(data, course, unfinished?.id);

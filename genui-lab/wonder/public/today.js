@@ -2,18 +2,38 @@
 // course or write to the Teacher), then two columns: the "Up next" queue, suggestions and recent
 // reading on the left; a rail of panels (today's XP, the streak, the deck, the study plan) on the
 // right. On narrow screens the rail moves above the queue as a strip.
+// Phases 9-10: the header carries the Teacher's brief when a deadline or the streak is at stake,
+// Up next has "Refresh" rows for fading lessons and dated plan rows, the plan panel follows the
+// calendar, the command bar takes the learner's own material, and reading rows show recall.
 
 import { el, icon, toast, relTime } from './ui.js';
 import { currentStreak, deckStats, formatDue } from './deck.js';
 import { dailyProgress, weekStrip, upNext, suggestedTopics, greeting, courseProgress, learnerTotals, topicInterest, readingMinutes } from './progress-core.js';
 import { pageCount } from './steering-core.js';
 import { practiceConcepts } from './mastery-screen.js'; // Phase 6
+import { lessonOutcome, outcomeLabel } from './outcomes-core.js'; // Phase 9
+import { planStatus, dayLabel, countdownLabel } from './plan-core.js'; // Phase 10
+import { dailyBrief } from './brief-core.js'; // Phase 10
+import { postJson } from './stream-client.js';
 
 const MODES = [
   { id: 'lesson', label: 'Lesson', placeholder: 'What do you want to understand?', action: 'Begin' },
   { id: 'course', label: 'Course', placeholder: 'A subject to study over several lessons', action: 'Plan' },
   { id: 'teacher', label: 'Teacher', placeholder: 'A goal, a question, or a plan you need', action: 'Send' },
+  { id: 'material', label: 'Material', placeholder: 'A title for your notes (optional)', action: 'Begin' },
 ];
+const MATERIAL_ACCEPT = '.txt,.md,.markdown,.pdf,text/plain,text/markdown,application/pdf';
+
+/** Phase 10: read an attached file into a /api/materials body. */
+function readMaterialFile(file) {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    const pdf = /\.pdf$/i.test(file.name) || file.type === 'application/pdf';
+    r.onerror = () => reject(new Error('Could not read that file'));
+    r.onload = () => resolve(pdf ? { kind: 'pdf', base64: String(r.result).replace(/^data:[^,]*,/, ''), filename: file.name } : { kind: 'text', text: String(r.result), filename: file.name });
+    if (pdf) r.readAsDataURL(file); else r.readAsText(file);
+  });
+}
 const LEVELS = ['beginner', 'intermediate', 'advanced'];
 const cap = (s) => s[0].toUpperCase() + s.slice(1);
 
@@ -32,8 +52,9 @@ export function renderToday(ctx) {
   const totals = learnerTotals(d, now);
   const name = String(settings.name || '').trim();
 
-  // -- header
-  const sub = day.met
+  // -- header (Phase 10: the brief's headline when a deadline or the streak is at stake)
+  const brief = dailyBrief(d, now);
+  const sub = brief.urgent ? brief.headline : day.met
     ? 'Today’s goal is met.'
     : day.xp > 0
       ? `${day.goal - day.xp} XP to today’s goal.`
@@ -53,6 +74,31 @@ export function renderToday(ctx) {
     onclick: () => { setMode(m.id); input.focus(); },
   }, m.label)));
   const levelSel = el('select', { class: 'cmd-level', 'aria-label': 'Level', onchange: (e) => { level = e.target.value; } }, ...LEVELS.map((lv) => el('option', { value: lv }, cap(lv))));
+  // -- Phase 10: "Material": paste notes or attach a file; Begin writes a lesson from it, or a course
+  let file = null;
+  const notes = el('textarea', { class: 'cmd-notes', rows: '5', maxlength: '200000', placeholder: 'Paste your notes, a chapter or a syllabus. Wonder teaches from it and cites it.', 'aria-label': 'Your material' });
+  const fileInput = el('input', { type: 'file', accept: MATERIAL_ACCEPT, hidden: true });
+  const fileChip = el('span', { class: 'file-chip', hidden: true });
+  const courseBtn = el('button', { class: 'btn btn-secondary btn-sm', type: 'button', onclick: () => submit('course') }, 'Make a course');
+  const materialBox = el('div', { class: 'cmd-material', hidden: true },
+    notes,
+    el('div', { class: 'cmd-material-foot' },
+      el('button', { class: 'btn btn-ghost btn-sm', type: 'button', onclick: () => fileInput.click() }, icon('plus'), 'Attach .txt, .md or .pdf'),
+      fileChip,
+      el('span', { class: 'cmd-material-note' }, 'Stored on this Wonder server'),
+      courseBtn),
+    fileInput);
+  fileInput.addEventListener('change', () => {
+    file = fileInput.files?.[0] || null;
+    fileInput.value = '';
+    fileChip.hidden = !file;
+    fileChip.replaceChildren(...(file ? [el('span', null, file.name), el('button', { class: 'icon-btn', type: 'button', 'aria-label': 'Remove file', onclick: () => { file = null; fileChip.hidden = true; } }, icon('x'))] : []));
+  });
+  async function uploadMaterial() {
+    const body = file ? await readMaterialFile(file) : { kind: 'text', text: notes.value };
+    if (input.value.trim()) body.title = input.value.trim();
+    return (await postJson('/api/materials', body)).item;
+  }
   function setMode(m) {
     mode = m;
     const def = MODES.find((x) => x.id === m);
@@ -60,10 +106,28 @@ export function renderToday(ctx) {
     input.placeholder = def.placeholder;
     go.firstChild.textContent = def.action;
     levelSel.hidden = m === 'teacher';
+    materialBox.hidden = m !== 'material';
   }
   setMode('lesson');
-  async function submit() {
+  async function submit(as = 'lesson') {
     const t = input.value.trim();
+    if (mode === 'material') {
+      if (!notes.value.trim() && !file) { notes.focus(); toast('Paste some material or attach a file first'); return; }
+      go.disabled = true;
+      courseBtn.disabled = true;
+      go.firstChild.textContent = 'Reading…';
+      try {
+        const item = await uploadMaterial();
+        if (as === 'course') { if (!(await actions.planCourse(item.title, level, item))) throw new Error('Could not plan the course'); }
+        else actions.startMaterialLesson(item, level);
+      } catch (e) {
+        toast(e.message || 'Could not add that material');
+        go.disabled = false;
+        courseBtn.disabled = false;
+        setMode('material');
+      }
+      return;
+    }
     if (!t) { input.focus(); toast(mode === 'teacher' ? 'Write a message first' : 'Name a subject first'); return; }
     if (mode === 'lesson') actions.startLesson(t, level);
     else if (mode === 'teacher') actions.askTeacher(t);
@@ -74,16 +138,18 @@ export function renderToday(ctx) {
       if (!ok) { go.disabled = false; setMode('course'); }
     }
   }
-  const cmd = el('form', { class: 'cmd', onsubmit: (e) => { e.preventDefault(); submit(); } },
-    modeSeg,
-    el('label', { class: 'cmd-field' }, icon('search'), input),
-    levelSel,
-    go);
+  const cmd = el('form', { class: 'cmd-wrap', onsubmit: (e) => { e.preventDefault(); submit(); } },
+    el('div', { class: 'cmd' },
+      modeSeg,
+      el('label', { class: 'cmd-field' }, icon('search'), input),
+      levelSel,
+      go),
+    materialBox);
 
   // -- left column: queue, suggestions, recent
   const next = upNext(d, now);
   const queue = el('section', { class: 'panel-section' },
-    sectionHead('Up next', next[0]?.kind === 'start' ? null : `${next.length}`),
+    sectionHead('Up next', next[0]?.kind === 'start' ? null : `${next.length}`, el('button', { class: 'link-btn', type: 'button', onclick: () => actions.teacherCheckIn?.() }, 'Ask your Teacher', icon('arrow-right'))),
     el('ol', { class: 'queue' }, ...next.map((n, i) => queueRow(n, i, ctx)), ...(next[0]?.kind === 'start' ? quickRows(ctx) : [])));
 
   const topics = suggestedTopics(settings, d.lessons, now, 6);
@@ -161,8 +227,16 @@ function queueRow(n, i, ctx) {
       body: `Your recent answers suggest these need another look: ${n.concepts.join(', ')}. Your Teacher will quiz you on them.`,
       meta: n.concepts.length > 1 ? n.concepts.join(' · ') : 'shaky in your recent answers', cta: 'Quiz me', onclick: () => practiceConcepts(actions, n.concepts) });
   }
-  if (n.kind === 'plan') {
-    return row({ kind: `Study plan · day ${n.day}`, title: n.title, body: n.goal, cta: n.itemKind === 'quiz' ? 'Quiz' : 'Open', onclick: () => actions.openPlanItem(n.planId, n.dayIndex, n.itemIndex) });
+  if (n.kind === 'refresh') { // Phase 9: a lesson that did not stick
+    const measured = n.recall != null;
+    return row({ kind: 'Refresh', title: `“${n.title}” is fading`,
+      body: measured ? `You recalled ${n.recall}% of its cards when they came back days later. A short review now brings it back.` : 'Your review history says this one is slipping. A short review now brings it back.',
+      meta: [measured ? `${n.recall}% recall over ${n.reviews} reviews` : n.memoryToday != null ? `about ${n.memoryToday}% remembered today` : null, n.slipping ? `${n.slipping} card${n.slipping === 1 ? '' : 's'} keep slipping` : null].filter(Boolean).join(' · '),
+      cta: 'Refresh', href: `#/review/lesson/${n.lessonId}` });
+  }
+  if (n.kind === 'plan') { // Phase 10: by calendar day
+    const when = n.when === 'overdue' ? `Study plan · overdue since ${dayLabel(n.date)}` : n.when === 'upcoming' ? `Study plan · ahead, ${dayLabel(n.date)}` : `Study plan · today, day ${n.day}`;
+    return row({ kind: when, title: n.title, body: n.goal, cta: n.itemKind === 'quiz' ? 'Quiz' : 'Open', onclick: () => actions.openPlanItem(n.planId, n.dayIndex, n.itemIndex) });
   }
   if (n.kind === 'course') {
     return row({ kind: n.courseTitle, title: n.title, body: n.summary, meta: `lesson ${n.done + 1} of ${n.total}`, cta: n.done ? 'Next lesson' : 'Start', onclick: () => actions.openCourseLesson(n.courseId, n.si, n.li) });
@@ -184,19 +258,27 @@ function quickRows(ctx) {
   ];
 }
 
+const PACE = { ahead: 'Ahead of plan', 'on-track': 'On track', behind: 'Behind', done: 'Complete', 'not-started': 'Starts soon' };
+
 function planPanel(d, actions) {
   const plan = (d.plans || [])[0];
   if (!plan) return null;
+  // Phase 10: every item sits on a calendar day; today's are marked, earlier unopened ones are late
+  const ps = planStatus(plan, new Date());
   const items = (plan.days || []).flatMap((day, di) => (day.items || []).map((it, ii) => ({ ...it, di, ii, day: day.day || di + 1 })));
   const done = items.filter((x) => x.opened).length;
+  const dayTag = (di) => (di === ps.dayIndex ? 'Today' : dayLabel(ps.dates[di]).slice(0, 3));
   return el('section', { class: 'stat-panel plan-panel' },
     el('span', { class: 'stat-label' }, 'Study plan', el('span', { class: 'count' }, `${done}/${items.length}`)),
     el('span', { class: 'plan-goal' }, plan.goal),
-    el('ul', { class: 'checklist' }, ...items.slice(0, 8).map((it) => el('li', null, el('button', { type: 'button', class: `check ${it.opened ? 'done' : ''}`, onclick: () => actions.openPlanItem(plan.id, it.di, it.ii) },
+    el('span', { class: `plan-pace pace-${ps.pace}` }, PACE[ps.pace], ps.overdue.length ? ` · ${ps.overdue.length} overdue` : '', ps.deadline ? ` · ${countdownLabel(ps.daysToDeadline)}` : ''),
+    el('ul', { class: 'checklist' }, ...items.slice(0, 8).map((it) => el('li', null, el('button', { type: 'button', class: `check ${it.opened ? 'done' : ''} ${it.di === ps.dayIndex ? 'is-today' : ''} ${it.di < ps.dayIndex && !it.opened ? 'is-late' : ''}`, title: dayLabel(ps.dates[it.di]), onclick: () => actions.openPlanItem(plan.id, it.di, it.ii) },
       el('span', { class: 'box', 'aria-hidden': 'true' }, it.opened ? icon('check') : null),
-      el('span', { class: 'check-day' }, `D${it.day}`),
+      el('span', { class: 'check-day' }, dayTag(it.di)),
       el('span', { class: 'check-title' }, it.title))))),
-    plan.threadId ? el('a', { class: 'link-btn', href: `#/teacher/${plan.threadId}` }, 'Open the conversation', icon('arrow-right')) : null);
+    el('div', { class: 'plan-links' },
+      el('button', { class: 'link-btn', type: 'button', onclick: () => actions.exportPlan?.(plan.id) }, 'Add to calendar'),
+      plan.threadId ? el('a', { class: 'link-btn', href: `#/teacher/${plan.threadId}` }, 'Open the conversation', icon('arrow-right')) : null));
 }
 
 /** One line of reading history: status, title, metadata. */
@@ -206,7 +288,7 @@ export function readRow(l, data) {
   return el('a', { class: 'row', href: `#/lesson/${l.id}` },
     el('span', { class: `dotmark ${l.finished ? 'done' : l.status === 'complete' ? 'ready' : ''}`, 'aria-hidden': 'true' }),
     el('span', { class: 'row-title' }, l.title || l.topic),
-    el('span', { class: 'row-meta' }, [state, readingMinutes(l.markdown) ? `${readingMinutes(l.markdown)} min` : null, course?.title, relTime(l.updatedAt)].filter(Boolean).join(' · ')));
+    el('span', { class: 'row-meta' }, [state, l.finished ? outcomeLabel(lessonOutcome(data, l.id)) : null, readingMinutes(l.markdown) ? `${readingMinutes(l.markdown)} min` : null, course?.title || (l.materialTitle ? `from ${l.materialTitle}` : null), relTime(l.updatedAt)].filter(Boolean).join(' · ')));
 }
 
 export { courseProgress, deckStats };

@@ -3,7 +3,7 @@
 // streak alive.
 
 import { el, icon, inlineMd } from './ui.js';
-import { dueEntries, reviewEntry, previewDue, deckStats, awardXp, currentStreak, formatDue, XP, Rating } from './deck.js';
+import { dueEntries, lessonEntries, reviewEntry, previewDue, deckStats, awardXp, currentStreak, formatDue, XP, Rating } from './deck.js';
 import { gradePracticeItem } from './practice-core.js';
 import { recordEvidence, ratingScore } from './mastery-core.js';
 import { postJson } from './stream-client.js';
@@ -23,9 +23,10 @@ function shuffle(list, seed) {
   return a;
 }
 
-export function renderReview(root, { store, onExit, onXp }) {
+export function renderReview(root, { store, onExit, onXp, lessonId = null }) {
   const now = new Date();
-  const queue = dueEntries(store.data.deck, now, SESSION_SIZE);
+  // a lesson refresh (Phase 9) reviews that lesson's weakest cards, due or not
+  const queue = lessonId ? lessonEntries(store.data.deck, lessonId, now, SESSION_SIZE) : dueEntries(store.data.deck, now, SESSION_SIZE);
   const session = { index: 0, correct: 0, answered: 0, xp: 0, results: [] };
   // keyboard: digits pick choices / grades, T and F answer true-false, Space reveals, Enter continues
   let keys = {};
@@ -284,7 +285,7 @@ export function renderReview(root, { store, onExit, onXp }) {
         el('span', { class: 'muted small' }, formatDue(r.nextDue))))) : null,
       el('p', { class: 'muted' }, stats.due ? `${stats.due} more card${stats.due === 1 ? '' : 's'} due now.` : stats.nextDue ? `Next card due ${formatDue(stats.nextDue)}.` : ''),
       el('div', { class: 'review-actions' },
-        stats.due ? el('button', { class: 'btn btn-secondary', type: 'button', onclick: () => { cleanup(); renderReview(root, { store, onExit, onXp }); } }, 'Keep going') : null,
+        stats.due && !lessonId ? el('button', { class: 'btn btn-secondary', type: 'button', onclick: () => { cleanup(); renderReview(root, { store, onExit, onXp }); } }, 'Keep going') : null,
         el('button', { class: 'btn', type: 'button', onclick: onExit }, 'Done'))));
   }
 

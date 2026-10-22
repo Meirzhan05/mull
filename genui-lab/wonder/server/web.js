@@ -6,16 +6,16 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { createWonderCore, resolveStatic, MAX_BODY } from './app.js';
+import { createWonderCore, resolveStatic, bodyLimit } from './app.js';
 
 const json = (status, body) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' } });
 
-async function readBody(request) {
+async function readBody(request, limit) {
   if (request.method === 'GET' || request.method === 'HEAD') return {};
   const declared = Number(request.headers.get('content-length') || 0);
-  if (declared > MAX_BODY) throw Object.assign(new Error('Request body too large'), { status: 413 });
+  if (declared > limit) throw Object.assign(new Error('Request body too large'), { status: 413 });
   const text = await request.text();
-  if (Buffer.byteLength(text) > MAX_BODY) throw Object.assign(new Error('Request body too large'), { status: 413 });
+  if (Buffer.byteLength(text) > limit) throw Object.assign(new Error('Request body too large'), { status: 413 });
   if (!text) return {};
   try { return JSON.parse(text); } catch { throw Object.assign(new Error('Body must be JSON'), { status: 400 }); }
 }
@@ -31,7 +31,7 @@ export async function handleWebRequest(core, request, { logger = console } = {})
   const url = new URL(request.url);
   if (!core.hasRoute(request.method, url.pathname)) return json(404, { ok: false, error: 'Not found' });
   let body;
-  try { body = await readBody(request); } catch (err) { return json(err.status || 400, { ok: false, error: err.message }); }
+  try { body = await readBody(request, bodyLimit(url.pathname)); } catch (err) { return json(err.status || 400, { ok: false, error: err.message }); }
 
   return new Promise((resolve) => {
     let settled = false;
@@ -54,6 +54,11 @@ export async function handleWebRequest(core, request, { logger = console } = {})
         if (settled) return;
         settled = true;
         resolve(json(status, data));
+      },
+      send(status, headers, bytes) {
+        if (settled) return;
+        settled = true;
+        resolve(new Response(bytes, { status, headers }));
       },
       openStream(headers) {
         const stream = new ReadableStream({

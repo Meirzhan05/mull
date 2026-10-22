@@ -6,6 +6,7 @@
 
 import { ICONS } from '../../chatgpt-dil/src/icons.js';
 import { FUNCTION_GRAPH_VOCAB, FUNCTION_GRAPH_LESSON_RULE, GROUNDING_GUIDANCE } from './prompts-extra.js'; // Phases 3+5
+import { STYLE_VARIANTS, isVariant } from '../public/outcomes-core.js'; // Phase 9
 
 const ICON_NAMES = Object.keys(ICONS).sort().join(', ');
 
@@ -106,11 +107,12 @@ ${DIL_VOCABULARY}
 # Tools
 Your tools act inside Wonder. Each tool call shows the learner an interactive card right where you called it, so don't repeat the card's contents in your text; one short sentence that introduces or follows it is enough.
 - create_lesson: propose one lesson when a lesson would help right now (the learner asks to learn something, or a plan's first step is a lesson). The learner sees a card with Start / Not now. Propose at most one or two lessons per reply.
-- plan_study: when the learner states a goal with a time frame or asks for a plan, build a 3-7 day plan. Each day has a focus and 1-3 items: "lesson" (give a specific lesson topic), "review" (their review deck) or "quiz". Day 1 should be doable today.
+- plan_study: when the learner states a goal with a time frame or asks for a plan, build a dated plan that starts today. Each day has a focus and 1-3 items: "lesson" (give a specific lesson topic), "review" (their review deck) or "quiz". Day 1 should be doable today. When they name a date (an exam, an interview, "by Friday"), pass it as deadline (YYYY-MM-DD, worked out from today's date in get_progress) and plan backwards from it: one day per calendar day up to and including the deadline (at most 7; if the deadline is further away, plan the next 7 days), new material early, and the last day before or on the deadline a review or quiz, never a new lesson. Without a date, deadline is "" and the plan has 3-7 days.
 - quiz_me: when they ask to be quizzed or you want to check understanding. 2-4 questions; single_select (2-4 options, wrong options are plausible misconceptions) or true_false (options [{"value":"true","label":"True"},{"value":"false","label":"False"}]); exactly one correct value; always a hint and an explanation. Ground it in their recent lessons or stated goal. Don't reveal the answers in your text.
 - remember: save a durable fact that will personalize future lessons: a goal ("wants to get good at statistics in a week"), a preference ("likes worked examples"), a struggle ("confuses variance and standard deviation") or background ("knows basic algebra"). Only facts the learner told you or clearly showed; one fact per call; never save sensitive personal data (health, finances, contact details). Don't re-save what is already in the learner's memory.
 - forget: remove a memory item by its id when the learner asks you to forget something or a fact is no longer true.
-- get_progress: read their review deck, due cards, streak, XP, recent lessons, courses and saved plans. Call it before making a plan, when they ask how they are doing, or when you need to know what they studied.
+- get_progress: read their review deck, due cards, streak, XP, recent lessons, courses and saved plans, plus measured outcomes: each lesson's recall when its cards came back days later, the lessons that are fading (with the cards that keep slipping) and what has worked for this learner. Call it before making a plan, when they ask how they are doing, or when you need to know what they studied.
+- Outcomes beat impressions: a lesson whose recall is low has not been learned yet, whatever its quiz score was. When a lesson is fading, suggest reviewing it or relearning it (create_lesson on the slipping idea, in a different angle) before piling on new topics. Quote recall numbers only as they appear in get_progress.
 Tools are optional: for a simple question just answer. You may call several tools in one turn.
 
 # Format
@@ -222,13 +224,32 @@ export const EXTRACT_SCHEMA = {
   },
 };
 
-export function lessonUserMessage({ topic, level, course, lessonTitle, lessonSummary }) {
+export function lessonUserMessage({ topic, level, course, lessonTitle, lessonSummary, variant, material }) {
   const parts = [`Write a lesson about: ${topic}`];
+  // Phase 10: taught from the learner's own material (attached above as a document)
+  if (material?.title) parts.push(`Teach this from the attached material "${material.title}" (the learner's own notes or reading). Stay faithful to it: use its terms, examples and order, and cite it for the facts you take from it. Explain what it leaves implicit, but don't contradict it or add topics it doesn't cover.`);
   parts.push(`Learner level: ${level || 'beginner'}`);
   if (course?.title) parts.push(`This lesson is part of the course "${course.title}".`);
   if (lessonTitle) parts.push(`Lesson title: ${lessonTitle}`);
   if (lessonSummary) parts.push(`By the end the learner should be able to: ${lessonSummary}`);
+  // Phase 9: the teaching style under test goes in the user turn, never the cached system prompt
+  if (isVariant(variant) && STYLE_VARIANTS[variant].instruction) parts.push(STYLE_VARIANTS[variant].instruction);
   return parts.join('\n');
+}
+
+/**
+ * Phase 9: "what works for this learner", measured client-side from delayed review recall.
+ * Untrusted input: at most 4 single-line strings of 240 chars.
+ */
+export function cleanInsights(raw) {
+  return (Array.isArray(raw) ? raw : []).filter((x) => typeof x === 'string')
+    .map((x) => x.replace(/[\u0000-\u001f<>]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 240)).filter(Boolean).slice(0, 4);
+}
+
+export function insightsContext(raw) {
+  const lines = cleanInsights(raw);
+  if (!lines.length) return '';
+  return `What has worked for this learner, measured from how well they recalled earlier lessons days later:\n${lines.map((l) => `- ${l}`).join('\n')}\nLean toward what they remember best when you choose visuals and structure; keep the lesson about the requested topic.`;
 }
 
 const MAX_CONTEXT_CHARS = 24000;

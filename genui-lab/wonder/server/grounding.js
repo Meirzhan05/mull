@@ -15,6 +15,7 @@
 import { scanComponentTags } from './compile.js';
 import { idleWatch } from './claude.js';
 import { protectMath } from './math-spans.js';
+import { isMaterialUrl } from './materials.js'; // Phase 10: citations of the learner's own material
 
 // allowed_callers ["direct"]: with the default (dynamic filtering through code execution) the
 // results reach Claude as encrypted code-execution stdout and the answer carries NO text-block
@@ -38,6 +39,7 @@ const clip = (s, n) => {
   return t.length > n ? `${t.slice(0, n - 1).trimEnd()}…` : t;
 };
 const isHttp = (u) => typeof u === 'string' && /^https?:\/\//i.test(u);
+const isSourceUrl = (u) => isHttp(u) || isMaterialUrl(u);
 
 /**
  * Sources cited in one assistant turn. Each distinct URL gets a stable ChatGPT-style ref id
@@ -52,7 +54,7 @@ export function createSourceRegistry({ turnIndex = 0 } = {}) {
     turnIndex,
     /** Register one web_search_result_location citation; returns its ref id (or null). */
     cite(c) {
-      if (!c || !isHttp(c.url)) return null;
+      if (!c || !isSourceUrl(c.url)) return null;
       let s = byUrl.get(c.url);
       if (!s) {
         const n = byUrl.size;
@@ -62,7 +64,7 @@ export function createSourceRegistry({ turnIndex = 0 } = {}) {
           index: n + 1,
           url: c.url,
           title: clip(c.title || meta.title || domainOf(c.url), 160),
-          domain: domainOf(c.url),
+          domain: isHttp(c.url) ? domainOf(c.url) : 'Your material',
           snippet: clip(c.cited_text, 300),
           ...(meta.page_age ? { page_age: meta.page_age } : {}),
         };
@@ -326,9 +328,11 @@ export function createRepeatFilter(asm) {
   };
 }
 
-export async function streamGrounded(client, params, { onText, onSearch, onSearchError, signal, registry, maxContinuations = MAX_PAUSE_CONTINUATIONS, idleMs } = {}) {
+export async function streamGrounded(client, params, { onText, onSearch, onSearchError, signal, registry, mapCitation, maxContinuations = MAX_PAUSE_CONTINUATIONS, idleMs } = {}) {
   const sources = registry || createSourceRegistry();
-  const asm0 = createCiteAssembler({ emit: (s) => onText?.(s), registry: sources });
+  // mapCitation (Phase 10): document citations of the learner's material -> url-keyed sources
+  const reg = mapCitation ? { ...sources, cite: (c) => { const m = mapCitation(c); return m ? sources.cite(m) : null; } } : sources;
+  const asm0 = createCiteAssembler({ emit: (s) => onText?.(s), registry: reg });
   const asm = createRepeatFilter(asm0); // drops a re-written title/hook after a search
   let p = params;
   let message = null;

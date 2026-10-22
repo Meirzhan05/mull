@@ -44,6 +44,20 @@ export function dueEntries(deck, now = new Date(), limit = Infinity) {
     .slice(0, limit);
 }
 
+/**
+ * Phase 9 "Refresh": one lesson's cards, due or not, weakest memory first (FSRS retrievability;
+ * new cards count as 0). Reviewing early is fine: FSRS schedules from the actual elapsed time.
+ */
+export function lessonEntries(deck, lessonId, now = new Date(), limit = Infinity) {
+  const t = new Date(now);
+  return deck.items
+    .filter((e) => e.lessonId === lessonId)
+    .map((e) => ({ e, r: scheduler.get_retrievability(deserializeCard(e.card), t) }))
+    .sort((a, b) => a.r - b.r || a.e.addedAt.localeCompare(b.e.addedAt))
+    .slice(0, limit)
+    .map((x) => x.e);
+}
+
 /** Apply a review. rating: 1 Again, 2 Hard, 3 Good, 4 Easy. */
 export function reviewEntry(deck, entryId, rating, now = new Date()) {
   const idx = deck.items.findIndex((e) => e.id === entryId);

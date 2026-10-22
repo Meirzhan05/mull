@@ -5,10 +5,85 @@ import { el, icon, toast } from './ui.js';
 import { learnerTotals, activityGrid, DAILY_GOALS, goalOf } from './progress-core.js';
 import { memoryPanel } from './memory-screen.js';
 import { masteryPanel } from './mastery-screen.js'; // Phase 6
+import { insightsPanel } from './insights-panel.js'; // Phase 9
 
 export const TEXT_SIZES = [['0.92', 'Small'], ['1', 'Default'], ['1.1', 'Large'], ['1.2', 'Larger']];
 
-/** @param {{app: HTMLElement, store: object, shell: object, refresh: Function}} ctx */
+/**
+ * Phase 10: the learner's materials (stored on the Wonder server, not in this browser): open the
+ * original, teach a new lesson from it, or delete it.
+ */
+function materialsPanel(ctx) {
+  const card = el('div', { class: 'card materials-card' }, el('p', { class: 'muted small materials-empty' }, 'Loading…'));
+  const count = el('span', { class: 'count', hidden: true });
+  const size = (m) => (m.kind === 'pdf' ? `PDF, ${(m.bytes / 1048576).toFixed(1)} MB` : `Text, ${Math.max(1, Math.round(m.chars / 1000))}k characters`);
+  const draw = (items) => {
+    count.hidden = !items.length;
+    count.textContent = String(items.length);
+    if (!items.length) { card.replaceChildren(el('p', { class: 'muted small materials-empty' }, 'Nothing yet. On Today, choose Material to paste notes or attach a PDF. Wonder teaches from it and cites it.')); return; }
+    card.replaceChildren(el('ul', { class: 'materials-list' }, ...items.map((m) => el('li', { class: 'material-row' },
+      el('div', { class: 'mastery-text' }, el('strong', null, m.title), el('span', { class: 'muted small' }, `${size(m)} · added ${new Date(m.createdAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}`)),
+      el('div', { class: 'works-actions' },
+        el('a', { class: 'btn btn-ghost btn-sm', href: `/api/materials/file?id=${m.id}`, target: '_blank', rel: 'noopener' }, 'Open'),
+        el('button', { class: 'btn btn-secondary btn-sm', type: 'button', onclick: () => ctx.actions?.startMaterialLesson?.(m) }, 'New lesson'),
+        el('button', { class: 'icon-btn plain', type: 'button', 'aria-label': `Delete ${m.title}`, title: 'Delete', onclick: async () => {
+          if (!confirm(`Delete “${m.title}” from the Wonder server? Lessons already written from it stay.`)) return;
+          try {
+            const r = await fetch(`/api/materials?id=${encodeURIComponent(m.id)}`, { method: 'DELETE' }).then((x) => x.json());
+            if (!r.ok) throw new Error(r.error);
+            draw(r.items || []);
+            toast('Material deleted');
+          } catch (e) { toast(e.message || 'Could not delete it'); }
+        } }, icon('trash')))))));
+  };
+  fetch('/api/materials').then((r) => r.json()).then((r) => draw(r.items || [])).catch(() => card.replaceChildren(el('p', { class: 'muted small materials-empty' }, 'Could not load your materials.')));
+  return el('div', { class: 'mastery', id: 'materials' },
+    el('div', { class: 'section-head' }, el('h2', { class: 'rubric' }, 'Your material', count), el('span', { class: 'muted small' }, 'Stored on this Wonder server')),
+    card);
+}
+
+/** A row with a switch. */
+function switchSetting(title, note, on, onChange) {
+  const sw = el('button', { class: 'switch', type: 'button', role: 'switch', 'aria-checked': String(on), 'aria-label': title }, el('span', { class: 'switch-knob' }));
+  sw.addEventListener('click', () => { const next = sw.getAttribute('aria-checked') !== 'true'; sw.setAttribute('aria-checked', String(next)); onChange(next); });
+  return el('div', { class: 'setting' }, el('div', { class: 'setting-text' }, el('strong', null, title), el('p', { class: 'muted small' }, note)), sw);
+}
+
+/**
+ * Phase 10: daily study reminder. A browser notification at this time while a Wonder tab is open
+ * (if today's goal isn't met), and the time used for plan events added to a calendar.
+ */
+function reminderSetting(settings, setSetting) {
+  const r = () => ({ enabled: false, time: '18:00', ...(settings().reminder || {}) });
+  const supported = typeof Notification !== 'undefined';
+  const note = el('p', { class: 'muted small' });
+  const sw = el('button', { class: 'switch', type: 'button', role: 'switch', 'aria-checked': String(r().enabled && supported && Notification.permission === 'granted'), 'aria-label': 'Daily reminder', disabled: !supported });
+  sw.append(el('span', { class: 'switch-knob' }));
+  const time = el('input', { type: 'time', value: r().time, 'aria-label': 'Reminder time', class: 'time-input' });
+  const describe = () => {
+    note.textContent = !supported ? 'This browser has no notifications. Use “Add to calendar” on your study plan instead.'
+      : Notification.permission === 'denied' ? 'Notifications are blocked for this site in your browser settings. “Add to calendar” on your plan still works.'
+        : r().enabled ? `Wonder nudges you at ${r().time} on days you haven’t met your goal, while a Wonder tab is open. Plan events added to your calendar use this time too.`
+          : 'A nudge at this time on days you haven’t met your goal. Plan events added to your calendar use this time too.';
+  };
+  sw.addEventListener('click', async () => {
+    const next = sw.getAttribute('aria-checked') !== 'true';
+    if (next && Notification.permission !== 'granted') {
+      let p = 'denied';
+      try { p = await Notification.requestPermission(); } catch {}
+      if (p !== 'granted') { describe(); toast('Notifications were not allowed'); return; }
+    }
+    setSetting({ reminder: { ...r(), enabled: next } });
+    sw.setAttribute('aria-checked', String(next));
+    describe();
+    toast(next ? `Daily reminder at ${r().time}` : 'Reminder off');
+  });
+  time.addEventListener('change', () => { if (/^\d{2}:\d{2}$/.test(time.value)) { setSetting({ reminder: { ...r(), time: time.value } }); describe(); } });
+  describe();
+  return el('div', { class: 'setting' }, el('div', { class: 'setting-text' }, el('strong', null, 'Daily reminder'), note), el('div', { class: 'reminder-controls' }, time, sw));
+}
+
+/** @param {{app: HTMLElement, store: object, shell: object, refresh: Function, createLesson: Function}} ctx */
 export function renderYou(ctx) {
   const { app, store, shell } = ctx;
   const d = store.data;
@@ -65,7 +140,9 @@ export function renderYou(ctx) {
         radioSeg('Theme', [['system', 'System', 'monitor'], ['light', 'Light', 'sun'], ['dark', 'Dark', 'moon']], shell.theme, (v) => shell.setTheme(v))),
       el('div', { class: 'setting' },
         el('div', { class: 'setting-text' }, el('strong', null, 'Lesson text size'), el('p', { class: 'muted small' }, 'Also in each lesson’s menu.')),
-        radioSeg('Lesson text size', TEXT_SIZES, String(settings().fontScale || 1), (v) => setSetting({ fontScale: Number(v) })))));
+        radioSeg('Lesson text size', TEXT_SIZES, String(settings().fontScale || 1), (v) => setSetting({ fontScale: Number(v) }))),
+      reminderSetting(settings, setSetting),
+      switchSetting('Teacher check-in', 'The first time you open the Teacher each day, it looks at your progress and suggests the best next step.', settings().teacherCheckIn !== false, (on) => setSetting({ teacherCheckIn: on }))));
 
   // -- data
   const exportBtn = el('button', { class: 'btn btn-secondary', type: 'button', onclick: () => {
@@ -91,7 +168,7 @@ export function renderYou(ctx) {
         el('div', { style: { display: 'flex', gap: '8px', flexWrap: 'wrap' } }, exportBtn, resetBtn))));
 
   // settings-style layout: a section nav beside the content; the nav follows your scroll
-  const SECTIONS = [['profile', 'Profile'], ['knowledge', 'What you know'], ['activity', 'Activity'], ['preferences', 'Preferences'], ['memory', 'Memory'], ['data', 'Data']];
+  const SECTIONS = [['profile', 'Profile'], ['knowledge', 'What you know'], ['works', 'What works'], ['activity', 'Activity'], ['preferences', 'Preferences'], ['memory', 'Memory'], ['material', 'Material'], ['data', 'Data']];
   const sec = (id, ...kids) => el('section', { class: 'you-sec', id: `you-${id}` }, ...kids);
   const navLinks = SECTIONS.map(([id, label]) => el('a', { class: 'you-nav-link', href: `#/you`, dataset: { sec: id }, onclick: (e) => {
     e.preventDefault();
@@ -103,9 +180,11 @@ export function renderYou(ctx) {
   const content = el('div', { class: 'you-content' },
     sec('profile', head, stats),
     sec('knowledge', masteryPanel(ctx)), // Phase 6
+    sec('works', insightsPanel(ctx)), // Phase 9
     sec('activity', heat),
     sec('preferences', settingsCard),
     sec('memory', memoryPanel(ctx)),
+    sec('material', materialsPanel(ctx)), // Phase 10
     sec('data', dataCard));
   app.replaceChildren(el('div', { class: 'you' }, el('h1', { class: 'h-xl you-title' }, 'You'), el('div', { class: 'you-layout' }, nav, content)));
   const io = new IntersectionObserver((entries) => {

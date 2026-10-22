@@ -52,6 +52,7 @@ function planFor(topic) {
   const T = topic;
   return {
     goal: `Get good at ${T} in a week`,
+    deadline: '',
     days: [
       { day: 1, focus: 'The big picture', items: [{ kind: 'lesson', title: `What ${T} is really about`, topic: `${T}: the big picture` }] },
       { day: 2, focus: 'Core ideas', items: [{ kind: 'lesson', title: `The core ideas of ${T}`, topic: `core ideas of ${T}` }, { kind: 'review', title: 'Review yesterday\'s cards' }] },
@@ -74,6 +75,26 @@ function quizQuestions(progress, topic) {
 function script(text, ctx) {
   const t = text.toLowerCase();
   const topic = topicOf(text) || 'the topic you picked';
+  if (text.startsWith('[Wonder: the learner just opened the Teacher')) { // Phase 10 check-in
+    return [
+      { text: '', tools: [{ name: 'get_progress', input: {} }] },
+      () => {
+        const p = ctx.results.get_progress || {};
+        const due = p.deck?.due || 0;
+        const fading = p.outcomes?.fading?.[0];
+        const plan = p.plans?.[0];
+        const hi = p.streak ? `Welcome back: day ${p.streak + 1} of your streak is one review away.` : 'Welcome back.';
+        if (fading && fading.recall != null && fading.recall < 65) {
+          const slip = fading.hardCards?.[0] ? ` The card that keeps slipping: *${fading.hardCards[0]}*` : '';
+          return { text: `${hi} One thing stands out: you recalled only **${fading.recall}%** of “${fading.title}” when its cards came back.${slip} Rereading won't fix that; a fresh angle will.`, tools: [{ name: 'create_lesson', input: { topic: fading.title, level: 'beginner', reason: 'Relearn it from a different angle, then your next reviews will tell us if it stuck.' } }] };
+        }
+        if (due) return { text: `${hi} You have **${due} card${due === 1 ? '' : 's'} due**. Start there: reviewing right as recall dips is the cheapest way to keep it.${followups(['Start my review', 'What is fading?', 'Make me a study plan'])}` };
+        if (plan && plan.opened < plan.total) return { text: `${hi} Your plan for “${plan.goal}” is ${plan.opened} of ${plan.total} done. Today's item is waiting on your home screen.${followups(['What should I study today?', 'Quiz me'])}` };
+        return { text: `${hi} Nothing is due, so it's a good day for something new.`, tools: [{ name: 'create_lesson', input: { topic: 'How memory works: the forgetting curve', level: 'beginner', reason: 'Five minutes on why your reviews are scheduled the way they are.' } }] };
+      },
+      { text: followups(['Make me a study plan', 'What is fading?', 'Quiz me']) },
+    ];
+  }
   if (/\b(forget|delete that|remove that)\b/.test(t)) {
     const id = ctx.memoryIds[0];
     return [

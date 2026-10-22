@@ -10,7 +10,9 @@ import { normalizePracticeItem } from './practice-core.js';
 import { renderReview } from './review.js';
 import { el, icon, toast, inlineMd, lessonTitleFrom } from './ui.js';
 import { observeMath } from './math.js';
-import { renderTeacher, queueTeacherMessage } from './teacher-screen.js';
+import { renderTeacher, queueTeacherMessage, queueTeacherOpener } from './teacher-screen.js';
+import { planToIcs } from './ics.js'; // Phase 10
+import { dailyBrief, briefNotification, reminderDue } from './brief-core.js'; // Phase 10
 import { createSteerBar } from './steer-bar.js'; // Phase 4
 import { lessonPhase, statusAfterStop, carryOver, mergeContinuedAppData, sourcesFromAppData, pageCount, pageTitles } from './steering-core.js';
 import { createLessonLocks } from './lesson-lock.js'; // one writer per lesson across tabs
@@ -26,6 +28,7 @@ import { needsOnboarding, showOnboarding } from './onboarding.js';
 import { dailyProgress, courseProgress, roman, readingMinutes } from './progress-core.js';
 import { storeEvidence, quizEvidence, explainEvidence, requestMastery } from './mastery-core.js'; // Phase 6 + 8
 import { qualitySummary } from './quality-core.js'; // Phase 7
+import { pickVariant, insightsForPrompt, lessonOutcome, RECALL_MIN, STYLE_VARIANTS } from './outcomes-core.js'; // Phase 9
 
 const store = createStore();
 const PAGE_ID = uid('page'); // this page load: a 'streaming' lesson owned by another id was interrupted
@@ -50,23 +53,28 @@ let teardown = [];
 // ------------------------------------------------------------------ actions shared by screens
 
 /** Start a lesson on a topic (Today, palette, Library, suggestions). */
-function startLesson(topic, level = 'beginner') {
+function startLesson(topic, level = 'beginner', extra = {}) {
   const t = String(topic || '').trim();
   if (!t) return;
-  const id = createLesson({ topic: t, title: t, level });
+  const id = createLesson({ topic: t, title: t, level, ...extra });
   location.hash = `#/lesson/${id}`;
 }
 
+/** Phase 10: a lesson taught from the learner's own material (a stored material id). */
+function startMaterialLesson(material, level = 'beginner') {
+  startLesson(material.title, level, { materialId: material.id, materialTitle: material.title });
+}
+
 /** Plan a course with Claude, then open its map. Resolves false on failure. */
-async function planCourse(topic, level = 'beginner') {
+async function planCourse(topic, level = 'beginner', material = null) {
   const t = String(topic || '').trim();
   if (!t) return false;
   toast('Planning your course…', 6000);
   try {
-    const { plan } = await postJson('/api/course/plan', { topic: t, level });
+    const { plan } = await postJson('/api/course/plan', { topic: t, level, ...(material ? { materialId: material.id } : {}) });
     const id = uid('course');
     store.update((dd) => {
-      dd.courses.unshift({ id, title: plan.title, description: plan.description, level, topic: t, createdAt: new Date().toISOString(), sections: plan.sections.map((s) => ({ title: s.title, lessons: s.lessons.map((l) => ({ ...l, lessonId: null })) })) });
+      dd.courses.unshift({ id, title: plan.title, description: plan.description, level, topic: t, ...(material ? { materialId: material.id, materialTitle: material.title } : {}), createdAt: new Date().toISOString(), sections: plan.sections.map((s) => ({ title: s.title, lessons: s.lessons.map((l) => ({ ...l, lessonId: null })) })) });
       return dd;
     });
     location.hash = `#/course/${id}`;
@@ -103,7 +111,7 @@ function openCourseLesson(courseId, si, li) {
   if (!entry) return;
   let lessonId = entry.lessonId && store.data.lessons[entry.lessonId] ? entry.lessonId : null;
   if (!lessonId) {
-    lessonId = createLesson({ topic: entry.title, title: entry.title, level: course.level, courseId, sectionIndex: si, lessonIndex: li, lessonTitle: entry.title, lessonSummary: entry.summary, course: { title: course.title } });
+    lessonId = createLesson({ topic: entry.title, title: entry.title, level: course.level, courseId, sectionIndex: si, lessonIndex: li, lessonTitle: entry.title, lessonSummary: entry.summary, course: { title: course.title }, ...(course.materialId ? { materialId: course.materialId, materialTitle: course.materialTitle } : {}) });
     store.update((d) => { const c = d.courses.find((x) => x.id === courseId); c.sections[si].lessons[li].lessonId = lessonId; return d; });
   }
   location.hash = `#/lesson/${lessonId}`;
@@ -121,7 +129,44 @@ function nextInCourse(courseId, afterLessonId) {
   return null;
 }
 
-const actions = { startLesson, planCourse, askTeacher, openPlanItem, openCourseLesson };
+/** Phase 10: open the Teacher with a check-in turn (it looks at progress and speaks first). */
+function teacherCheckIn() {
+  queueTeacherOpener();
+  if (location.hash === '#/teacher') route(); else location.hash = '#/teacher';
+}
+
+/** Phase 10: download a saved plan as an .ics file (one event per day at the reminder time). */
+function exportPlan(planId) {
+  const plan = (store.data.plans || []).find((p) => p.id === planId);
+  if (!plan) return;
+  const time = store.data.settings?.reminder?.time || '18:00';
+  const ics = planToIcs(plan, { time, url: `${location.origin}/#/` });
+  const a = el('a', { href: URL.createObjectURL(new Blob([ics], { type: 'text/calendar' })), download: `wonder-plan-${String(plan.goal || 'study').toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 40)}.ics` });
+  document.body.append(a);
+  a.click();
+  setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 500);
+  toast(`Calendar file with ${plan.days?.length || 0} study sessions at ${time}`);
+}
+
+const actions = { startLesson, startMaterialLesson, planCourse, askTeacher, openPlanItem, openCourseLesson, teacherCheckIn, exportPlan };
+
+// Phase 10: the daily reminder. While any Wonder tab is open, a notification fires once a day at
+// the learner's time if today's goal is not met, saying what the brief would put first. The
+// "shown today" mark lives outside the synced state so two tabs don't both fire.
+const REMINDED_KEY = 'wonder.reminded';
+function checkReminder() {
+  try {
+    if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return;
+    const last = localStorage.getItem(REMINDED_KEY);
+    if (!reminderDue(store.data.settings, store.data.stats, new Date(), last)) return;
+    localStorage.setItem(REMINDED_KEY, new Date().toLocaleDateString('en-CA'));
+    const { title, body } = briefNotification(dailyBrief(store.data));
+    const n = new Notification(title, { body, tag: 'wonder-daily', icon: document.querySelector('link[rel=icon]')?.href });
+    n.onclick = () => { window.focus(); location.hash = '#/'; n.close(); };
+  } catch { /* notifications or storage unavailable */ }
+}
+setInterval(checkReminder, 30000);
+setTimeout(checkReminder, 3000);
 
 // ------------------------------------------------------------------ chrome
 
@@ -164,10 +209,36 @@ function createLesson(fields) {
   const id = uid('lesson');
   const now = new Date().toISOString();
   store.update((d) => {
-    d.lessons[id] = { id, status: 'new', markdown: '', dil: null, appData: null, tutor: [], finished: false, createdAt: now, updatedAt: now, ...fields };
+    // Phase 9: each new lesson is taught in one style of the balanced experiment (outcomes-core)
+    d.lessons[id] = { id, status: 'new', markdown: '', dil: null, appData: null, tutor: [], finished: false, createdAt: now, updatedAt: now, variant: pickVariant(d), ...fields };
     return d;
   });
   return id;
+}
+
+/** Phase 9: "How well it stuck": recall days later, forecast memory and the cards that keep slipping. */
+function stuckPanel(o, lesson) {
+  const pct = (r) => `${Math.round(r * 100)}%`;
+  const style = STYLE_VARIANTS[lesson?.variant]?.label;
+  const measured = o.recall.n >= RECALL_MIN;
+  const delays = Object.entries(o.buckets).filter(([, b]) => b.n).map(([k, b]) => `${pct(b.rate)} after ${k.replace('-', '–')} days`).join(' · ');
+  const body = measured
+    ? `You recalled ${pct(o.recall.rate)} of its cards when they came back days later (${o.recall.n} review${o.recall.n === 1 ? '' : 's'}${delays ? `: ${delays}` : ''}).`
+    : o.cards
+      ? `Measured when its cards come back for review after at least a day (${o.recall.n} of ${RECALL_MIN} reviews so far).`
+      : 'Collect the cards to measure how well this lesson sticks.';
+  const tone = o.verdict === 'stuck' ? 'ok' : o.verdict === 'fading' || o.verdict === 'weak' ? 'warn' : '';
+  return el('div', { class: `stuck ${tone}` },
+    el('div', { class: 'stuck-head' },
+      el('strong', null, 'How well it stuck'),
+      el('span', { class: 'stuck-figures' },
+        measured ? el('span', { class: 'stuck-fig' }, `${pct(o.recall.rate)} recall`) : null,
+        o.memoryToday != null ? el('span', { class: 'stuck-fig', title: 'FSRS estimate of how likely you are to recall a card right now' }, `~${pct(o.memoryToday)} today`) : null,
+        style ? el('span', { class: 'tag' }, style) : null)),
+    el('p', null, body),
+    o.leeches.length ? el('p', null, 'Keeps slipping: ', el('em', null, inlineMd(o.leeches[0].prompt)), o.leeches.length > 1 ? ` and ${o.leeches.length - 1} more` : '') : null,
+    o.reviewed && (o.verdict === 'fading' || o.verdict === 'weak' || o.leeches.length)
+      ? el('a', { class: 'link-btn', href: `#/review/lesson/${o.lessonId}` }, 'Refresh this lesson’s cards', icon('arrow-right')) : null);
 }
 
 function saveLesson(id, patch) {
@@ -489,6 +560,7 @@ function renderLesson(lessonId) {
       el('h2', { class: 'h-lg' }, 'This lesson is filed'),
       el('p', { class: 'muted' }, 'Its cards are in your review deck. Come back to the text any time, or continue.'),
       el('div', { class: 'end-stats' }, score),
+      stuckPanel(lessonOutcome(store.data, lessonId), l),
       el('div', { class: 'end-actions' },
         nxt ? el('button', { class: 'btn btn-lg', type: 'button', onclick: () => openCourseLesson(l.courseId, nxt.si, nxt.li) }, `Next: ${nxt.title}`, icon('arrow-right')) : null,
         due ? el('a', { class: `btn btn-lg ${nxt ? 'btn-secondary' : ''}`, href: '#/review' }, `Review ${due} card${due === 1 ? '' : 's'}`) : null,
@@ -687,6 +759,8 @@ function renderLesson(lessonId) {
     try {
       r = await streamTurn('/api/lesson/stream', {
         topic: l.topic, level: l.level, lessonTitle: l.lessonTitle, lessonSummary: l.lessonSummary, course: l.course, memoryEnabled: memoryEnabled(), mastery: requestMastery(store.data),
+        variant: l.variant, learnerInsights: memoryEnabled() ? insightsForPrompt(store.data) : [], // Phase 9
+        ...(l.materialId ? { materialId: l.materialId } : {}), // Phase 10
         ...(continueFrom ? { continueFrom } : {}),
       }, {
         signal: ac.signal,
@@ -817,7 +891,8 @@ function handleClientAction(a, { lessonId, openTutor, tutor }) {
       break;
     }
     case 'open_url':
-      if (/^https?:\/\//i.test(p.url || '')) window.open(p.url, '_blank', 'noopener,noreferrer');
+      // web sources, or a cited page of the learner's own material (Phase 10)
+      if (/^https?:\/\//i.test(p.url || '') || /^\/api\/materials\/file\?id=mat-[0-9a-f]{12}(#page=\d+)?$/.test(p.url || '')) window.open(p.url, '_blank', 'noopener,noreferrer');
       break;
     default:
   }
@@ -1110,10 +1185,10 @@ function showPack(lesson, data, { onFinished } = {}) {
 
 // ------------------------------------------------------------------ review + routing
 
-function renderReviewScreen() {
+function renderReviewScreen(lessonId = null) {
   const root = el('div', { class: 'review-wrap' });
   app.replaceChildren(root);
-  const cleanup = renderReview(root, { store, onExit: () => { location.hash = '#/'; }, onXp: () => { refreshChrome(); shell.bump(); } });
+  const cleanup = renderReview(root, { store, lessonId, onExit: () => { location.hash = lessonId ? '#/you' : '#/'; }, onXp: () => { refreshChrome(); shell.bump(); } });
   if (typeof cleanup === 'function') teardown.push(cleanup);
 }
 
@@ -1132,6 +1207,7 @@ function route() {
   if ((m = /^#\/lesson\/([\w-]+)$/.exec(h))) { screen = 'lesson'; document.body.dataset.screen = screen; renderLesson(m[1]); }
   else if ((m = /^#\/course\/([\w-]+)$/.exec(h))) { screen = 'course'; document.body.dataset.screen = screen; renderCourse(m[1]); }
   else if (h === '#/review') { screen = 'review'; document.body.dataset.screen = screen; renderReviewScreen(); }
+  else if ((m = /^#\/review\/lesson\/([\w-]+)$/.exec(h))) { screen = 'review'; document.body.dataset.screen = screen; renderReviewScreen(m[1]); }
   else if ((m = /^#\/teacher(?:\/([\w-]+))?$/.exec(h))) { screen = 'teacher'; document.body.dataset.screen = screen; renderTeacher(screenCtx(), m[1] || null); }
   else if (h === '#/library') { screen = 'library'; document.body.dataset.screen = screen; renderLibrary(screenCtx()); }
   else if (h === '#/you' || h === '#/memory' || h === '#/mastery') { screen = 'you'; document.body.dataset.screen = screen; renderYou(screenCtx()); }

@@ -16,6 +16,7 @@ import { Anthropic } from './claude.js';
 import { validateComponentProps } from './catalog-schema.js';
 import { MEMORY_KINDS, cleanFact } from './memory.js';
 import { sanitizeMastery } from './learner-model.js';
+import { cleanDateKey, planDayBounds, dateDays, localKey, daysBetween } from '../public/plan-core.js'; // Phase 10
 
 export const MAX_TEACHER_ITERATIONS = 6;
 const LEVELS = ['beginner', 'intermediate', 'advanced'];
@@ -46,13 +47,14 @@ export const TEACHER_TOOLS = Object.freeze([
   },
   {
     name: 'plan_study',
-    description: 'Create a 3-7 day study plan for a goal. Shows a plan card with one row per day and an Open button per item, plus Save plan. Call this when the learner states a goal with a time frame or asks for a plan. Call get_progress first if you have not yet.',
+    description: 'Create a dated study plan for a goal, starting today: 3-7 days, or with a deadline, as many days as fit up to and including the deadline (at most 7). Shows a plan card with one row per calendar day and an Open button per item, plus Save plan. Call this when the learner states a goal with a time frame or asks for a plan. Call get_progress first if you have not yet (it has today\'s date).',
     input_schema: {
       type: 'object',
       additionalProperties: false,
-      required: ['goal', 'days'],
+      required: ['goal', 'deadline', 'days'],
       properties: {
         goal: S('The goal in the learner\'s words, short'),
+        deadline: S('The date the goal is due as YYYY-MM-DD (an exam, interview, trip) when the learner gave one, else ""'),
         days: {
           type: 'array',
           description: '3-7 days in order',
@@ -199,14 +201,17 @@ export function validateToolInput(name, input) {
     case 'plan_study': {
       const goal = oneLine(input.goal, 200);
       if (!goal) return { ok: false, error: 'goal must not be empty' };
-      if (input.days.length < 3 || input.days.length > 7) return { ok: false, error: `days must have 3-7 entries (got ${input.days.length})` };
+      const deadline = cleanDateKey(input.deadline);
+      if (input.deadline && !deadline) return { ok: false, error: `deadline must be a real date as YYYY-MM-DD or "" (got ${JSON.stringify(input.deadline)})` };
+      // the deadline-relative bounds are checked at execution, against the learner's today
+      if (input.days.length < (deadline ? 1 : 3) || input.days.length > 7) return { ok: false, error: `days must have ${deadline ? 1 : 3}-7 entries (got ${input.days.length})` };
       const days = [];
       for (const [i, d] of input.days.entries()) {
         const items = d.items.slice(0, 4).map((it, j) => ({ id: `d${i + 1}i${j + 1}`, kind: it.kind, title: oneLine(it.title, 120), topic: oneLine(it.topic || (it.kind === 'review' ? '' : it.title), 200) }));
         if (!items.length || items.some((it) => !it.title)) return { ok: false, error: `day ${i + 1} needs 1-3 items with titles` };
         days.push({ day: i + 1, focus: oneLine(d.focus, 120) || `Day ${i + 1}`, items });
       }
-      return { ok: true, value: { goal, days } };
+      return { ok: true, value: { goal, deadline, days } };
     }
     case 'quiz_me': {
       const topic = oneLine(input.topic, 160) || 'Quick check';
@@ -248,10 +253,31 @@ export function sanitizeProgress(p) {
       title: oneLine(l?.title, 160),
       finished: !!l?.finished,
       ...(l?.quiz && Number.isFinite(Number(l.quiz.total)) ? { quiz: { score: n(l.quiz.score), total: n(l.quiz.total) } } : {}),
+      ...(l?.recall != null && Number.isFinite(Number(l.recall)) ? { recall: Math.min(100, n(l.recall)), recallReviews: n(l.recallReviews) } : {}),
       when: oneLine(l?.when, 40),
     })).filter((l) => l.title),
     courses: list(o.courses, 6).map((c) => ({ title: oneLine(c?.title, 160), done: n(c?.done), total: n(c?.total) })).filter((c) => c.title),
     plans: list(o.plans, 3).map((p2) => ({ goal: oneLine(p2?.goal, 160), days: n(p2?.days), opened: n(p2?.opened), total: n(p2?.total) })).filter((x) => x.goal),
+    outcomes: sanitizeOutcomes(o.outcomes),
+  };
+}
+
+const VERDICTS = ['stuck', 'fading', 'weak', 'unknown'];
+/** Phase 9 outcome fields of the snapshot (fading lessons, what works), bounded. */
+function sanitizeOutcomes(o) {
+  const x = o && typeof o === 'object' ? o : {};
+  const pct = (v) => (v != null && Number.isFinite(Number(v)) ? Math.max(0, Math.min(100, Math.round(Number(v)))) : undefined);
+  return {
+    fading: (Array.isArray(x.fading) ? x.fading.slice(0, 4) : []).map((f) => ({
+      title: oneLine(f?.title, 160),
+      verdict: VERDICTS.includes(f?.verdict) ? f.verdict : 'unknown',
+      ...(pct(f?.recall) != null ? { recall: pct(f.recall), reviews: Math.max(0, Math.round(Number(f.reviews) || 0)) } : {}),
+      ...(pct(f?.memoryToday) != null ? { memoryToday: pct(f.memoryToday) } : {}),
+      hardCards: (Array.isArray(f?.hardCards) ? f.hardCards.slice(0, 2) : []).map((c) => oneLine(c, 200)).filter(Boolean),
+    })).filter((f) => f.title),
+    whatWorks: (Array.isArray(x.whatWorks) ? x.whatWorks.slice(0, 4) : []).map((t) => oneLine(t, 240)).filter(Boolean),
+    overallRecall: pct(x.overallRecall) ?? null,
+    delayedReviews: Math.max(0, Math.round(Number(x.delayedReviews) || 0)),
   };
 }
 
@@ -268,7 +294,7 @@ export function cardSummary(s) {
   if (s.kind === 'plan') {
     const items = (s.days || []).flatMap((d) => d.items || []);
     const opened = items.filter((i) => i.opened).map((i) => i.title);
-    return `${(s.days || []).length}-day study plan for "${s.goal}" (${s.saved ? 'saved by the learner' : 'not saved yet'}${opened.length ? `; opened: ${opened.join(', ')}` : ''})`;
+    return `${(s.days || []).length}-day study plan for "${s.goal}"${s.startDate ? ` from ${s.startDate}` : ''}${s.deadline ? ` with deadline ${s.deadline}` : ''} (${s.saved ? 'saved by the learner' : 'not saved yet'}${opened.length ? `; opened: ${opened.join(', ')}` : ''})`;
   }
   if (s.kind === 'memory') {
     const f = s.item?.fact || '';
@@ -316,9 +342,18 @@ export function createTeacherToolkit({ memory, progress, mastery, memoryEnabled 
         return { content: `An approval card for the lesson "${input.topic}" (${input.level}) is now shown to the learner with Start / Not now. The lesson is generated only if they tap Start. Don't restate the card.`, card: { kind: 'approval', state } };
       }
       case 'plan_study': {
-        const state = { kind: 'plan', goal: input.goal, days: input.days.map((d) => ({ ...d, items: d.items.map((i) => ({ ...i, opened: false })) })), saved: false };
+        const today = cleanDateKey(snapshot.today) || localKey();
+        const deadline = input.deadline || '';
+        const b = planDayBounds(today, deadline);
+        if (b.error) return { content: `${b.error} Ask the learner for the new date, or plan without a deadline ("").`, isError: true };
+        if (input.days.length < b.min || input.days.length > b.max) {
+          return { content: `The plan has ${input.days.length} days but must have ${b.min === b.max ? b.min : `${b.min}-${b.max}`}${deadline ? `: today is ${today} and the deadline is ${deadline} (${daysBetween(today, deadline) + 1} days including both)` : ''}. Call plan_study again with that many days.`, isError: true };
+        }
+        const days = dateDays(input.days.map((d) => ({ ...d, items: d.items.map((i) => ({ ...i, opened: false })) })), today);
+        const state = { kind: 'plan', goal: input.goal, startDate: today, ...(deadline ? { deadline } : {}), days, saved: false };
         const lessons = input.days.flatMap((d) => d.items).filter((i) => i.kind === 'lesson').length;
-        return { content: `A ${input.days.length}-day plan card for "${input.goal}" is now shown (${lessons} lessons). The learner can open each item and save the plan. Don't list the days again; at most mention what to do first.`, card: { kind: 'plan', state } };
+        const span = `${days[0].label} to ${days[days.length - 1].label}`;
+        return { content: `A ${days.length}-day plan card for "${input.goal}" is now shown, dated ${span}${deadline ? ` (deadline ${deadline})` : ''}, with ${lessons} lessons. The learner can open each item and save the plan. Don't list the days again; at most mention what to do first.`, card: { kind: 'plan', state } };
       }
       case 'quiz_me': {
         const title = `Quiz: ${input.topic}`;
@@ -511,7 +546,9 @@ function stateFromPayload(raw) {
       items: (Array.isArray(d?.items) ? d.items : []).slice(0, 4).map((it, j) => ({ id: `d${i + 1}i${j + 1}`, kind: ITEM_KINDS.includes(it?.kind) ? it.kind : 'lesson', title: oneLine(it?.title, 120), topic: oneLine(it?.topic, 200), opened: !!it?.opened })).filter((it) => it.title),
     })).filter((d) => d.items.length);
     const goal = oneLine(s.goal, 200);
-    return goal && days.length ? { kind: 'plan', goal, days, saved: !!s.saved } : null;
+    const startDate = cleanDateKey(s.startDate);
+    const deadline = cleanDateKey(s.deadline);
+    return goal && days.length ? { kind: 'plan', goal, ...(startDate ? { startDate } : {}), ...(deadline ? { deadline } : {}), days: startDate ? dateDays(days, startDate) : days, saved: !!s.saved } : null;
   }
   const fact = cleanFact(s.item?.fact);
   if (!fact) return null;
@@ -543,7 +580,7 @@ export function handleTeacherAction({ cards, memory }, { action_type: type, payl
   } else if (s.kind === 'plan') {
     if (type === 'teacher_accept') {
       s.saved = true;
-      clientActions.push({ type: 'save_plan', payload: { resolutionId: rid, plan: { goal: s.goal, days: s.days } } });
+      clientActions.push({ type: 'save_plan', payload: { resolutionId: rid, plan: { goal: s.goal, startDate: s.startDate, deadline: s.deadline, days: s.days } } });
     } else if (type === 'teacher_undo') {
       if (s.saved) { s.saved = false; clientActions.push({ type: 'unsave_plan', payload: { resolutionId: rid } }); }
     } else if (type === 'teacher_open_item') {

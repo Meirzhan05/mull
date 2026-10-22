@@ -43,6 +43,7 @@ const thinking = { type: 'thinking', thinking: 'Planning…', signature: 'sig' }
 const tool = (id, name, input) => ({ type: 'tool_use', id, name, input });
 const PLAN = {
   goal: 'Statistics in a week',
+  deadline: '',
   days: [
     { day: 1, focus: 'Averages', items: [{ kind: 'lesson', title: 'Mean, median, mode', topic: 'mean median and mode' }] },
     { day: 2, focus: 'Spread', items: [{ kind: 'lesson', title: 'Variance', topic: 'variance and standard deviation' }, { kind: 'review', title: 'Review' }] },
@@ -133,7 +134,7 @@ test('tool loop: tool_use blocks run, ALL results return in one user message, fu
 });
 
 test('strict validation failure -> is_error tool_result, tool not run; quiz_me splices a normal Quiz', async () => {
-  const badPlan = { goal: 'Stats', days: PLAN.days.slice(0, 2) }; // 2 days: outside 3-7
+  const badPlan = { goal: 'Stats', deadline: '', days: PLAN.days.slice(0, 2) }; // 2 days: outside 3-7
   const quiz = { topic: 'Averages', questions: [{ id: 'q1', prompt: 'Median of 1, 2, 9?', question_type: 'single_select', options: [{ value: 'a', label: '2' }, { value: 'b', label: '4' }], correct_values: ['a'], hint: 'Middle value.', explanation: 'Sorted, the middle is 2.', concept: 'Median' }] };
   const client = fakeToolClient([
     { content: [tool('p1', 'plan_study', badPlan), tool('p2', 'create_lesson', { topic: 'x', level: 'expert', reason: 'r' }), tool('p3', 'quiz_me', quiz)], stop_reason: 'tool_use' },
