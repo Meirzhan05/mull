@@ -42,6 +42,8 @@ export const RECIPE_COMPONENTS = Object.freeze({
   Cycle: 'cycle diagram',
   Flashcards: 'in-lesson flashcards',
   FunctionGraph: 'interactive graph (FunctionGraph)',
+  Diagram: 'interactive diagram (Diagram)',
+  Figure: 'real image (Figure)',
   Callout: 'callout asides',
 });
 
@@ -50,10 +52,13 @@ const pct = (r) => `${Math.round(r * 100)}%`;
 const confidence = (n) => (n < RECALL_MIN ? 'none' : n < 8 ? 'low' : n < 20 ? 'ok' : 'good');
 const bucketOf = (days) => (days <= 3 ? '1-3' : days <= 13 ? '4-13' : '14+');
 
+/** A Figure counts only when the server found an image for it (else nothing was shown). */
+const showedFigure = (lesson) => Object.values(lesson?.dil?.appData?.opGenui?.componentResults || {}).some((r) => r?.state?.found === true && typeof r.state.src === 'string');
+
 /** What went into a lesson, read from its stored markdown (works for lessons made before Phase 9). */
 export function lessonRecipe(lesson) {
   const md = String(lesson?.markdown || '');
-  const components = Object.keys(RECIPE_COMPONENTS).filter((name) => new RegExp(`<${name}\\b`).test(md));
+  const components = Object.keys(RECIPE_COMPONENTS).filter((name) => new RegExp(`<${name}\\b`).test(md) && (name !== 'Figure' || showedFigure(lesson)));
   return {
     variant: isVariant(lesson?.variant) ? lesson.variant : 'standard',
     components,

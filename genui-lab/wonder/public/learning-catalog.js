@@ -669,8 +669,9 @@ export function learningCatalog(__dil, DIL, GenUI, useSavedImpl) {
     return h('text', { __component: 'TeacherCard', size: 'sm', color: 'secondary' }, str(s.summary || s.kind));
   }
 
-  return { LessonStepper, Reveal, CompareToggle, InputOutputSlider, Flowchart, Timeline, BarChart, ConceptMap, Cycle, Quiz, Flashcards, KeyTerm, Callout, Celebration, TeacherCard, ExplainBack };
+  // WonderMd: the inline-markdown text helper, shared with catalog-media.js (Diagram, Figure)
+  return { LessonStepper, Reveal, CompareToggle, InputOutputSlider, Flowchart, Timeline, BarChart, ConceptMap, Cycle, Quiz, Flashcards, KeyTerm, Callout, Celebration, TeacherCard, ExplainBack, WonderMd: md };
 }
 
 /** Program prelude that binds the learning components as free identifiers for compiled code. */
-export const LEARNING_PRELUDE = `const __wonderUseSaved=(${createUseSaved.toString()})(DIL);\nconst {${LEARNING_COMPONENT_NAMES.join(',')}}=(${learningCatalog.toString()})(__dil,DIL,GenUI,__wonderUseSaved);\n`;
+export const LEARNING_PRELUDE = `const __wonderUseSaved=(${createUseSaved.toString()})(DIL);\nconst {${LEARNING_COMPONENT_NAMES.join(',')},WonderMd:__wonderMd}=(${learningCatalog.toString()})(__dil,DIL,GenUI,__wonderUseSaved);\n`;

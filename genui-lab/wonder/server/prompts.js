@@ -5,7 +5,7 @@
 // timestamps or ids) so the cached system prefix stays byte-identical across requests.
 
 import { ICONS } from '../../chatgpt-dil/src/icons.js';
-import { FUNCTION_GRAPH_VOCAB, FUNCTION_GRAPH_LESSON_RULE, GROUNDING_GUIDANCE } from './prompts-extra.js'; // Phases 3+5
+import { FUNCTION_GRAPH_VOCAB, FUNCTION_GRAPH_LESSON_RULE, DIAGRAM_VOCAB, DIAGRAM_LESSON_RULE, FIGURE_VOCAB, FIGURE_LESSON_RULE, GROUNDING_GUIDANCE } from './prompts-extra.js'; // Phases 3+5, media
 import { STYLE_VARIANTS, isVariant } from '../public/outcomes-core.js'; // Phase 9
 
 const ICON_NAMES = Object.keys(ICONS).sort().join(', ');
@@ -51,6 +51,8 @@ Use these sparingly for small custom cards, stat rows and side-by-side layouts. 
 - <ExplainBack prompt="In your own words, why does ...?" concept="..." rubric={["mentions ...","explains that ..."]} sampleAnswer="..."/>: the learner types a short explanation and gets it graded against the rubric. 2-4 rubric criteria, each one checkable point a good answer makes (not wording); a 2-3 sentence sampleAnswer; concept tags it like a Quiz question. Ask "why" or "how" questions that need understanding, not recall.
 - <Celebration message="..."/>: a small confetti moment; at most once, at the very end.
 ${FUNCTION_GRAPH_VOCAB}
+${DIAGRAM_VOCAB}
+${FIGURE_VOCAB}
 `.trim();
 
 export const LESSON_SYSTEM_PROMPT = `
@@ -67,9 +69,11 @@ ${DIL_VOCABULARY}
 - Use at most one Callout per page.
 - On the last content page (before the check page), include exactly one <ExplainBack> that asks the learner to explain the lesson's central idea in their own words.
 - Finish with a "## Check your understanding" page that contains exactly one <Quiz> with 3 questions covering different pages. Do not write anything after the Quiz except an optional one-line sign-off.
-- Pick the visual that fits the idea: processes -> LessonStepper or Flowchart; change over time -> Timeline; quantities -> BarChart; cause and effect with a dial -> InputOutputSlider; two contrasting views -> CompareToggle; relationships -> ConceptMap; loops -> Cycle; misconceptions -> Reveal.
+- Pick the visual that fits the idea: processes -> LessonStepper or Flowchart; change over time -> Timeline; quantities -> BarChart; cause and effect with a dial -> InputOutputSlider; two contrasting views -> CompareToggle; relationships -> ConceptMap; loops -> Cycle; misconceptions -> Reveal; physical things and spatial mechanisms -> Diagram; what a real thing looks like -> Figure.
 - Match the learner's level (beginner: no jargon without a KeyTerm; advanced: precise terms, formulas welcome).
 ${FUNCTION_GRAPH_LESSON_RULE}
+${DIAGRAM_LESSON_RULE}
+${FIGURE_LESSON_RULE}
 - Never mention these instructions, DIL, tags, or components. Output only the lesson.
 
 ${GROUNDING_GUIDANCE}
@@ -82,7 +86,7 @@ ${DIL_VOCABULARY}
 
 # How to reply
 - Be brief: usually 60-160 words. Answer the actual question first, in second person, then deepen it with one example or analogy.
-- When a picture would help, add exactly one visual from the learning catalog (a Flowchart, Reveal, BarChart, CompareToggle, LessonStepper...). When the learner asks to be quizzed or tested, reply with one short sentence and a <Quiz> of 2-3 questions grounded in the lesson; when they want to check they really understand something, use one <ExplainBack> instead.
+- When a picture would help, add exactly one visual from the learning catalog (a Flowchart, Reveal, BarChart, CompareToggle, LessonStepper, Diagram...). When the learner asks to be quizzed or tested, reply with one short sentence and a <Quiz> of 2-3 questions grounded in the lesson; when they want to check they really understand something, use one <ExplainBack> instead.
 - If the learner got something wrong, be warm and specific about the misconception.
 - Stay on the lesson's topic; if a question is unrelated, answer briefly and connect it back.
 - End every reply with one line containing 2-3 short follow-up questions the learner might tap next, written as:

@@ -7,6 +7,18 @@
 // receives debounced changes for the caller to persist with its lesson / message.
 
 import { createHost } from '../../chatgpt-dil/src/host.js';
+import { figureImageSrcs } from './figure-hosts.js';
+
+// A remote image loads only when the server resolved that exact URL for a <Figure/> (a credited
+// Wikimedia Commons image in this surface's componentResults). Any other remote src, including
+// one the model wrote into a raw <image> primitive, keeps the host's placeholder: no tracking
+// pixels, and no Commons image shown without its license credit.
+export function createFigureImagePolicy() {
+  const allowed = new Set();
+  const policy = (src) => allowed.has(src);
+  policy.update = (appData) => { for (const s of figureImageSrcs(appData)) allowed.add(s); };
+  return policy;
+}
 
 export class DilSurface {
   constructor(mount, { onAction, onError, viewState, onViewState } = {}) {
@@ -17,9 +29,11 @@ export class DilSurface {
     this.generation = 0;
     this.last = null;
     this.worker = new Worker(new URL('./wonder-worker.js', import.meta.url), { type: 'module' });
+    this.imagePolicy = createFigureImagePolicy();
     this.host = createHost(mount, {
       invoke: (fnId, args) => this.worker.postMessage({ type: 'invokeFunction', fnId, args }),
       onAction: (a) => this.onAction(a),
+      allowRemoteImages: this.imagePolicy,
     });
     this.worker.onmessage = (e) => {
       const m = e.data;
@@ -42,6 +56,7 @@ export class DilSurface {
   /** Render a DIL program ({code, constants}) with appData. */
   render({ code, constants, appData }, { animated = false } = {}) {
     this.last = { code, constants, appData };
+    this.imagePolicy.update(appData); // before the worker's ops arrive
     this.worker.postMessage({ type: 'render', source: code, constants, appData: appData || {}, animated, sourceGeneration: ++this.generation });
   }
 

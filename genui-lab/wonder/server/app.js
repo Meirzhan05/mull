@@ -42,6 +42,7 @@ import { lintLesson, critiqueLesson, applyQuizFixes, qualityReport } from './cri
 import { createGrader } from './grader.js'; // Phase 8
 import { SOCRATIC_TUTOR_MODE } from './prompts-extra.js'; // Phase 8
 import { pageCount } from '../public/steering-core.js';
+import { createCommonsLookup, createFigureResolver, withFigures, FIGURE_SETTLE_MS } from './figures.js'; // media: <Figure/> images
 
 export const STATIC_ROOTS = [
   { prefix: '/chatgpt-dil/src/', dir: path.join(LAB_ROOT, 'chatgpt-dil', 'src'), exts: new Set(['.js', '.css']) },
@@ -192,21 +193,47 @@ export function createWonderCore(opts = {}) {
     return meta && data != null ? { meta, data } : { missing: true };
   };
 
+  // <Figure/> images come from Wikimedia Commons; WONDER_FIGURES=off (or figureLookup: null) skips the network
+  const figureLookup = opts.figureLookup !== undefined ? opts.figureLookup : env.WONDER_FIGURES === 'off' ? null : createCommonsLookup();
+  const figureSettleMs = opts.figureSettleMs ?? FIGURE_SETTLE_MS;
+  const figureCache = new Map(); // shared by this core's streams (server/figures.js)
+
   function switchToDemo(reason) {
     state.mode = 'demo';
     state.demoReason = reason;
     logger.warn?.(`[wonder] switching to demo mode (${reason})`);
   }
 
-  function startNdjson(t, { record, ...writerOpts } = {}) {
+  // Every DIL stream (lesson, tutor, Teacher) resolves its <Figure/>s: a lookup that lands
+  // mid-stream re-sends the program (writer.refresh), and settleFigures runs before complete.
+  function startNdjson(t, { record, appData, appDataFor, ...writerOpts } = {}) {
     const io = t.openStream({ 'Content-Type': CONTENT_TYPE, 'Cache-Control': 'no-store', 'X-Accel-Buffering': 'no' });
     // WONDER_RECORD_DIR: tee the NDJSON of each stream to a file (fixture capture; records hold no credentials)
     let tee = null;
     if (recordDir && record) {
       try { fs.mkdirSync(recordDir, { recursive: true }); tee = fs.createWriteStream(path.join(recordDir, `${record}-${new Date().toISOString().replace(/[:.]/g, '-')}.ndjson`)); io.onClose(() => tee.end()); } catch { tee = null; }
     }
-    const writer = createTurnWriter({ write: (s) => { io.write(s); tee?.write(s); }, ...writerOpts });
-    return { writer, signal: io.signal };
+    const figures = createFigureResolver({ lookup: figureLookup, logger, cache: figureCache, signal: io.signal });
+    const writer = createTurnWriter({ write: (s) => { io.write(s); tee?.write(s); }, ...writerOpts, appDataFor: withFigures(appDataFor || (() => appData), figures) });
+    let queued = false;
+    figures.onUpdate(() => {
+      if (queued) return;
+      queued = true;
+      queueMicrotask(() => {
+        queued = false;
+        if (writer.finished || io.signal.aborted) return;
+        try { writer.refresh(); } catch (err) { logger.warn?.(`[wonder] figure refresh failed: ${err?.message || err}`); }
+      });
+    });
+    return { writer, signal: io.signal, figures };
+  }
+  /** Before the final record: wait briefly for image lookups, then report the rest as not found. */
+  async function settleFigures(writer, figures, signal) {
+    if (figures.pending && !signal.aborted) {
+      writer.reasoning('Finding images…', { icon: 'image' });
+      await figures.settle(figureSettleMs);
+    }
+    figures.finalize();
   }
 
   /** Run Claude, falling back to demo on missing credentials. Returns 'done' | 'demo' | 'failed'. */
@@ -279,7 +306,7 @@ export function createWonderCore(opts = {}) {
     const userTurn = (text) => (material ? [documentBlock(material.meta, material.data), { type: 'text', text }] : text);
     // a continuation seeds the kept pages' sources and numbers new refs after theirs
     const sources = cont ? createContinuationSources({ turnIndex: 0, kept: cont.kept, seed: cont.sources }) : createSourceRegistry({ turnIndex: 0 });
-    const { writer, signal } = startNdjson(t, { record: 'lesson', appDataFor: citationAppData(sources), ...(cont?.messageId ? { messageId: cont.messageId } : {}) });
+    const { writer, signal, figures } = startNdjson(t, { record: 'lesson', appDataFor: citationAppData(sources), ...(cont?.messageId ? { messageId: cont.messageId } : {}) });
     writer.start();
     if (cont) applyContinue(writer, cont);
     else writer.reasoning('Planning the lesson…');
@@ -354,6 +381,7 @@ export function createWonderCore(opts = {}) {
       if (body.verify !== false && !signal.aborted) {
         await verifyLesson(writer, { topic, level, sources, signal, useClaude: state.mode === 'claude' && !result.refused && !result.truncated });
       }
+      await settleFigures(writer, figures, signal);
       if (!signal.aborted) writer.complete({ truncated: result.truncated });
     }
     t.end();
@@ -406,7 +434,7 @@ export function createWonderCore(opts = {}) {
     while (history.length && history[0].role !== 'user') history.shift();
     const useWebSearch = body.useWebSearch === true; // Phase 3: off for the tutor unless asked
     const sources = createSourceRegistry({ turnIndex: Math.floor(history.length / 2) + 1 });
-    const { writer, signal } = startNdjson(t, { record: 'tutor', appDataFor: citationAppData(sources) });
+    const { writer, signal, figures } = startNdjson(t, { record: 'tutor', appDataFor: citationAppData(sources) });
     writer.start();
     writer.reasoning('Thinking about your question…');
     const onText = (t) => writer.append(t);
@@ -426,6 +454,7 @@ export function createWonderCore(opts = {}) {
       result = { status: r.aborted ? 'aborted' : 'done', truncated: false };
     }
     if (result.status === 'done') finishGrounded(writer, sources);
+    if (result.status === 'done') await settleFigures(writer, figures, signal);
     if (result.status === 'done') writer.complete({ truncated: result.truncated, defaultFollowups: result.refused ? [] : DEFAULT_TUTOR_FOLLOWUPS });
     t.end();
   }
@@ -483,7 +512,7 @@ export function createWonderCore(opts = {}) {
     const threadId = typeof body.threadId === 'string' && /^[\w-]{1,80}$/.test(body.threadId) ? body.threadId : undefined;
     const history = cleanHistory(body.history, { map: stripCardMarkup });
     const appData = { opGenui: { componentResults: {}, modelDataBindings: {} } };
-    const { writer, signal } = startNdjson(t, { appData, record: 'teacher' });
+    const { writer, signal, figures } = startNdjson(t, { appData, record: 'teacher' });
     writer.start({ conversationId: threadId });
     writer.reasoning('Thinking…');
     const params = buildStreamParams({
@@ -527,6 +556,8 @@ export function createWonderCore(opts = {}) {
       }
     }
     if (result.refused) writer.append(REFUSAL_MESSAGE);
+    await settleFigures(writer, figures, signal);
+    if (signal.aborted) return t.end();
     writer.complete({ truncated: result.truncated, defaultFollowups: result.refused ? [] : DEFAULT_TEACHER_FOLLOWUPS });
     t.end();
   }

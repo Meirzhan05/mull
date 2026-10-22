@@ -15,6 +15,7 @@
 import { scanComponentTags } from './compile.js';
 import { idleWatch } from './claude.js';
 import { protectMath } from './math-spans.js';
+import { constRef } from './dil-constants.js';
 import { isMaterialUrl } from './materials.js'; // Phase 10: citations of the learner's own material
 
 // allowed_callers ["direct"]: with the default (dynamic filtering through code execution) the
@@ -399,10 +400,6 @@ export async function streamGrounded(client, params, { onText, onSearch, onSearc
 // ---------------------------------------------------------------- componentResults
 
 const OBJ_RE = /__dil\.jsx\((Cite|Sources),\{([^{}]*)\}/g;
-const constRef = (body, key) => {
-  const m = new RegExp(`"${key}":__dilConstants\\["(\\d+)"\\]`).exec(body);
-  return m ? m[1] : null;
-};
 const item = (s) => ({ ref: s.ref, ref_id: s.ref, index: s.index, url: s.url, title: s.title, domain: s.domain, source_label: s.domain, snippet: s.snippet || null, ...(s.page_age ? { page_age: s.page_age } : {}) });
 
 /** Resolved state for every Cite/Sources in a compiled program (keyed by __resolutionId). */

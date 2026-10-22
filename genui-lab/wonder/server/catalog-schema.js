@@ -10,6 +10,8 @@
 import { validateVoiceVisualPayload } from '../../wondering-genui/src/voice-visuals.js';
 import { validateFunctionGraph, functionGraphFallback } from './function-graph.js'; // Phase 5
 import { validateExplainBack, explainBackFallback } from './grader.js'; // Phase 8
+import { validateDiagram, diagramFallback } from './diagram.js'; // media: model-drawn diagrams
+import { validateFigure, figureFallback } from './figures.js'; // media: Wikimedia Commons images
 
 const isObj = (v) => typeof v === 'object' && v !== null && !Array.isArray(v);
 const text = (v) => (typeof v === 'string' ? v.trim() : typeof v === 'number' && Number.isFinite(v) ? String(v) : '');
@@ -268,6 +270,8 @@ export const LEARNING_COMPONENTS = Object.freeze({
   TeacherCard: { validate: TeacherCard, resolved: true },
   FunctionGraph: { validate: validateFunctionGraph }, // Phase 5 (server/function-graph.js)
   ExplainBack: { validate: validateExplainBack }, // Phase 8 (server/grader.js)
+  Diagram: { validate: validateDiagram }, // media (server/diagram.js)
+  Figure: { validate: validateFigure }, // media (server/figures.js; image resolved server-side)
 });
 export const LEARNING_COMPONENT_NAMES = Object.freeze(Object.keys(LEARNING_COMPONENTS));
 
@@ -295,6 +299,8 @@ export function fallbackMarkdownFor(name, props, { inline = false } = {}) {
   if (name === 'TeacherCard') return '';
   if (name === 'FunctionGraph') return functionGraphFallback(p); // Phase 5
   if (name === 'ExplainBack') return explainBackFallback(p); // Phase 8
+  if (name === 'Diagram') return diagramFallback(p);
+  if (name === 'Figure') return figureFallback(p);
   if (name === 'KeyTerm' || inline) {
     const term = pick(p, 'term', 'title', 'label', 'name');
     const def = pick(p, 'definition', 'text');
