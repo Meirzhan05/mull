@@ -3,6 +3,7 @@
 // the plain store state, so it is tested under node:test.
 
 import { dateKey, deckStats, currentStreak } from './deck.js';
+import { nextPlanItem } from './plan-core.js';
 
 export const DAILY_GOALS = Object.freeze([
   { xp: 10, label: 'Casual', hint: 'A few minutes a day' },
@@ -157,10 +158,9 @@ export function upNext(data, now = new Date()) {
   if (deck.due > 0) out.push({ kind: 'review', due: deck.due });
   const plan = (data?.plans || [])[0];
   if (plan) {
-    for (const [di, day] of (plan.days || []).entries()) {
-      const ii = (day.items || []).findIndex((it) => !it.opened);
-      if (ii >= 0) { out.push({ kind: 'plan', planId: plan.id, dayIndex: di, itemIndex: ii, day: day.day || di + 1, title: day.items[ii].title, itemKind: day.items[ii].kind || 'lesson', goal: plan.goal }); break; }
-    }
+    // Phase 7: by calendar day: overdue items first, then today's, then (ahead) the next day's
+    const n = nextPlanItem(plan, now);
+    if (n) out.push({ kind: 'plan', planId: plan.id, dayIndex: n.dayIndex, itemIndex: n.itemIndex, day: plan.days[n.dayIndex].day || n.dayIndex + 1, date: n.date, when: n.when, title: n.item.title, itemKind: n.item.kind || 'lesson', goal: plan.goal });
   }
   for (const course of data?.courses || []) {
     const c = courseNext(data, course, unfinished?.id);

@@ -10,7 +10,9 @@ import { normalizePracticeItem } from './practice-core.js';
 import { renderReview } from './review.js';
 import { el, icon, toast, inlineMd, lessonTitleFrom, progressRing, confetti } from './ui.js';
 import { observeMath } from './math.js';
-import { renderTeacher, queueTeacherMessage } from './teacher-screen.js';
+import { renderTeacher, queueTeacherMessage, queueTeacherOpener } from './teacher-screen.js';
+import { planToIcs } from './ics.js'; // Phase 7
+import { dailyBrief, briefNotification, reminderDue } from './brief-core.js'; // Phase 7
 import { createSteerBar } from './steer-bar.js'; // Phase 4
 import { lessonPhase, statusAfterStop, carryOver, mergeContinuedAppData, sourcesFromAppData, pageCount, pageTitles } from './steering-core.js';
 import { createLessonLocks } from './lesson-lock.js'; // one writer per lesson across tabs
@@ -120,7 +122,44 @@ function nextInCourse(courseId, afterLessonId) {
   return null;
 }
 
-const actions = { startLesson, planCourse, askTeacher, openPlanItem, openCourseLesson };
+/** Phase 7: open the Teacher with a check-in turn (it looks at progress and speaks first). */
+function teacherCheckIn() {
+  queueTeacherOpener();
+  if (location.hash === '#/teacher') route(); else location.hash = '#/teacher';
+}
+
+/** Phase 7: download a saved plan as an .ics file (one event per day at the reminder time). */
+function exportPlan(planId) {
+  const plan = (store.data.plans || []).find((p) => p.id === planId);
+  if (!plan) return;
+  const time = store.data.settings?.reminder?.time || '18:00';
+  const ics = planToIcs(plan, { time, url: `${location.origin}/#/` });
+  const a = el('a', { href: URL.createObjectURL(new Blob([ics], { type: 'text/calendar' })), download: `wonder-plan-${String(plan.goal || 'study').toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 40)}.ics` });
+  document.body.append(a);
+  a.click();
+  setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 500);
+  toast(`Calendar file with ${plan.days?.length || 0} study sessions at ${time}`);
+}
+
+const actions = { startLesson, planCourse, askTeacher, openPlanItem, openCourseLesson, teacherCheckIn, exportPlan };
+
+// Phase 7: the daily reminder. While any Wonder tab is open, a notification fires once a day at
+// the learner's time if today's goal is not met, saying what the brief would put first. The
+// "shown today" mark lives outside the synced state so two tabs don't both fire.
+const REMINDED_KEY = 'wonder.reminded';
+function checkReminder() {
+  try {
+    if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return;
+    const last = localStorage.getItem(REMINDED_KEY);
+    if (!reminderDue(store.data.settings, store.data.stats, new Date(), last)) return;
+    localStorage.setItem(REMINDED_KEY, new Date().toLocaleDateString('en-CA'));
+    const { title, body } = briefNotification(dailyBrief(store.data));
+    const n = new Notification(title, { body, tag: 'wonder-daily', icon: document.querySelector('link[rel=icon]')?.href });
+    n.onclick = () => { window.focus(); location.hash = '#/'; n.close(); };
+  } catch { /* notifications or storage unavailable */ }
+}
+setInterval(checkReminder, 30000);
+setTimeout(checkReminder, 3000);
 
 // ------------------------------------------------------------------ chrome
 

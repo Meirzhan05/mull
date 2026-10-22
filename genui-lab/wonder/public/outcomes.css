@@ -32,3 +32,26 @@
 .recall-tag { font-weight: 600; }
 .recall-tag.stuck { color: var(--success); }
 .recall-tag.fading, .recall-tag.weak { color: var(--warning); }
+
+/* Dated study plan on Today */
+.plan-head-actions { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; }
+.plan-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.plan-meta { display: flex; gap: 6px; flex-wrap: wrap; }
+.plan-date { margin-left: 8px; font-size: 12px; font-weight: 500; color: var(--ink); opacity: .55; }
+.plan-day.is-today .plan-num { box-shadow: 0 0 0 2px var(--brand); }
+.plan-day.is-today .plan-date { opacity: 1; color: var(--brand); font-weight: 700; }
+.plan-day.is-late .plan-date { opacity: 1; color: var(--warning); }
+
+/* The Teacher's daily brief on Today */
+.brief { display: grid; gap: 12px; padding: 16px 18px; }
+.brief-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.brief-text { display: grid; gap: 2px; flex: 1 1 240px; min-width: 0; }
+.brief-text .eyebrow { margin: 0; }
+.brief-items { display: grid; gap: 8px; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); }
+.brief-item { display: flex; align-items: center; gap: 12px; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface); color: inherit; font: inherit; text-align: left; cursor: pointer; min-width: 0; }
+.brief-item:hover { border-color: var(--brand-muted); }
+.brief-item .up-item-text { flex: 1; min-width: 0; }
+
+/* Reminder setting */
+.reminder-controls { display: flex; align-items: center; gap: 12px; }
+.time-input { font: inherit; padding: 6px 10px; border: 1px solid var(--line-strong); border-radius: var(--radius-sm); background: var(--surface); color: var(--ink); }

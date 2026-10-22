@@ -7,6 +7,8 @@ import { currentStreak } from './deck.js';
 import { dailyProgress, weekStrip, upNext, suggestedTopics, greeting, courseProgress } from './progress-core.js';
 import { pageCount } from './steering-core.js';
 import { lessonOutcome, outcomeLabel } from './outcomes-core.js'; // Phase 6
+import { planStatus, dayLabel, countdownLabel } from './plan-core.js'; // Phase 7
+import { dailyBrief } from './brief-core.js'; // Phase 7
 
 const MODES = [
   { id: 'lesson', label: 'Lesson', icon: 'play', placeholder: 'What do you want to learn? e.g. How do vaccines work?', hint: 'A 5–10 minute interactive lesson' },
@@ -105,16 +107,26 @@ export function renderToday(ctx) {
 
   // -- saved study plan
   const plan = (d.plans || [])[0];
+  const ps = plan ? planStatus(plan, now) : null;
+  const PACE = { ahead: ['green', 'Ahead of plan'], 'on-track': ['brand', 'On track'], behind: ['amber', 'Catch up'], done: ['green', 'Plan complete'], 'not-started': ['', 'Starts soon'] };
   const planSection = plan ? el('section', { class: 'section' },
-    el('div', { class: 'section-head' }, el('h2', { class: 'h-md' }, 'Your study plan'), plan.threadId ? el('a', { class: 'link-btn', href: `#/teacher/${plan.threadId}` }, 'Open chat', icon('arrow-right')) : null),
+    el('div', { class: 'section-head' }, el('h2', { class: 'h-md' }, 'Your study plan'),
+      el('div', { class: 'plan-head-actions' },
+        el('button', { class: 'link-btn', type: 'button', onclick: () => actions.exportPlan?.(plan.id) }, icon('calendar'), 'Add to calendar'),
+        plan.threadId ? el('a', { class: 'link-btn', href: `#/teacher/${plan.threadId}` }, 'Open chat', icon('arrow-right')) : null)),
     el('div', { class: 'card plan-card' },
-      el('strong', { class: 'plan-goal' }, plan.goal),
+      el('div', { class: 'plan-top' },
+        el('strong', { class: 'plan-goal' }, plan.goal),
+        el('span', { class: 'plan-meta' },
+          el('span', { class: `tag ${PACE[ps.pace][0]}` }, PACE[ps.pace][1], ps.overdue.length ? ` · ${ps.overdue.length} overdue` : ''),
+          ps.deadline ? el('span', { class: `tag ${ps.daysToDeadline <= 1 ? 'amber' : ''}`, title: `Deadline ${dayLabel(ps.deadline)}` }, icon('target'), countdownLabel(ps.daysToDeadline)) : null)),
       el('ol', { class: 'plan-days' }, ...(plan.days || []).map((dd, di) => {
         const done = (dd.items || []).every((i) => i.opened);
-        return el('li', { class: 'plan-day' },
+        const late = di < ps.dayIndex && !done;
+        return el('li', { class: `plan-day ${di === ps.dayIndex ? 'is-today' : ''} ${late ? 'is-late' : ''}` },
           el('span', { class: `plan-num ${done ? 'done' : ''}` }, done ? icon('check') : String(dd.day || di + 1)),
           el('div', { class: 'plan-body' },
-            el('span', { class: 'plan-focus' }, dd.focus),
+            el('span', { class: 'plan-focus' }, dd.focus, el('span', { class: 'plan-date' }, di === ps.dayIndex ? 'Today' : dayLabel(ps.dates[di]))),
             el('div', { class: 'plan-items' }, ...(dd.items || []).map((it, ii) => el('button', { class: `plan-item ${it.opened ? 'opened' : ''}`, type: 'button', onclick: () => actions.openPlanItem(plan.id, di, ii) },
               it.opened ? icon('check') : icon(it.kind === 'review' ? 'repeat' : it.kind === 'quiz' ? 'sparkles' : 'book'), it.title)))));
       })))) : null;
@@ -125,8 +137,29 @@ export function renderToday(ctx) {
     el('div', { class: 'section-head' }, el('h2', { class: 'h-md' }, 'Recent'), el('a', { class: 'link-btn', href: '#/library' }, 'Library', icon('arrow-right'))),
     el('div', { class: 'rail' }, ...recent.map((l) => lessonTile(l, d)))) : null;
 
-  app.replaceChildren(el('div', { class: 'today' }, head, el('div', null, omni, suggestions), upSection, planSection, recentSection));
+  app.replaceChildren(el('div', { class: 'today' }, head, briefCard(dailyBrief(d, now), ctx), el('div', null, omni, suggestions), upSection, planSection, recentSection));
   if (status.mode && !recent.length) setTimeout(() => input.focus({ preventScroll: true }), 60);
+}
+
+/** Phase 7: the Teacher's daily brief: why each action matters today, from local state only. */
+function briefCard(brief, ctx) {
+  const { actions } = ctx;
+  const ICON = { review: ['repeat', 'amber'], refresh: ['target', 'flame'], plan: ['calendar', 'green'], teacher: ['teacher', ''] };
+  const run = (a) => {
+    if (a.type === 'review') location.hash = '#/review';
+    else if (a.type === 'refresh') location.hash = `#/review/lesson/${a.lessonId}`;
+    else if (a.type === 'plan') actions.openPlanItem(a.planId, a.dayIndex, a.itemIndex);
+    else actions.teacherCheckIn?.();
+  };
+  return el('section', { class: 'card brief', 'aria-label': 'Your Teacher’s brief' },
+    el('div', { class: 'brief-head' },
+      el('span', { class: 'tutor-avatar', 'aria-hidden': 'true' }, icon('teacher')),
+      el('div', { class: 'brief-text' }, el('p', { class: 'eyebrow' }, 'Your Teacher’s brief'), el('strong', null, brief.headline)),
+      el('button', { class: 'btn btn-secondary btn-sm', type: 'button', onclick: () => actions.teacherCheckIn?.() }, icon('chat'), 'Talk it through')),
+    el('div', { class: 'brief-items' }, ...brief.items.map((it) => el('button', { class: 'brief-item', type: 'button', onclick: () => run(it.action) },
+      el('span', { class: `icon-tile ${ICON[it.kind]?.[1] || ''}` }, icon(ICON[it.kind]?.[0] || 'sparkles')),
+      el('span', { class: 'up-item-text' }, el('strong', null, it.title), el('span', { class: 'muted small' }, it.why)),
+      icon('chevron')))));
 }
 
 function heroCard(n, ctx) {
@@ -152,7 +185,8 @@ function heroCard(n, ctx) {
       el('div', { class: 'up-meta' }, el('span', { class: 'tag amber' }, icon('clock'), `About ${Math.max(1, Math.round(Math.min(n.due, 12) * 0.4))} min`)));
   }
   if (n.kind === 'plan') {
-    return card(`Day ${n.day} of your plan`, n.title, n.goal,
+    const when = n.when === 'overdue' ? `Overdue from ${dayLabel(n.date)}` : n.when === 'upcoming' ? `Ahead: ${dayLabel(n.date)}` : `Today · day ${n.day} of your plan`;
+    return card(when, n.title, n.goal,
       [el('button', { class: 'btn btn-lg', type: 'button', onclick: () => actions.openPlanItem(n.planId, n.dayIndex, n.itemIndex) }, icon(n.itemKind === 'review' ? 'repeat' : n.itemKind === 'quiz' ? 'sparkles' : 'play'), n.itemKind === 'quiz' ? 'Quiz me' : n.itemKind === 'review' ? 'Review' : 'Start')]);
   }
   if (n.kind === 'course') {
@@ -175,7 +209,7 @@ function sideItem(n, ctx) {
     return href ? el('a', { ...attrs, href }, ...kids) : el('button', { ...attrs, type: 'button', onclick }, ...kids);
   };
   if (n.kind === 'review') return row(el('span', { class: 'icon-tile amber' }, icon('repeat')), `Review ${n.due} card${n.due === 1 ? '' : 's'}`, 'Due now', null, '#/review');
-  if (n.kind === 'plan') return row(el('span', { class: 'icon-tile green' }, icon('calendar')), n.title, `Day ${n.day} of your plan`, () => actions.openPlanItem(n.planId, n.dayIndex, n.itemIndex));
+  if (n.kind === 'plan') return row(el('span', { class: 'icon-tile green' }, icon('calendar')), n.title, n.when === 'overdue' ? `Overdue from ${dayLabel(n.date)}` : n.when === 'upcoming' ? `Ahead: ${dayLabel(n.date)}` : `Today · day ${n.day} of your plan`, () => actions.openPlanItem(n.planId, n.dayIndex, n.itemIndex));
   if (n.kind === 'course') return row(el('span', { class: 'icon-tile' }, icon('layers')), n.title, `Next in ${n.courseTitle}`, () => actions.openCourseLesson(n.courseId, n.si, n.li));
   if (n.kind === 'continue') return row(el('span', { class: 'icon-tile' }, icon('book')), n.title, 'Continue reading', null, `#/lesson/${n.lessonId}`);
   return el('span');

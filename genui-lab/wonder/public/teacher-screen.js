@@ -8,9 +8,9 @@ import { uid } from './store.js';
 import { DilSurface, mergeComponentResults } from './dil-surface.js';
 import { hasViewState } from './view-state.js';
 import { streamTurn, postJson } from './stream-client.js';
-import { XP } from './deck.js';
+import { XP, dateKey } from './deck.js';
 import { el, icon, toast } from './ui.js';
-import { progressSnapshot, historyForModel, threadTitle } from './teacher-core.js';
+import { progressSnapshot, historyForModel, threadTitle, TEACHER_OPENER } from './teacher-core.js';
 
 const STARTERS = [
   ['calendar', 'I want to get good at statistics in a week. I already know basic algebra.'],
@@ -22,6 +22,9 @@ const STARTERS = [
 let pendingMessage = null;
 /** Open a thread (or a new chat) and send a message as soon as it renders. */
 export function queueTeacherMessage(text) { pendingMessage = String(text || ''); }
+let pendingOpener = false;
+/** Phase 7: open the Teacher with a check-in turn (the Teacher speaks first). */
+export function queueTeacherOpener() { pendingOpener = true; }
 
 function relTime(iso) {
   const ms = Date.now() - Date.parse(iso || 0);
@@ -207,7 +210,8 @@ export function renderTeacher(ctx, threadId) {
       }
       case 'save_plan':
         store.update((d) => {
-          d.plans = [{ id: p.resolutionId, threadId: thread?.id || null, goal: p.plan?.goal, days: p.plan?.days || [], savedAt: new Date().toISOString() }, ...(d.plans || []).filter((x) => x.id !== p.resolutionId)].slice(0, 5);
+          // Phase 7: the plan keeps its calendar dates (startDate) and deadline
+          d.plans = [{ id: p.resolutionId, threadId: thread?.id || null, goal: p.plan?.goal, startDate: p.plan?.startDate || undefined, deadline: p.plan?.deadline || undefined, days: p.plan?.days || [], savedAt: new Date().toISOString() }, ...(d.plans || []).filter((x) => x.id !== p.resolutionId)].slice(0, 5);
           return d;
         });
         toast('Plan saved to your home screen');
@@ -224,7 +228,7 @@ export function renderTeacher(ctx, threadId) {
 
   // -- restore
   for (const m of thread?.messages || []) {
-    if (m.role === 'user') addUser(m.content);
+    if (m.role === 'user') { if (!m.opener) addUser(m.content); }
     else if (m.dil) { const a = addAssistant(m); a.done(); a.render(m.dil, false); }
     else if (m.content) { const a = addAssistant(m); a.done(); a.body.append(el('p', { class: 'muted small' }, 'This reply was archived to save space.')); }
   }
@@ -232,8 +236,8 @@ export function renderTeacher(ctx, threadId) {
   setTimeout(scrollDown, 0);
 
   // -- send
-  async function send(text) {
-    const message = String(text || '').trim();
+  async function send(text, { opener = false } = {}) {
+    const message = opener ? TEACHER_OPENER : String(text || '').trim();
     if (!message || busy) return;
     busy = true;
     sendBtn.disabled = true;
@@ -241,20 +245,20 @@ export function renderTeacher(ctx, threadId) {
     input.style.height = 'auto';
     showFollowups([]);
     if (!thread) {
-      thread = { id: uid('thread'), title: threadTitle(message), messages: [], createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+      thread = { id: uid('thread'), title: opener ? `Check-in · ${new Date().toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })}` : threadTitle(message), messages: [], createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
       history.replaceState(null, '', `#/teacher/${thread.id}`);
       main.querySelector('.teacher-title').textContent = thread.title;
     }
     const history2 = historyForModel(thread.messages);
-    thread.messages.push({ role: 'user', content: message });
+    thread.messages.push({ role: 'user', content: message, ...(opener ? { opener: true } : {}) });
     persist();
     renderThreadList();
-    addUser(message);
+    if (!opener) addUser(message);
     const bot = addAssistant(null);
     scrollDown();
     ac = new AbortController();
     try {
-      const r = await streamTurn('/api/teacher/stream', { threadId: thread.id, history: history2, message, progress: progressSnapshot(store.data), memoryEnabled: memoryOn() }, {
+      const r = await streamTurn('/api/teacher/stream', { threadId: thread.id, history: history2, ...(opener ? { opener: true } : { message }), progress: progressSnapshot(store.data), memoryEnabled: memoryOn() }, {
         signal: ac.signal,
         onReasoning: (s) => bot.status(s.active === false ? '' : s.text),
         onContent: (msg, rec) => { if (rec.dil) bot.render(rec.dil, rec.status !== 'complete'); scrollDown(); },
@@ -276,7 +280,7 @@ export function renderTeacher(ctx, threadId) {
         bot.body.append(el('p', { class: 'error-text' }, e.message || 'Something went wrong.'));
         thread.messages.pop(); // let the learner resend
         persist();
-        input.value = message;
+        if (!opener) input.value = message;
       }
     } finally {
       busy = false;
@@ -286,6 +290,13 @@ export function renderTeacher(ctx, threadId) {
     }
   }
 
-  if (pendingMessage) { const m = pendingMessage; pendingMessage = null; send(m); }
-  else setTimeout(() => input.focus(), 60);
+  // Phase 7: a check-in asked for from Today, or the first visit of the day to a new chat
+  const today = dateKey(new Date());
+  const autoCheckIn = !thread && store.data.settings?.teacherCheckIn !== false && store.data.settings?.lastCheckIn !== today && Object.keys(store.data.lessons || {}).length > 0;
+  if (pendingMessage) { const m = pendingMessage; pendingMessage = null; pendingOpener = false; send(m); }
+  else if (pendingOpener || autoCheckIn) {
+    pendingOpener = false;
+    store.update((d) => { d.settings = { ...(d.settings || {}), lastCheckIn: today }; return d; });
+    send('', { opener: true });
+  } else setTimeout(() => input.focus(), 60);
 }

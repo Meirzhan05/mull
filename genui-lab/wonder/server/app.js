@@ -21,6 +21,7 @@ import {
   MODEL, detectMode, createClaudeClient, buildStreamParams, buildStructuredParams, streamText, createStructured,
   isCredentialError, friendlyError, REFUSAL_MESSAGE,
 } from './claude.js';
+import { TEACHER_OPENER } from '../public/teacher-core.js'; // Phase 7
 import { LESSON_SYSTEM_PROMPT, TUTOR_SYSTEM_PROMPT, TEACHER_SYSTEM_PROMPT, COURSE_SYSTEM_PROMPT, COURSE_PLAN_SCHEMA, lessonUserMessage, tutorLessonContext, joinContext, insightsContext } from './prompts.js';
 import { pickDemoLesson, streamDemoText, buildDemoTutorReply, demoCoursePlan } from './demo.js';
 import { extractPracticeDeterministic, extractPracticeWithClaude } from './practice.js';
@@ -393,7 +394,8 @@ export function createWonderServer(opts = {}) {
 
 
   async function teacherStream(req, res, body) {
-    const message = clean(body.message, 4000);
+    // Phase 7: a check-in (opener) turn uses the server's own fixed user turn, never client text
+    const message = body.opener === true ? TEACHER_OPENER : clean(body.message, 4000);
     if (!message) return sendJson(res, 400, { ok: false, error: 'message is required' });
     const memoryEnabled = body.memoryEnabled !== false;
     const threadId = typeof body.threadId === 'string' && /^[\w-]{1,80}$/.test(body.threadId) ? body.threadId : undefined;

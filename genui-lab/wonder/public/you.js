@@ -8,6 +8,47 @@ import { insightsPanel } from './insights-panel.js'; // Phase 6
 
 export const TEXT_SIZES = [['0.92', 'Small'], ['1', 'Default'], ['1.1', 'Large'], ['1.2', 'Larger']];
 
+/** A row with a switch. */
+function switchSetting(title, note, on, onChange) {
+  const sw = el('button', { class: 'switch', type: 'button', role: 'switch', 'aria-checked': String(on), 'aria-label': title }, el('span', { class: 'switch-knob' }));
+  sw.addEventListener('click', () => { const next = sw.getAttribute('aria-checked') !== 'true'; sw.setAttribute('aria-checked', String(next)); onChange(next); });
+  return el('div', { class: 'setting' }, el('div', { class: 'setting-text' }, el('strong', null, title), el('p', { class: 'muted small' }, note)), sw);
+}
+
+/**
+ * Phase 7: daily study reminder. A browser notification at this time while a Wonder tab is open
+ * (if today's goal isn't met), and the time used for plan events added to a calendar.
+ */
+function reminderSetting(settings, setSetting) {
+  const r = () => ({ enabled: false, time: '18:00', ...(settings().reminder || {}) });
+  const supported = typeof Notification !== 'undefined';
+  const note = el('p', { class: 'muted small' });
+  const sw = el('button', { class: 'switch', type: 'button', role: 'switch', 'aria-checked': String(r().enabled && supported && Notification.permission === 'granted'), 'aria-label': 'Daily reminder', disabled: !supported });
+  sw.append(el('span', { class: 'switch-knob' }));
+  const time = el('input', { type: 'time', value: r().time, 'aria-label': 'Reminder time', class: 'time-input' });
+  const describe = () => {
+    note.textContent = !supported ? 'This browser has no notifications. Use “Add to calendar” on your study plan instead.'
+      : Notification.permission === 'denied' ? 'Notifications are blocked for this site in your browser settings. “Add to calendar” on your plan still works.'
+        : r().enabled ? `Wonder nudges you at ${r().time} on days you haven’t met your goal, while a Wonder tab is open. Plan events added to your calendar use this time too.`
+          : 'A nudge at this time on days you haven’t met your goal. Plan events added to your calendar use this time too.';
+  };
+  sw.addEventListener('click', async () => {
+    const next = sw.getAttribute('aria-checked') !== 'true';
+    if (next && Notification.permission !== 'granted') {
+      let p = 'denied';
+      try { p = await Notification.requestPermission(); } catch {}
+      if (p !== 'granted') { describe(); toast('Notifications were not allowed'); return; }
+    }
+    setSetting({ reminder: { ...r(), enabled: next } });
+    sw.setAttribute('aria-checked', String(next));
+    describe();
+    toast(next ? `Daily reminder at ${r().time}` : 'Reminder off');
+  });
+  time.addEventListener('change', () => { if (/^\d{2}:\d{2}$/.test(time.value)) { setSetting({ reminder: { ...r(), time: time.value } }); describe(); } });
+  describe();
+  return el('div', { class: 'setting' }, el('div', { class: 'setting-text' }, el('strong', null, 'Daily reminder'), note), el('div', { class: 'reminder-controls' }, time, sw));
+}
+
 /** @param {{app: HTMLElement, store: object, shell: object, refresh: Function, createLesson: Function}} ctx */
 export function renderYou(ctx) {
   const { app, store, shell } = ctx;
@@ -65,7 +106,9 @@ export function renderYou(ctx) {
         radioSeg('Theme', [['system', 'System', 'monitor'], ['light', 'Light', 'sun'], ['dark', 'Dark', 'moon']], shell.theme, (v) => shell.setTheme(v))),
       el('div', { class: 'setting' },
         el('div', { class: 'setting-text' }, el('strong', null, 'Lesson text size'), el('p', { class: 'muted small' }, 'Also in each lesson’s menu.')),
-        radioSeg('Lesson text size', TEXT_SIZES, String(settings().fontScale || 1), (v) => setSetting({ fontScale: Number(v) })))));
+        radioSeg('Lesson text size', TEXT_SIZES, String(settings().fontScale || 1), (v) => setSetting({ fontScale: Number(v) }))),
+      reminderSetting(settings, setSetting),
+      switchSetting('Teacher check-in', 'The first time you open the Teacher each day, it looks at your progress and suggests the best next step.', settings().teacherCheckIn !== false, (on) => setSetting({ teacherCheckIn: on }))));
 
   // -- data
   const exportBtn = el('button', { class: 'btn btn-secondary', type: 'button', onclick: () => {

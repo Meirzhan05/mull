@@ -42,6 +42,12 @@ export function progressSnapshot(data, now = new Date()) {
   };
 }
 
+/**
+ * Phase 7: the Teacher speaks first. A check-in turn sends this fixed, clearly marked user turn
+ * (the server substitutes its own copy; the client never shows it as a learner bubble).
+ */
+export const TEACHER_OPENER = '[Wonder: the learner just opened the Teacher. This is an automatic check-in, not a message they typed. Call get_progress, then greet them in one or two sentences and propose the single best next step for today (a review, the next plan item, a refresher for a fading lesson, or a new lesson) with a card. Keep it short.]';
+
 const CARD_RE = /<TeacherCard\b[^>]*?__resolutionId="([^"]+)"[^>]*\/>/g;
 
 /** Assistant markdown with each TeacherCard replaced by a note built from its latest state. */
