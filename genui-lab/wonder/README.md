@@ -231,7 +231,8 @@ Memory holds free-text facts. The learner model tracks what the learner actually
   - 2–5 KeyTerms;
   - one ExplainBack;
   - a worked example;
-  - no invalid components. The detail names each one with its validator error (`Diagram (Shape 3 is outside the 400x250 canvas)`). A tag that never closes, because its JSON props have unbalanced braces, counts as invalid: the compiler cuts the lesson at it. `stats.media` counts valid and invalid Diagrams and Figures.
+  - no invalid components. The detail names each one with its validator error (`Diagram (Shape 3 is outside the 400x250 canvas)`). A tag that never closes, because its JSON props have unbalanced braces, counts as invalid too (see "Broken tags" below). `stats.media` counts valid and invalid Diagrams and Figures.
+- **Broken tags** (`server/compile.js`). A learning tag that never closes is a half-written tail while the lesson streams, so it is cut. In a finished message (`compileWonder` without `partial`, as for the final record), the scanner reports it as `broken` instead. It spans to the end of its paragraph, its paragraph is dropped, and it is reported invalid (`Unclosed tag: its props have unbalanced braces or quotes`). Scanning then goes on, so the rest of the lesson still renders. Before this, one malformed Diagram silently cut every page after it. The lint, the critic's media text and practice extraction read lessons this way too.
 - **Critic.** After a Claude lesson streams (not refused, not truncated), a second Claude call (structured output, effort medium, 120 s timeout) reviews the lesson:
   - It checks answer keys, facts, arithmetic and cited claims (shown the cited text), plus level fit and widget sense.
   - It also checks the words inside Diagrams and Figures. The props are long JSON, so after the lesson the message lists, by page, each valid Diagram's title, labels, part texts, step labels and texts, and caption, and each Figure's query, caption, alt, question and answer (`mediaDigest`). A false claim there is a `factual` issue. A mislabeled part, steps out of order, or a Figure question its answer does not answer is a `widget` issue. The critic cannot see Figure images; that is the vision check's job.
@@ -716,11 +717,11 @@ Two catalog components put pictures next to the explanation.
   - **Text.** Caption, an optional "Look closer" question whose answer is revealed and saved, and `Image: author · license · Wikimedia Commons` with a Source button that opens the file page.
 - **Vision check.** Claude wrote the caption without seeing the image, so after a lookup finds one, a small structured call (`createFigureCheck`) asks Claude whether it fits.
   - **Request.** The thumbnail goes as an image block by URL, followed by the search phrase, the Commons title, the caption, the alt text, and the question and answer. The schema is `{depicts, fits, problem}`, effort `low`, no tools.
-  - **Verdict.** `fits: false` turns the Figure into `{found: false, rejected: {title, depicts, problem}}`, which renders nothing, as when no image is found. The server logs why. A kept image gets `checked: true`.
+  - **Verdict.** A rejected image makes way for the next-best Commons result: the lookup runs again with `exclude` (the rejected srcs), and the check runs on the new image. Up to 3 images are tried (`FIGURE_CHECK_TRIES`). A kept image gets `checked: true`, plus `choice: n` when it was not the first result. When none fits, the Figure becomes `{found: false, rejected: {title, depicts, problem}, tried}`, which renders nothing, as when no image is found. The server logs each rejection.
   - **Caching.** The verdict is cached with the lookup: with the check on, the cache key also includes the caption, alt, question and answer. A rejection expires like a miss, after 10 minutes.
   - **Failures fail open.** An API error, refusal or timeout (15 s) shows the image unchecked, for that stream only. It is not cached, so the next stream checks again.
   - **Download fallback.** The API fetches the URL itself, and Wikimedia sometimes refuses its fetcher with HTTP 400 "Unable to download the file". In a first live run 16 of 26 checks failed that way, even for images that downloaded fine from here. On that error only, the server fetches the same thumbnail once and sends it as a base64 block: allow-listed Wikimedia hosts only, our User-Agent, JPEG, PNG, GIF or WebP, at most 4 MB.
-  - **Settle budget.** The check runs inside the figure's pending lookup, so `settle(figureSettleMs)` bounds it like the lookup itself. A check still running when the stream ends leaves that Figure out of this stream, and its verdict is cached for the next one. Lookups start as soon as a Figure tag compiles, and the critic runs before the settle, so checks usually finish mid-lesson.
+  - **Settle budget.** The check (and any retries) runs inside the figure's pending lookup, so `settle(figureSettleMs)` bounds it like the lookup itself. A check still running when the stream ends leaves that Figure out of this stream, and its verdict is cached for the next one. Lookups start as soon as a Figure tag compiles, and the critic runs before the settle, so checks usually finish mid-lesson.
   - **Model.** `claude-haiku-5-5`, measured against `claude-opus-5-5`. Six real Commons images were each paired with their own caption, a caption from another topic, and subtle near-misses: a cumulus photo captioned as an anvil thunderstorm, a plate map captioned with "red earthquake dots", a seafloor map captioned as black smokers. That made 19 cases, run twice each.
     - Haiku: 36/38 right, median 1.6 s, max 2.8 s. Both misses were the same strict call: it rejected a convex-lens ray diagram captioned "meeting at the focal point" because the drawing labels that point a circle of confusion.
     - Opus: 38/38, median 2.7 s, max 5.1 s, at about 40× Haiku's per-token price.
@@ -759,12 +760,14 @@ Two catalog components put pictures next to the explanation.
   - a failed check fails open for that stream only;
   - the inline fallback when the API cannot download the URL;
   - the settle budget, and the check's own timeout;
+  - a rejected image making way for the next-best result, up to three, and the Commons lookup's `exclude`;
   - the core switches (claude, demo, env, `figureCheck`);
   - a claude-mode lesson stream whose Figure the check drops;
+  - a finished lesson keeping everything after a broken tag (compile, render and the final stream record), while a partial one still cuts there;
   - invalid and unclosed Diagram/Figure tags in the lint;
   - the critic prompt and its diagram/figure text;
   - the eval's per-lesson media, the summary and the report.
-- **Live eval** (`npm run eval -- --tag media --limit 3`, claude mode, critic and judge on, vision check on Haiku, 2026-10-23):
+- **Live eval, before the follow-ups** (`npm run eval -- --tag media --limit 3`, claude mode, critic and judge on, vision check on Haiku, 2026-10-23):
 
   | Topic | Diagram | Figure | Image | Lint | Judge |
   | --- | --- | --- | --- | --- | --- |
@@ -775,5 +778,21 @@ Two catalog components put pictures next to the explanation.
   - **Diagrams.** A Diagram in 3/3 lessons, 5/5 valid on the first try.
   - **Figures.** A Figure in only 1/3 lessons, and no image was shown. The Commons lookup found "San Andreas Fault, Carrizo Plain National Monument" (Ken Lund, CC BY-SA 2.0). The check rejected it: the photo is mostly an airliner wing over mountain ranges, with the fault a faint line near the bottom edge, while the caption promised "a long, straight scar" across the plain. Looking at the thumbnail, that call is defensible.
   - **Critic.** 0 issues on all three lessons. The judge's weakest dimension was quiz quality (3.33). The only failed format check was `key_terms` (6 and 7 distinct KeyTerms), ×2.
-  - **Takeaway.** Claude reaches for `Diagram` readily on spatial topics and rarely for `Figure`.
+  - **Takeaway.** Claude reaches for `Diagram` readily on spatial topics and rarely for `Figure`. The cause was the lesson prompt's Figure rule: it said "prefer a Diagram when the point is how something works", and every spatial topic is exactly that.
+- **After the follow-ups** (`npm run eval -- --tag media`, all 5 topics, the same day). Three changes:
+  - The Figure rule now says a Diagram and a Figure do different jobs, the mechanism versus the real thing, so a lesson about a physical thing usually has both.
+  - It also says a Figure is always in addition to the page's own visual.
+  - A rejected image makes way for the next-best result.
+
+  | Run | Diagram in | Figure in | Images shown | Rescued by a retry | Lint | Judge |
+  | --- | --- | --- | --- | --- | --- | --- |
+  | Before (3 topics) | 3/3 | 1/3 | 0/1 | – | 0.95 | 4.27 |
+  | New rule + retries | 5/5 | 4/5 | 3/4 | 2 | 0.94 | 4.4 |
+  | + "never the page's only visual" | 5/5 | 5/5 | 5/5 | 2 | 0.92 | 4.32 |
+
+  - **Retries.** "San Andreas Fault Carrizo Plain aerial" first found the airliner-wing photo again; the check rejected it, and the second result, "Aerial-SanAndreas-CarrizoPlain", was kept. "Camera lens cutaway" also kept its second result, a Nikon SLR cutaway.
+  - **A justified drop.** In the second run, the heart Figure ("human heart anatomy specimen") was dropped after 3 tries. The candidates were a 19th-century photo of a newborn's heart and lungs, under a caption about an adult heart "the size of a closed fist", and two scans of a cat-anatomy book. The check was right; the query was the weak point.
+  - **The page-visual rule.** The second run had one page whose only visual was a Figure (the lint's `visual_per_page` failed). The added rule fixed it in the third run.
+  - **Critic.** In these runs it flagged Diagram problems the lint cannot see: "to lungs/to body" arrows leaving the bottom of the ventricles, an earthquake epicenter drawn off to the side of its focus, and a Diagram step's arithmetic (a 44 mm image does not fit a 36 mm sensor "sideways").
+  - **Remaining format misses.** Mostly `key_terms`: lessons use 6-7 distinct KeyTerms where the lint wants 2-5.
 

@@ -304,5 +304,7 @@ test('prompts teach Figure: a search phrase, never a URL', () => {
   assert.match(LESSON_SYSTEM_PROMPT, /<Figure query=/);
   assert.match(LESSON_SYSTEM_PROMPT, /never write a URL/);
   assert.match(LESSON_SYSTEM_PROMPT, /what a real thing looks like -> Figure/);
+  assert.match(LESSON_SYSTEM_PROMPT, /a lesson about a physical thing usually has both, the Diagram for the mechanism and one Figure of the real thing/);
+  assert.match(LESSON_SYSTEM_PROMPT, /A Figure is always in addition to the page's own visual, never the only one/);
   assert.match(TUTOR_SYSTEM_PROMPT, /<Figure/);
 });

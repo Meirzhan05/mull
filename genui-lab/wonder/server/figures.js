@@ -26,6 +26,7 @@ export const FIGURE_LIMITS = Object.freeze({ query: 100, file: 200, caption: 300
 export const FIGURE_SETTLE_MS = 6000;
 export const FIGURE_MISS_TTL_MS = 10 * 60 * 1000; // a "nothing found" is retried after this
 export const FIGURE_CHECK_TIMEOUT_MS = 15_000; // one vision check; a slower one keeps the image unchecked
+export const FIGURE_CHECK_TRIES = 3; // images checked per figure: a rejected one makes way for the next-best result
 
 const COMMONS_API = 'https://commons.wikimedia.org/w/api.php';
 const USER_AGENT = 'WonderLessons/1.0 (educational app; Wikimedia Commons image lookup)';
@@ -117,10 +118,10 @@ const LANG_CODES = 'ar|ast|az|be|bg|bn|ca|cs|cy|da|de|el|eo|es|et|eu|fa|fi|fr|ga
 const LOCALIZED_RE = new RegExp(`-(?:${LANG_CODES})(?:-[a-z]{2,4})?\\.svg$`, 'i');
 export const localized = (title) => LOCALIZED_RE.test(String(title));
 
-/** Pick the best usable result: search rank order, English/neutral labels first. */
-export function pickFigure(pages) {
+/** Pick the best usable result: search rank order, English/neutral labels first. `exclude`: image srcs to skip. */
+export function pickFigure(pages, exclude) {
   const ranked = (Array.isArray(pages) ? pages : []).slice().sort((a, b) => (a.index ?? 0) - (b.index ?? 0));
-  const usable = ranked.map((p) => ({ p, s: figureFromPage(p) })).filter((x) => x.s);
+  const usable = ranked.map((p) => ({ p, s: figureFromPage(p) })).filter((x) => x.s && !exclude?.has(x.s.src));
   return (usable.find((x) => !localized(x.p.title)) || usable[0])?.s || null;
 }
 
@@ -139,12 +140,13 @@ export function createCommonsLookup({ fetch = globalThis.fetch, timeoutMs = 5000
     const json = await res.json();
     return json?.query?.pages || [];
   }
-  return async function lookup({ file, query }, { signal } = {}) {
+  // `exclude` (a Set of image srcs) asks for the next-best image after the vision check rejected one
+  return async function lookup({ file, query }, { signal, exclude } = {}) {
     if (file) {
-      const hit = pickFigure(await call({ titles: file }, signal));
+      const hit = pickFigure(await call({ titles: file }, signal), exclude);
       if (hit || !query) return hit;
     }
-    return pickFigure(await call({ generator: 'search', gsrsearch: `${query} filetype:bitmap|drawing`, gsrnamespace: '6', gsrlimit: '8' }, signal));
+    return pickFigure(await call({ generator: 'search', gsrsearch: `${query} filetype:bitmap|drawing`, gsrnamespace: '6', gsrlimit: '8' }, signal), exclude);
   };
 }
 
@@ -274,10 +276,12 @@ const cached = (cache, k, now, missTtlMs) => {
  * A failed or aborted lookup is not cached (the next stream retries it), and a "nothing found"
  * expires after missTtlMs. `signal` (the stream's) cancels lookups when the learner leaves.
  * `verify` (createFigureCheck()'s function, optional) runs after a lookup finds an image, inside
- * the same pending lookup, so settle() bounds it too: an image that does not fit is cached as
- * {found:false, rejected}, and a check that fails keeps the image for this stream only.
+ * the same pending lookup, so settle() bounds it too. An image that does not fit makes way for
+ * the next-best result (lookup with `exclude`), up to `tries` images; a kept one is
+ * {…, checked:true, choice} (choice > 1: not the first result). When none fits the figure is
+ * cached as {found:false, rejected, tried}. A check that fails keeps that image for this stream only.
  */
-export function createFigureResolver({ lookup, verify = null, logger = console, cache = new Map(), signal, missTtlMs = FIGURE_MISS_TTL_MS, now = () => Date.now() } = {}) {
+export function createFigureResolver({ lookup, verify = null, tries = FIGURE_CHECK_TRIES, logger = console, cache = new Map(), signal, missTtlMs = FIGURE_MISS_TTL_MS, now = () => Date.now() } = {}) {
   const inflight = new Map(); // key -> Promise
   const failed = new Set(); // keys whose lookup threw in this stream
   const unchecked = new Map(); // key -> {state}: found, but the check failed (this stream only)
@@ -285,18 +289,26 @@ export function createFigureResolver({ lookup, verify = null, logger = console, 
   let final = false;
   const label = (ref) => ref.file || ref.query;
 
-  async function check(k, state, ref) {
-    let verdict;
-    try {
-      verdict = await verify(state, ref, { signal });
-    } catch (err) {
-      if (!signal?.aborted) logger.warn?.(`[wonder] figure check failed (${label(ref)}): ${err?.message || err}`);
-      unchecked.set(k, { state });
-      return;
+  async function check(k, first, ref) {
+    const seen = new Set();
+    let rejected = null;
+    for (let state = first, choice = 1; state && !seen.has(state.src); choice++) {
+      seen.add(state.src);
+      let verdict;
+      try {
+        verdict = await verify(state, ref, { signal });
+      } catch (err) {
+        if (!signal?.aborted) logger.warn?.(`[wonder] figure check failed (${label(ref)}): ${err?.message || err}`);
+        unchecked.set(k, { state });
+        return;
+      }
+      if (verdict.fits) return remember(cache, k, { ...state, checked: true, ...(choice > 1 ? { choice } : {}) }, now());
+      logger.info?.(`[wonder] figure rejected (${label(ref)}, image ${choice}): ${verdict.problem || verdict.depicts}`);
+      rejected = { title: state.title, depicts: verdict.depicts, problem: verdict.problem };
+      if (choice >= tries || signal?.aborted) break;
+      state = await lookup({ file: ref.file, query: ref.query }, { signal, exclude: seen }).catch(() => null);
     }
-    if (verdict.fits) return remember(cache, k, { ...state, checked: true }, now());
-    logger.info?.(`[wonder] figure rejected (${label(ref)}): ${verdict.problem || verdict.depicts}`);
-    remember(cache, k, { found: false, rejected: { title: state.title, depicts: verdict.depicts, problem: verdict.problem } }, now());
+    remember(cache, k, { found: false, rejected, tried: seen.size }, now());
   }
 
   function start(ref) {

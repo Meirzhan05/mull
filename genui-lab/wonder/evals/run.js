@@ -52,8 +52,9 @@ export function parseArgs(argv) {
 
 /**
  * A lesson's Diagrams and Figures (critic.js lessonMedia) with each valid Figure joined to the
- * server's lookup result in the final `dil` (componentResults by resolution id): found (and the
- * image title), rejected by the vision check (and why), or neither (nothing found / timed out).
+ * server's lookup result in the final `dil` (componentResults by resolution id): found (the image
+ * title, and `choice` when the vision check rejected better-ranked results first), rejected by
+ * the vision check (why, and how many images it tried), or neither (nothing found / timed out).
  */
 export function lessonMediaReport(markdown, dil) {
   const media = lessonMedia(markdown);
@@ -68,8 +69,8 @@ export function lessonMediaReport(markdown, dil) {
     const r = results[ref.rid];
     const state = r?.status === 'resolved' ? r.state : null;
     f.found = state?.found === true;
-    if (f.found) Object.assign(f, { image: state.title, ...(state.checked ? { checked: true } : {}) });
-    else if (state?.rejected) f.rejected = state.rejected.problem || state.rejected.depicts || 'does not fit the caption';
+    if (f.found) Object.assign(f, { image: state.title, ...(state.checked ? { checked: true } : {}), ...(state.choice > 1 ? { choice: state.choice } : {}) });
+    else if (state?.rejected) Object.assign(f, { rejected: state.rejected.problem || state.rejected.depicts || 'does not fit the caption', tried: state.tried || 1 });
     if (!state) f.pending = true;
   }
   return media;

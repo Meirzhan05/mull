@@ -12,7 +12,9 @@
 //   4. valid   -> rewrite the tag with placeholder props, compile, then hoist each value into
 //                 __dilConstants (the way the server hoists every text run),
 //      invalid -> replace the component with fallback markdown so the lesson still reads,
-//   5. a half-streamed learning tag at the tail is cut so partial streams always compile,
+//   5. a half-streamed learning tag at the tail is cut so partial streams always compile;
+//      in a finished message the same tag is broken (unbalanced braces or quotes), so it is
+//      cut to the end of its paragraph and reported invalid, and the rest of the message stays,
 //   6. <Followups items={[...]}/> is protocol, not UI: it is lifted out (followupPrompts).
 //   7. math spans (<math>, $$…$$, \[…\], \(…\), safe $…$) are hoisted verbatim (math-spans.js).
 
@@ -96,8 +98,13 @@ function scanOpenTag(src, i) {
   }
 }
 
-/** Tokenize known-component tags in document order, skipping code fences and code spans. */
-export function scanComponentTags(src) {
+/**
+ * Tokenize known-component tags in document order, skipping code fences and code spans.
+ * A tag that never closes is `incomplete` (the streaming tail, scanning stops) unless
+ * `partial: false`: then the message is finished and the tag is `broken`. It spans to the end
+ * of its paragraph, and scanning goes on after it.
+ */
+export function scanComponentTags(src, { partial = true } = {}) {
   const out = [];
   let i = 0;
   let atLineStart = true;
@@ -132,6 +139,14 @@ export function scanComponentTags(src) {
         if (m && KNOWN.has(m[1])) { out.push({ kind: 'close', name: m[1], start: i, end: i + m[0].length }); i += m[0].length; atLineStart = false; continue; }
       } else {
         const t = scanOpenTag(src, i);
+        if (t && t.incomplete && !partial) {
+          const para = /\n[ \t]*\n/g;
+          para.lastIndex = i;
+          const end = para.exec(src)?.index ?? src.length;
+          out.push({ kind: 'broken', name: t.name, start: i, end });
+          i = end;
+          continue;
+        }
         if (t && t.incomplete) { out.push({ kind: 'incomplete', name: t.name, start: i, end: src.length }); break; }
         if (t) { out.push({ kind: 'open', ...t, start: i }); i = t.end; atLineStart = false; continue; }
       }
@@ -242,12 +257,15 @@ function rawProps(attrs) {
   return { props, errors };
 }
 
+export const BROKEN_TAG_ERROR = 'Unclosed tag: its props have unbalanced braces or quotes';
+
 /**
- * Rewrite the source for the stock compiler.
+ * Rewrite the source for the stock compiler. `partial: false` (a finished message) drops a
+ * broken tag's paragraph and reports it invalid instead of cutting the message there.
  * @returns {{source:string, fallbackSource:string, hoisted:any[], components:object[], followups:string[]}}
  */
-export function preprocess(src) {
-  const tags = scanComponentTags(src);
+export function preprocess(src, { partial = true } = {}) {
+  const tags = scanComponentTags(src, { partial });
   const hoisted = [];
   const components = [];
   let followups = [];
@@ -277,6 +295,10 @@ export function preprocess(src) {
     out += before;
     fb += before;
     pos = tag.end;
+    if (tag.kind === 'broken') {
+      if (!META_COMPONENTS[tag.name]) components.push({ name: tag.name, status: 'invalid', error: BROKEN_TAG_ERROR });
+      continue;
+    }
     // matching close tag (for components written with children)
     let closeIdx = -1;
     if (!tag.selfClosing) {
@@ -329,7 +351,7 @@ export function preprocess(src) {
  * @param {{partial?:boolean, salt?:string, fallback?:boolean}} [opts]
  */
 export function compileWonder(markdown, opts = {}) {
-  const pre = preprocess(String(markdown ?? ''));
+  const pre = preprocess(String(markdown ?? ''), { partial: !!opts.partial });
   pre.source = sanitizePrimitiveExpressions(pre.source);
   pre.fallbackSource = sanitizePrimitiveExpressions(pre.fallbackSource);
   const math = protectMath(pre.source, { partial: !!opts.partial });

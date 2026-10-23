@@ -20,6 +20,7 @@ import { stripGroundingTags } from './grounding.js';
 // Figure is not here: it renders nothing when no image is found, so it cannot be a page's only visual.
 const VISUALS = new Set(['LessonStepper', 'Reveal', 'CompareToggle', 'InputOutputSlider', 'Flowchart', 'Timeline', 'BarChart', 'ConceptMap', 'Cycle', 'Quiz', 'Flashcards', 'FunctionGraph', 'ExplainBack', 'Diagram']);
 const LAYOUT_RE = /<(box|col|row|grid)\b/;
+const FINISHED = { partial: false }; // the critic reads whole lessons: a tag that never closed is broken, not streaming
 const CHECK_PAGE_RE = /check your understanding/i;
 const words = (s) => (String(s).match(/[\p{L}\p{N}][\p{L}\p{N}'’-]*/gu) || []).length;
 
@@ -38,7 +39,7 @@ export function lessonParts(markdown) {
 function proseOf(body) {
   let out = '';
   let pos = 0;
-  for (const t of scanComponentTags(body)) {
+  for (const t of scanComponentTags(body, FINISHED)) {
     out += body.slice(pos, t.start);
     const term = t.kind === 'open' && t.name === 'KeyTerm' ? t.attrs.find(([k]) => k === 'term')?.[1] : null;
     if (term?.kind === 'string') out += term.value; // an inline KeyTerm reads as its word
@@ -57,16 +58,15 @@ export function lintLesson(markdown) {
   const { title, hook, pages } = lessonParts(md);
   const check = pages.length && CHECK_PAGE_RE.test(pages[pages.length - 1].heading) ? pages[pages.length - 1] : null;
   const content = check ? pages.slice(0, -1) : pages;
-  const comps = preprocess(md).components;
+  const comps = preprocess(md, FINISHED).components;
   const valid = comps.filter((c) => c.status === 'valid');
   const quizzes = valid.filter((c) => c.name === 'Quiz');
   const terms = new Set(valid.filter((c) => c.name === 'KeyTerm').map((c) => String(c.props.term).toLowerCase()));
-  // In a finished lesson a tag still "streaming" was never closed (unbalanced braces in its props):
-  // the compiler cuts the lesson at it, so it counts as invalid too.
-  const invalid = comps.filter((c) => c.status === 'invalid' || c.status === 'streaming');
-  const visualsPerPage = content.map((p) => scanComponentTags(p.body).filter((t) => t.kind === 'open' && VISUALS.has(t.name)).length + (LAYOUT_RE.test(p.body) ? 1 : 0));
+  // a tag that never closed (unbalanced braces in its props) is invalid too: BROKEN_TAG_ERROR
+  const invalid = comps.filter((c) => c.status === 'invalid');
+  const visualsPerPage = content.map((p) => scanComponentTags(p.body, FINISHED).filter((t) => t.kind === 'open' && VISUALS.has(t.name)).length + (LAYOUT_RE.test(p.body) ? 1 : 0));
   const pageWords = content.map((p) => words(proseOf(p.body)));
-  const quizOnCheck = check ? scanComponentTags(check.body).filter((t) => t.kind === 'open' && t.name === 'Quiz').length : 0;
+  const quizOnCheck = check ? scanComponentTags(check.body, FINISHED).filter((t) => t.kind === 'open' && t.name === 'Quiz').length : 0;
   const questions = quizzes.flatMap((q) => q.props.questions || []);
   const checks = [
     { id: 'title', ok: !!title, detail: title ? `"${title}"` : 'no "# " title' },
@@ -92,7 +92,7 @@ export function lintLesson(markdown) {
   };
 }
 
-const invalidLabel = (c) => `${c.name} (${c.status === 'streaming' ? 'unclosed tag: the rest of the lesson is cut off' : clip(c.error, 120)})`;
+const invalidLabel = (c) => `${c.name} (${clip(c.error, 120)})`;
 const MEDIA = ['Diagram', 'Figure'];
 /** {Diagram: {valid, invalid}, Figure: {valid, invalid}} from compileWonder(...).components. */
 function mediaCounts(comps) {
@@ -106,15 +106,15 @@ function mediaCounts(comps) {
 
 /**
  * Per-component media details of a finished lesson, in document order: every <Diagram> and
- * <Figure> with its status ('valid' | 'invalid' | 'unclosed'), the validator's error, and a short
+ * <Figure> with its status ('valid' | 'invalid'), the validator's error, and a short
  * summary of its props. The eval harness joins Figures with the server's image lookup results.
  */
 export function lessonMedia(markdown) {
-  const comps = preprocess(stripGroundingTags(String(markdown || ''))).components;
+  const comps = preprocess(stripGroundingTags(String(markdown || '')), FINISHED).components;
   const out = { diagrams: [], figures: [] };
   for (const c of comps) {
     if (!MEDIA.includes(c.name)) continue;
-    const status = c.status === 'streaming' ? 'unclosed' : c.status;
+    const { status } = c;
     const base = { status, ...(c.error ? { error: clip(c.error, 200) } : {}) };
     const p = c.props || {};
     if (c.name === 'Diagram') out.diagrams.push({ ...base, ...(status === 'valid' ? { title: p.title || '', shapes: p.shapes.length, parts: p.parts?.length || 0, steps: p.steps?.length || 0 } : {}) });
@@ -187,7 +187,7 @@ export function mediaDigest(markdown) {
   const { hook, pages } = lessonParts(String(markdown || ''));
   const lines = [];
   [hook, ...pages.map((p) => p.body)].forEach((body, page) => {
-    for (const c of preprocess(body).components) {
+    for (const c of preprocess(body, FINISHED).components) {
       if (c.status !== 'valid' || !MEDIA.includes(c.name)) continue;
       const p = c.props;
       const out = [];

@@ -80,7 +80,8 @@ export function summarizeRuns(runs) {
 /**
  * Diagram and Figure use across lessons (runs with `media` from evals/run.js lessonMediaReport):
  * how many lessons used each, how many components were valid, and how many Figures got an image
- * (found), were dropped by the vision check (rejected) or found nothing (missing).
+ * (found; laterChoice: not the top search result), were dropped by the vision check (rejected) or
+ * found nothing (missing).
  */
 export function summarizeMedia(runs) {
   const withMedia = runs.filter((r) => r.media);
@@ -93,7 +94,7 @@ export function summarizeMedia(runs) {
     withFigure: withMedia.filter((r) => r.media.figures.length).length,
     withImage: withMedia.filter((r) => r.media.figures.some((f) => f.found)).length,
     diagrams: { total: diagrams.length, valid: diagrams.filter((d) => d.status === 'valid').length },
-    figures: { total: figures.length, valid: valid.length, found: valid.filter((f) => f.found).length, rejected: valid.filter((f) => f.rejected).length, missing: valid.filter((f) => !f.found && !f.rejected).length },
+    figures: { total: figures.length, valid: valid.length, found: valid.filter((f) => f.found).length, laterChoice: valid.filter((f) => f.found && f.choice > 1).length, rejected: valid.filter((f) => f.rejected).length, missing: valid.filter((f) => !f.found && !f.rejected).length },
   };
 }
 
@@ -127,13 +128,13 @@ export function reportMarkdown(report) {
   const m = summary.media;
   if (m?.lessons) {
     lines.push('', '## Diagrams and figures', '',
-      `Diagram in ${m.withDiagram}/${m.lessons} lessons (${m.diagrams.valid}/${m.diagrams.total} valid) · Figure in ${m.withFigure}/${m.lessons} lessons (${m.figures.valid}/${m.figures.total} valid) · images found ${m.figures.found}/${m.figures.valid}${m.figures.rejected ? `, ${m.figures.rejected} dropped by the vision check` : ''}${m.figures.missing ? `, ${m.figures.missing} not found` : ''} · a shown image in ${m.withImage}/${m.lessons} lessons`,
+      `Diagram in ${m.withDiagram}/${m.lessons} lessons (${m.diagrams.valid}/${m.diagrams.total} valid) · Figure in ${m.withFigure}/${m.lessons} lessons (${m.figures.valid}/${m.figures.total} valid) · images found ${m.figures.found}/${m.figures.valid}${m.figures.laterChoice ? ` (${m.figures.laterChoice} after the vision check rejected the top result)` : ''}${m.figures.rejected ? `, ${m.figures.rejected} dropped by the vision check` : ''}${m.figures.missing ? `, ${m.figures.missing} not found` : ''} · a shown image in ${m.withImage}/${m.lessons} lessons`,
       '', '| Topic | Diagram | Figure | Image |', '| --- | --- | --- | --- |');
     for (const r of runs) {
       if (r.error || !r.media) continue;
       const diagrams = mediaCell(r.media.diagrams, (ds) => { const v = ds.filter((d) => d.status === 'valid'); return v.length ? ` (${v.map((d) => `${d.parts} parts, ${d.steps} steps`).join('; ')})` : ''; });
       const figures = mediaCell(r.media.figures);
-      const image = r.media.figures.filter((f) => f.status === 'valid').map((f) => (f.found ? `found: ${f.image || f.query}` : f.rejected ? `dropped: ${f.rejected}` : `not found (${f.query})`)).join('; ') || '–';
+      const image = r.media.figures.filter((f) => f.status === 'valid').map((f) => (f.found ? `found: ${f.image || f.query}${f.choice > 1 ? ` (choice ${f.choice})` : ''}` : f.rejected ? `dropped (${f.tried || 1} tried): ${f.rejected}` : `not found (${f.query})`)).join('; ') || '–';
       lines.push(`| ${cell(r.topic)} | ${cell(diagrams)} | ${cell(figures)} | ${cell(image)} |`);
     }
   }
