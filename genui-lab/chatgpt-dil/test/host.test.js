@@ -1,8 +1,9 @@
-// The DOM host's pure pieces: SVG attributes (incl. the Wonder extensions used by <Diagram/>)
-// and the remote-image check behind allowRemoteImages.
+// The DOM host's pure pieces: SVG attributes (incl. the Wonder extensions used by <Diagram/>),
+// the remote-image check behind allowRemoteImages, and the youtube player (embed URL, player
+// messages, cues) used by Wonder's <Video/>.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { computeSvgPresentation, isRemoteSrc } from '../src/host.js';
+import { computeSvgPresentation, isRemoteSrc, youtubeEmbedUrl, isYouTubeId, parsePlayerMessage, advanceCues, YOUTUBE_EMBED_ORIGIN, YOUTUBE_SANDBOX } from '../src/host.js';
 
 test('svg children keep their size, svg-text gets its text and font attributes', () => {
   const rect = computeSvgPresentation('rect', { x: 40, y: 40, width: 140, height: 80, rx: 14, fill: '#f00', stroke: 'secondary', strokeWidth: 2 });
@@ -44,4 +45,38 @@ test('remote image sources: protocol-relative and look-alike origins are remote'
   assert.equal(isRemoteSrc('data:image/png;base64,AAAA', page), false);
   assert.equal(isRemoteSrc('blob:http://localhost:8751/123', page), false);
   assert.equal(isRemoteSrc('https://upload.wikimedia.org/a.jpg', undefined), true, 'no page origin: everything absolute is remote');
+});
+
+test('youtube: the host builds the embed URL itself, on youtube-nocookie.com only', () => {
+  const u = new URL(youtubeEmbedUrl({ videoId: 'Ab3_dEf-9hI', start: 65.7, end: 190 }, 'http://localhost:8751'));
+  assert.equal(u.origin, YOUTUBE_EMBED_ORIGIN);
+  assert.equal(u.pathname, '/embed/Ab3_dEf-9hI');
+  assert.deepEqual(Object.fromEntries(u.searchParams), { start: '65', end: '190', rel: '0', playsinline: '1', iv_load_policy: '3', enablejsapi: '1', origin: 'http://localhost:8751' });
+  const bare = new URL(youtubeEmbedUrl({ videoId: 'Ab3_dEf-9hI', start: 0, end: -5 }, 'null'));
+  assert.equal(bare.searchParams.get('start'), null);
+  assert.equal(bare.searchParams.get('end'), null);
+  assert.equal(bare.searchParams.get('origin'), null, 'an opaque origin is not sent');
+  assert.equal(youtubeEmbedUrl({ videoId: 'Ab3_dEf-9hI', start: 30, end: 10 }).includes('end='), false, 'end before start is dropped');
+  for (const id of ['../evil', 'Ab3_dEf-9hI?x=1', 'https://evil.example/embed', 'Ab3_dEf-9h', '', null]) {
+    assert.equal(youtubeEmbedUrl({ videoId: id }), null, String(id));
+    assert.equal(isYouTubeId(id), false, String(id));
+  }
+  assert.doesNotMatch(YOUTUBE_SANDBOX, /allow-top-navigation|allow-forms|allow-modals/);
+});
+
+test('youtube: player messages give the time and state; cues fire once, pause, and re-arm on rewind', () => {
+  assert.deepEqual(parsePlayerMessage(JSON.stringify({ event: 'infoDelivery', info: { currentTime: 12.5, playerState: 1 } })), { time: 12.5, state: 1 });
+  assert.deepEqual(parsePlayerMessage({ event: 'onStateChange', info: 0 }), { state: 0 });
+  assert.deepEqual(parsePlayerMessage('{"event":"onReady"}'), { ready: true });
+  for (const junk of ['not json', '{"event":"other"}', 42, null, JSON.stringify({ event: 'infoDelivery', info: { currentTime: 'x' } })]) {
+    const r = parsePlayerMessage(junk);
+    assert.ok(r === null || (r.time === undefined && r.state === undefined), String(junk));
+  }
+  const fired = new Set();
+  assert.deepEqual(advanceCues(fired, [190], { time: 100, state: 1 }), { fire: [], pause: false });
+  assert.deepEqual(advanceCues(fired, [190], { time: 189.8, state: 1 }), { fire: [0], pause: true }, 'just before the end: fire and pause before the end screen');
+  assert.deepEqual(advanceCues(fired, [190], { time: 190, state: 1 }), { fire: [], pause: false }, 'once');
+  advanceCues(fired, [190], { time: 20, state: 1 });
+  assert.deepEqual(advanceCues(fired, [190], { time: 190, state: 1 }).fire, [0], 'rewinding re-arms the cue');
+  assert.deepEqual(advanceCues(new Set(), [190, 'x', NaN], { state: 0 }), { fire: [0], pause: false }, 'ended without a time update: fire, nothing to pause');
 });

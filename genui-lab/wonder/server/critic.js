@@ -17,7 +17,7 @@ import { validateComponentProps } from './catalog-schema.js';
 import { buildStructuredParams, createStructured } from './claude.js';
 import { stripGroundingTags } from './grounding.js';
 
-// Figure is not here: it renders nothing when no image is found, so it cannot be a page's only visual.
+// Figure and Video are not here: they render nothing when no image / clip is found, so neither can be a page's only visual.
 const VISUALS = new Set(['LessonStepper', 'Reveal', 'CompareToggle', 'InputOutputSlider', 'Flowchart', 'Timeline', 'BarChart', 'ConceptMap', 'Cycle', 'Quiz', 'Flashcards', 'FunctionGraph', 'ExplainBack', 'Diagram']);
 const LAYOUT_RE = /<(box|col|row|grid)\b/;
 const CHECK_PAGE_RE = /check your understanding/i;

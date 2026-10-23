@@ -2,22 +2,19 @@
 // URL (a model's URLs are often invented). It writes a search phrase, optionally an exact Commons
 // file title, and the server resolves it to an image, its size, license and author. The result is
 // delivered like a Cite: a server-resolved componentResults entry keyed by the Figure's
-// __resolutionId, so it rides in every dil revision and is saved with the lesson.
+// __resolutionId, so it rides in every dil revision and is saved with the lesson
+// (server/media-resolver.js has the per-stream flow).
 //
 //   <Figure query="cumulus clouds blue sky" file="File:….jpg" caption="…" alt="…"
 //     question="What do you notice…?" answer="…"/>
-//
-//   compile result ──figures.componentResults(r)──▶ {rid: {status:'pending'}}  (lookup starts)
-//   lookup settles ──onUpdate──▶ writer.refresh()  ──▶ {rid: {status:'resolved', state:{found, src, …}}}
-//   before complete: figures.settle(ms) then figures.finalize()  (anything still pending -> not found)
 
 import { FIGURE_IMAGE_HOSTS, isFigureImageUrl } from '../public/figure-hosts.js';
-import { constRef } from './dil-constants.js';
+import { createLookupResolver, withResolved, MISS_TTL_MS } from './media-resolver.js';
 
 export { FIGURE_IMAGE_HOSTS };
 export const FIGURE_LIMITS = Object.freeze({ query: 100, file: 200, caption: 300, alt: 200, question: 200, answer: 400 });
 export const FIGURE_SETTLE_MS = 6000;
-export const FIGURE_MISS_TTL_MS = 10 * 60 * 1000; // a "nothing found" is retried after this
+export const FIGURE_MISS_TTL_MS = MISS_TTL_MS; // a "nothing found" is retried after this
 
 const COMMONS_API = 'https://commons.wikimedia.org/w/api.php';
 const USER_AGENT = 'WonderLessons/1.0 (educational app; Wikimedia Commons image lookup)';
@@ -142,91 +139,26 @@ export function createCommonsLookup({ fetch = globalThis.fetch, timeoutMs = 5000
 
 // ---------------------------------------------------------------- per-stream resolver
 
-const FIGURE_RE = /__dil\.jsx\(Figure,\{([^{}]*)\}/g;
-const constOf = (result, body, key) => {
-  const i = constRef(body, key);
-  return i == null ? undefined : result.constants?.[i];
-};
 const keyOf = ({ file, query }) => `${file || ''}\u0000${(query || '').toLowerCase()}`;
 
-const CACHE_MAX = 300;
-const remember = (cache, k, state, now) => { cache.delete(k); cache.set(k, { state, at: now }); while (cache.size > CACHE_MAX) cache.delete(cache.keys().next().value); };
-/** A cache entry ({state}) that is still good: found images stay, a miss expires after missTtlMs. */
-const cached = (cache, k, now, missTtlMs) => {
-  const e = cache.get(k);
-  if (!e) return undefined;
-  if (e.state == null && now - e.at > missTtlMs) { cache.delete(k); return undefined; }
-  return e;
-};
-
 /**
- * One stream's figures. `lookup` is createCommonsLookup()'s function, or null to resolve every
- * figure as not found (no network: tests, WONDER_FIGURES=off). `cache` (key -> {state, at}) is
- * shared by the server's streams, so a steer or a later revision does not look a figure up again.
- * A failed or aborted lookup is not cached (the next stream retries it), and a "nothing found"
- * expires after missTtlMs. `signal` (the stream's) cancels lookups when the learner leaves.
+ * One stream's figures (server/media-resolver.js). `lookup` is createCommonsLookup()'s function,
+ * or null to resolve every figure as not found (no network: tests, WONDER_FIGURES=off).
  */
-export function createFigureResolver({ lookup, logger = console, cache = new Map(), signal, missTtlMs = FIGURE_MISS_TTL_MS, now = () => Date.now() } = {}) {
-  const inflight = new Map(); // key -> Promise
-  const failed = new Set(); // keys whose lookup threw in this stream
-  const listeners = new Set();
-  let final = false;
-
-  function start(ref) {
-    const k = keyOf(ref);
-    if (cached(cache, k, now(), missTtlMs) || inflight.has(k) || failed.has(k)) return;
-    if (!lookup || signal?.aborted) { failed.add(k); return; }
-    const p = Promise.resolve()
-      .then(() => lookup(ref, { signal }))
-      .then((state) => remember(cache, k, state || null, now()), (err) => {
-        if (!signal?.aborted) logger.warn?.(`[wonder] figure lookup failed (${ref.file || ref.query}): ${err?.message || err}`);
-        failed.add(k);
-      })
-      .then(() => {
-        inflight.delete(k);
-        if (!final) for (const fn of listeners) fn();
-      });
-    inflight.set(k, p);
-  }
-
-  return {
-    /** componentResults for every Figure in a compiled program; starts lookups it has not seen. */
-    componentResults(result) {
-      const out = {};
-      if (!result?.code || !result.code.includes('Figure,')) return out;
-      FIGURE_RE.lastIndex = 0;
-      let m;
-      while ((m = FIGURE_RE.exec(result.code))) {
-        const rid = constOf(result, m[1], '__resolutionId');
-        const ref = { file: constOf(result, m[1], 'file'), query: constOf(result, m[1], 'query') };
-        if (typeof rid !== 'string' || (typeof ref.file !== 'string' && typeof ref.query !== 'string')) continue;
-        const k = keyOf(ref);
-        start(ref);
-        const hit = cached(cache, k, now(), missTtlMs);
-        if (hit) out[rid] = { status: 'resolved', state: hit.state || { found: false } };
-        else out[rid] = final || failed.has(k) ? { status: 'resolved', state: { found: false } } : { status: 'pending' };
-      }
-      return out;
+export function createFigureResolver({ lookup, missTtlMs = FIGURE_MISS_TTL_MS, ...opts } = {}) {
+  return createLookupResolver({
+    component: 'Figure',
+    label: 'Finding images…',
+    refOf: (get) => {
+      const ref = { file: get('file'), query: get('query') };
+      return typeof ref.file === 'string' || typeof ref.query === 'string' ? ref : null;
     },
-    /** Wait (at most `ms`) for the lookups in flight. */
-    async settle(ms = FIGURE_SETTLE_MS) {
-      if (!inflight.size) return;
-      let timer;
-      await Promise.race([Promise.allSettled([...inflight.values()]), new Promise((r) => { timer = setTimeout(r, ms); })]);
-      clearTimeout(timer);
-    },
-    /** From now on an unresolved figure reports "not found" instead of "pending". */
-    finalize() { final = true; listeners.clear(); },
-    onUpdate(fn) { listeners.add(fn); return () => listeners.delete(fn); },
-    get pending() { return inflight.size; },
-  };
+    keyOf,
+    lookup,
+    missTtlMs,
+    ...opts,
+  });
 }
 
 /** Merge the figures' componentResults into another appData factory's output. */
-export function withFigures(appDataFor, figures) {
-  return (result) => {
-    const base = appDataFor ? appDataFor(result) : null;
-    const op = base?.opGenui || {};
-    return { ...(base || {}), opGenui: { modelDataBindings: {}, ...op, componentResults: { ...(op.componentResults || {}), ...figures.componentResults(result) } } };
-  };
-}
+export const withFigures = withResolved;

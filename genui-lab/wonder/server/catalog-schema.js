@@ -12,6 +12,7 @@ import { validateFunctionGraph, functionGraphFallback } from './function-graph.j
 import { validateExplainBack, explainBackFallback } from './grader.js'; // Phase 8
 import { validateDiagram, diagramFallback } from './diagram.js'; // media: model-drawn diagrams
 import { validateFigure, figureFallback } from './figures.js'; // media: Wikimedia Commons images
+import { validateVideo, videoFallback } from './videos.js'; // media: YouTube clips
 
 const isObj = (v) => typeof v === 'object' && v !== null && !Array.isArray(v);
 const text = (v) => (typeof v === 'string' ? v.trim() : typeof v === 'number' && Number.isFinite(v) ? String(v) : '');
@@ -272,6 +273,7 @@ export const LEARNING_COMPONENTS = Object.freeze({
   ExplainBack: { validate: validateExplainBack }, // Phase 8 (server/grader.js)
   Diagram: { validate: validateDiagram }, // media (server/diagram.js)
   Figure: { validate: validateFigure }, // media (server/figures.js; image resolved server-side)
+  Video: { validate: validateVideo }, // media (server/videos.js; clip resolved server-side)
 });
 export const LEARNING_COMPONENT_NAMES = Object.freeze(Object.keys(LEARNING_COMPONENTS));
 
@@ -301,6 +303,7 @@ export function fallbackMarkdownFor(name, props, { inline = false } = {}) {
   if (name === 'ExplainBack') return explainBackFallback(p); // Phase 8
   if (name === 'Diagram') return diagramFallback(p);
   if (name === 'Figure') return figureFallback(p);
+  if (name === 'Video') return videoFallback(p);
   if (name === 'KeyTerm' || inline) {
     const term = pick(p, 'term', 'title', 'label', 'name');
     const def = pick(p, 'definition', 'text');

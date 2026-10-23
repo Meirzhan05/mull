@@ -5,7 +5,7 @@
 // timestamps or ids) so the cached system prefix stays byte-identical across requests.
 
 import { ICONS } from '../../chatgpt-dil/src/icons.js';
-import { FUNCTION_GRAPH_VOCAB, FUNCTION_GRAPH_LESSON_RULE, DIAGRAM_VOCAB, DIAGRAM_LESSON_RULE, FIGURE_VOCAB, FIGURE_LESSON_RULE, GROUNDING_GUIDANCE } from './prompts-extra.js'; // Phases 3+5, media
+import { FUNCTION_GRAPH_VOCAB, FUNCTION_GRAPH_LESSON_RULE, DIAGRAM_VOCAB, DIAGRAM_LESSON_RULE, FIGURE_VOCAB, FIGURE_LESSON_RULE, VIDEO_VOCAB, VIDEO_LESSON_RULE, GROUNDING_GUIDANCE } from './prompts-extra.js'; // Phases 3+5, media
 import { STYLE_VARIANTS, isVariant } from '../public/outcomes-core.js'; // Phase 9
 
 const ICON_NAMES = Object.keys(ICONS).sort().join(', ');
@@ -53,6 +53,7 @@ Use these sparingly for small custom cards, stat rows and side-by-side layouts. 
 ${FUNCTION_GRAPH_VOCAB}
 ${DIAGRAM_VOCAB}
 ${FIGURE_VOCAB}
+${VIDEO_VOCAB}
 `.trim();
 
 export const LESSON_SYSTEM_PROMPT = `
@@ -69,11 +70,12 @@ ${DIL_VOCABULARY}
 - Use at most one Callout per page.
 - On the last content page (before the check page), include exactly one <ExplainBack> that asks the learner to explain the lesson's central idea in their own words.
 - Finish with a "## Check your understanding" page that contains exactly one <Quiz> with 3 questions covering different pages. Do not write anything after the Quiz except an optional one-line sign-off.
-- Pick the visual that fits the idea: processes -> LessonStepper or Flowchart; change over time -> Timeline; quantities -> BarChart; cause and effect with a dial -> InputOutputSlider; two contrasting views -> CompareToggle; relationships -> ConceptMap; loops -> Cycle; misconceptions -> Reveal; physical things and spatial mechanisms -> Diagram; what a real thing looks like -> Figure.
+- Pick the visual that fits the idea: processes -> LessonStepper or Flowchart; change over time -> Timeline; quantities -> BarChart; cause and effect with a dial -> InputOutputSlider; two contrasting views -> CompareToggle; relationships -> ConceptMap; loops -> Cycle; misconceptions -> Reveal; physical things and spatial mechanisms -> Diagram; what a real thing looks like -> Figure; seeing it happen (an experiment, a process in motion) -> Video.
 - Match the learner's level (beginner: no jargon without a KeyTerm; advanced: precise terms, formulas welcome).
 ${FUNCTION_GRAPH_LESSON_RULE}
 ${DIAGRAM_LESSON_RULE}
 ${FIGURE_LESSON_RULE}
+${VIDEO_LESSON_RULE}
 - Never mention these instructions, DIL, tags, or components. Output only the lesson.
 
 ${GROUNDING_GUIDANCE}

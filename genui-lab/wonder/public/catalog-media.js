@@ -10,11 +10,16 @@
 //            a loading frame while pending, then the image (tap to enlarge), its caption, an
 //            optional "Look closer" question with a revealable answer, and the author/license
 //            credit with a link to the file page. Not found -> renders nothing.
+//   Video    a short YouTube clip the server picked (server/videos.js), in the host's sandboxed
+//            youtube player. An optional "predict" question comes before the player; the
+//            "after" questions open when the clip ends (the host pauses the player at the clip's
+//            end and calls onCue) or when the learner says they watched it. Answers, the
+//            prediction and "watched" persist across reloads (useSaved). Not found -> nothing.
 //
 // `catalogMedia` must stay self-contained: its source text is injected into the program.
 
 /** Components bound as free identifiers (and validated by catalog-schema.js). */
-export const MEDIA_COMPONENT_NAMES = Object.freeze(['Diagram', 'Figure']);
+export const MEDIA_COMPONENT_NAMES = Object.freeze(['Diagram', 'Figure', 'Video']);
 
 export function catalogMedia(__dil, DIL, GenUI, useSavedImpl, mdImpl) {
   const h = __dil.jsx;
@@ -226,7 +231,101 @@ export function catalogMedia(__dil, DIL, GenUI, useSavedImpl, mdImpl) {
         s.pageUrl ? h('button', { size: 'sm', variant: 'ghost', ariaLabel: `Open the image page for ${str(s.title)} on Wikimedia Commons`, onClick: () => GenUI.openUrl(s.pageUrl) }, 'Source') : null));
   }
 
-  return { Diagram, Figure };
+  // ------------------------------------------------------------------ Video
+  // State from the server (server/videos.js) as componentResults[__resolutionId]: pending, then
+  // {found:false} or {found, videoId, start, end, duration, title, channel, chapter?, pageUrl}.
+  // Only ids the server resolved get a player (dil-surface.js); questions come from the props.
+  const clock = (sec) => { const t = Math.max(0, Math.floor(sec)); return `${Math.floor(t / 60)}:${String(t % 60).padStart(2, '0')}`; };
+  const labelOf = (q, v) => str(arr(q.options).find((o) => o.value === v)?.label);
+  const rightOf = (q) => arr(q.correct_values)[0];
+
+  /** One answered or open single-choice question (the prediction shows its verdict only after the clip). */
+  function VideoQuestion({ q, picked, onPick, kicker }) {
+    const answered = picked != null;
+    const correct = answered && picked === rightOf(q);
+    return h('col', { __component: 'VideoQuestion', gap: 2 },
+      kicker ? h('text', { size: 'xs', weight: 'bold', color: 'tertiary' }, kicker) : null,
+      md(q.prompt, { size: 'sm', weight: 'medium' }),
+      answered
+        ? h('col', { gap: 1, padding: 3, radius: 'lg', background: correct ? 'success-subtle' : 'danger-subtle' },
+          h('row', { gap: 2, align: 'center' },
+            h('icon', { name: correct ? 'check' : 'info', size: 'sm', color: correct ? 'success' : 'danger' }),
+            h('text', { size: 'sm', weight: 'bold', color: correct ? 'success' : 'danger' }, correct ? `Right: ${labelOf(q, picked)}` : `You said ${labelOf(q, picked)}. The answer is ${labelOf(q, rightOf(q))}.`)),
+          q.explanation ? md(q.explanation, { size: 'sm' }) : null)
+        : h('col', { gap: 2 }, ...arr(q.options).map((o) => h('button', { key: `${q.id}:${o.value}`, variant: 'secondary', size: 'sm', block: true, onClick: () => onPick(o.value) }, str(o.label)))));
+  }
+
+  function Video(props) {
+    const res = useResult(props.__resolutionId);
+    const questions = arr(props.questions);
+    const predict = questions.find((q) => q.when === 'before') || null;
+    const after = questions.filter((q) => q.when !== 'before');
+    const initial = { picks: {}, started: false, watched: false };
+    const [st, setSt] = useSaved(props, 'video', initial, (v) => (v && typeof v === 'object' && v.picks && typeof v.picks === 'object'
+      ? { picks: Object.fromEntries(Object.entries(v.picks).filter(([, x]) => typeof x === 'string')), started: v.started === true, watched: v.watched === true }
+      : undefined));
+    const s = res && res.status === 'resolved' ? res.state : null;
+    if (s && !s.found) return null;
+    const caption = str(props.caption);
+    if (!s || !s.videoId) {
+      return h('col', { __component: 'Video', gap: 2, ariaLabel: 'Finding a video', role: 'status' },
+        h('box', { __component: 'VideoLoading', aspectRatio: '16/9', width: '100%', radius: 'xl', background: 'surface-secondary', align: 'center', justify: 'center', gap: 2 },
+          h('icon', { name: 'play', size: 'lg', color: 'tertiary' }),
+          h('text', { size: 'xs', color: 'tertiary' }, 'Finding a video…')),
+        caption ? md(caption, { size: 'sm', color: 'secondary' }) : null);
+    }
+    const pick = (q, value) => setSt((cur) => (cur.picks[q.id] != null ? cur : { ...cur, picks: { ...cur.picks, [q.id]: value }, started: cur.started || q.when === 'before' }));
+    const watched = () => setSt((cur) => (cur.watched ? cur : { ...cur, started: true, watched: true }));
+    const predicting = !!predict && !st.started;
+    const end = fin(s.end) ? s.end : null;
+    const span = `${clock(s.start || 0)}–${clock(end ?? s.duration ?? 0)}`;
+    const nextOpen = after.findIndex((q) => st.picks[q.id] == null);
+    const right = after.filter((q) => st.picks[q.id] === rightOf(q)).length;
+    const hasQuestions = !!predict || after.length > 0;
+
+    return h('col', { __component: 'Video', gap: 2 },
+      predicting
+        ? h('col', { __component: 'VideoPredict', key: 'predict', gap: 3, padding: 4, radius: 'xl', background: 'surface-secondary' },
+          h('row', { gap: 2, align: 'center' },
+            h('icon', { name: 'lightbulb', size: 'sm', color: 'brand-strong' }),
+            h('text', { size: 'xs', weight: 'bold', color: 'brand-strong' }, 'PREDICT FIRST')),
+          h(VideoQuestion, { q: predict, picked: null, onPick: (v) => pick(predict, v) }),
+          h('row', null, h('button', { size: 'sm', variant: 'ghost', onClick: () => setSt((cur) => ({ ...cur, started: true })) }, 'Skip to the video')))
+        : h('youtube', {
+          __component: 'VideoPlayer', key: 'player', videoId: s.videoId, start: s.start || 0, ...(end != null ? { end } : {}), title: str(s.title),
+          width: '100%', aspectRatio: '16/9', radius: 'xl', clip: true,
+          cues: st.watched || end == null || !hasQuestions ? [] : [end], onCue: watched,
+        }),
+      caption ? md(caption, { size: 'sm', color: 'secondary' }) : null,
+      h('row', { gap: 2, align: 'center', wrap: true },
+        h('text', { size: 'xs', color: 'tertiary', flex: '1 1 auto', minWidth: 0, __component: 'VideoCredit' },
+          `Video: ${str(s.title)} · ${str(s.channel)} · YouTube · ${s.chapter ? `${str(s.chapter)}, ` : ''}${span}`),
+        s.pageUrl ? h('button', { size: 'sm', variant: 'ghost', ariaLabel: `Watch ${str(s.title)} on YouTube`, onClick: () => GenUI.openUrl(s.pageUrl) }, 'YouTube') : null),
+      !hasQuestions || predicting ? null
+        : !st.watched
+          ? h('row', { __component: 'VideoAfter', key: 'after', gap: 2, align: 'center', wrap: true, padding: 3, radius: 'xl', background: 'surface-secondary' },
+            h('text', { size: 'sm', color: 'secondary', flex: '1 1 auto', minWidth: 0 },
+              predict && st.picks[predict.id] != null
+                ? `Your prediction: ${labelOf(predict, st.picks[predict.id])}. Watch to find out${after.length ? ', then answer' : ''}.`
+                : after.length === 1 ? 'One question when the clip ends.' : after.length ? `${after.length} questions when the clip ends.` : 'Watch to check the prediction.'),
+            h('button', { size: 'sm', variant: 'secondary', onClick: watched }, 'I watched it'))
+          : h('col', { __component: 'VideoAfter', key: 'after', gap: 4, padding: 4, radius: 'xl', background: 'surface-secondary' },
+            h('row', { gap: 2, align: 'center' },
+              h('icon', { name: 'check', size: 'sm', color: 'brand-strong' }),
+              h('text', { size: 'xs', weight: 'bold', color: 'brand-strong' }, after.length ? 'PAUSE AND ANSWER' : 'YOUR PREDICTION')),
+            predict
+              ? (st.picks[predict.id] != null
+                ? h(VideoQuestion, { key: 'p', q: predict, picked: st.picks[predict.id], kicker: after.length ? 'YOUR PREDICTION' : null })
+                : h('col', { key: 'p', gap: 1 }, md(predict.prompt, { size: 'sm', weight: 'medium' }),
+                  h('text', { size: 'sm', color: 'secondary' }, `The answer: ${labelOf(predict, rightOf(predict))}.`),
+                  predict.explanation ? md(predict.explanation, { size: 'sm' }) : null))
+              : null,
+            ...after.map((q, i) => (nextOpen !== -1 && i > nextOpen ? null
+              : h(VideoQuestion, { key: q.id, q, picked: st.picks[q.id] ?? null, onPick: (v) => pick(q, v), kicker: after.length > 1 ? `QUESTION ${i + 1} OF ${after.length}` : null }))),
+            nextOpen === -1 && after.length ? h('text', { size: 'sm', color: 'secondary' }, `${right} of ${after.length} right.`) : null));
+  }
+
+  return { Diagram, Figure, Video };
 }
 
 /** Prelude appended after EXTRAS_PRELUDE (it reuses __wonderUseSaved and __wonderMd from LEARNING_PRELUDE). */
