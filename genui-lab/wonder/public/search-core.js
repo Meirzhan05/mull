@@ -53,8 +53,10 @@ export function queryTokens(query) {
 // ---------------------------------------------------------------- markdown to plain text
 
 // attribute values that are styling or code, not words worth finding
-const SKIP_ATTRS = new Set(['id', 'variant', 'color', 'background', 'size', 'radius', 'gap', 'padding', 'columns', 'fn', 'fns', 'icon', 'unit', 'tone', 'kind', 'href', 'src', 'xrange', 'yrange', 'params']);
-const SKIP_KEYS = new Set(['id', 'value', 'fn', 'icon', 'color', 'x', 'y', 'min', 'max', 'step', 'highlighted', 'correct', 'is_correct', 'iscorrect', 'correct_values', 'correct_index']);
+const SKIP_ATTRS = new Set(['id', 'variant', 'color', 'background', 'size', 'radius', 'gap', 'padding', 'columns', 'fn', 'fns', 'icon', 'unit', 'tone', 'kind', 'href', 'src', 'xrange', 'yrange', 'params', 'query']);
+const SKIP_KEYS = new Set(['id', 'value', 'fn', 'icon', 'color', 'x', 'y', 'min', 'max', 'step', 'highlighted', 'correct', 'is_correct', 'iscorrect', 'correct_values', 'correct_index',
+  // <Diagram/> geometry and wiring: shape kinds, path data, colors, part/step ids
+  'type', 'd', 'fill', 'stroke', 'anchor', 'part', 'show', 'highlight']);
 
 /** The readable strings inside a component's props: `title="A" steps={[{"text":"B"}]}` -> "A B". */
 function propText(attrs) {

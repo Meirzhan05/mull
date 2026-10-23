@@ -78,6 +78,13 @@ test('search: markdown to text keeps component words and KeyTerms, drops markup'
   assert.equal(markdownToText('if a < b and b > c').text, 'if a < b and b > c');
 });
 
+test('search: Diagram labels and Figure captions are words; geometry and image queries are not', () => {
+  const md = '<Diagram title="Light paths" shapes={[{"type":"path","d":"M0 150 Q200 90 Z","fill":"sky","part":"air"},{"type":"text","x":1,"y":2,"text":"Atmosphere","anchor":"start"}]} parts={[{"id":"air","label":"The atmosphere","text":"A shell of air."}]} steps={[{"label":"Noon","text":"Short trip.","show":["air"],"highlight":["air"]}]}/>\n\n<Figure query="cumulus clouds blue sky" caption="Clouds look white." alt="White clouds"/>';
+  const { text } = markdownToText(md);
+  for (const w of ['Light paths', 'Atmosphere', 'The atmosphere', 'A shell of air.', 'Noon', 'Short trip.', 'Clouds look white.', 'White clouds']) assert.ok(text.includes(w), w);
+  assert.doesNotMatch(text, /\bpath\b|M0 150|\bsky\b|\bair\b(?! *\.)|\bstart\b|cumulus/);
+});
+
 test('search: lesson pages map body offsets to "## " pages', () => {
   const { text, pages } = lessonText(BAYES);
   assert.equal(pages.length, 2);
