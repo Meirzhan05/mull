@@ -230,11 +230,11 @@ test('the lesson renderer loads only images the server resolved for a Figure', (
   assert.equal(policy(CLOUDS.src), true, 'an image stays allowed once shown on this surface');
 });
 
-async function lessonRecords(figureLookup, topic = 'why is the sky blue?') {
+async function lessonRecords(figureLookup, topic = 'why is the sky blue?', extra = {}) {
   const server = createWonderServer({ mode: 'demo', demoDelayMs: 0, logger: quiet, memoryFile: null, figureLookup, figureSettleMs: 2000 });
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   try {
-    const res = await fetch(`http://127.0.0.1:${server.address().port}/api/lesson/stream`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ topic, useWebSearch: false }) });
+    const res = await fetch(`http://127.0.0.1:${server.address().port}/api/lesson/stream`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ topic, useWebSearch: false, ...extra }) });
     return parseConversationSource(await res.text());
   } finally {
     server.closeAllConnections?.();
@@ -272,6 +272,24 @@ test('Teacher stream: a Figure in a Teacher reply resolves too (every DIL stream
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   try {
     const res = await fetch(`http://127.0.0.1:${server.address().port}/api/teacher/stream`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message: 'show me the Hoover Dam' }) });
+    const final = parseConversationSource(await res.text()).filter((r) => r.type === 'content').at(-1);
+    assert.equal(final.status, 'complete');
+    assert.deepEqual(figureResults(final), [{ status: 'resolved', state: CLOUDS }]);
+  } finally {
+    server.closeAllConnections?.();
+    await new Promise((r) => server.close(r));
+  }
+});
+
+test('recoverable streams: a lesson with a streamKey and a Teacher turn with a turnId still resolve Figures', async () => {
+  const lesson = (await lessonRecords(async () => CLOUDS, 'why is the sky blue?', { streamKey: 'k-retry-1' })).filter((r) => r.type === 'content').at(-1);
+  assert.equal(lesson.status, 'complete');
+  assert.deepEqual(figureResults(lesson), [{ status: 'resolved', state: CLOUDS }]);
+  const client = fakeClient({ text: 'Here is the dam.\n\n<Figure query="Hoover Dam" caption="The dam holds back Lake Mead."/>\n' });
+  const server = createWonderServer({ mode: 'claude', client, demoDelayMs: 0, logger: quiet, memoryFile: null, figureLookup: async () => CLOUDS, figureSettleMs: 2000 });
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  try {
+    const res = await fetch(`http://127.0.0.1:${server.address().port}/api/teacher/stream`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message: 'show me the Hoover Dam', turnId: 'turn-retry-1' }) });
     const final = parseConversationSource(await res.text()).filter((r) => r.type === 'content').at(-1);
     assert.equal(final.status, 'complete');
     assert.deepEqual(figureResults(final), [{ status: 'resolved', state: CLOUDS }]);
