@@ -43,6 +43,7 @@ import { createGrader } from './grader.js'; // Phase 8
 import { SOCRATIC_TUTOR_MODE } from './prompts-extra.js'; // Phase 8
 import { pageCount } from '../public/steering-core.js';
 import { createCommonsLookup, createFigureResolver, withFigures, FIGURE_SETTLE_MS } from './figures.js'; // media: <Figure/> images
+import { createInflight, createTurnLedger, cleanKey, retryNote } from './retry.js'; // recoverable streams
 
 export const STATIC_ROOTS = [
   { prefix: '/chatgpt-dil/src/', dir: path.join(LAB_ROOT, 'chatgpt-dil', 'src'), exts: new Set(['.js', '.css']) },
@@ -182,6 +183,10 @@ export function createWonderCore(opts = {}) {
   // Phase 6: the client's mastery summary (personalization, so it follows the memory switch)
   const learnerKnows = (body, surface) => (body?.memoryEnabled === false ? '' : masteryContext(body?.mastery, surface));
   const steering = createSteeringRegistry(); // Phase 4: in-flight lesson operations
+  // recoverable streams (server/retry.js): one live request per streamKey; Teacher tool calls per turnId
+  const inflight = createInflight();
+  const teacherTurns = createTurnLedger();
+  const heartbeatMs = opts.heartbeatMs ?? 15_000;
   // Phase 10: the learner's own material. Tests that keep memory in-process (memoryFile: null)
   // keep materials in-process too unless they pass materialsDir.
   const materials = opts.materials ?? createMaterialStore({ dir: 'materialsDir' in opts ? opts.materialsDir : opts.memoryFile === null ? null : (env.WONDER_MATERIALS_DIR || DEFAULT_MATERIALS_DIR) });
@@ -204,28 +209,41 @@ export function createWonderCore(opts = {}) {
     logger.warn?.(`[wonder] switching to demo mode (${reason})`);
   }
 
-  // Every DIL stream (lesson, tutor, Teacher) resolves its <Figure/>s: a lookup that lands
-  // mid-stream re-sends the program (writer.refresh), and settleFigures runs before complete.
-  function startNdjson(t, { record, appData, appDataFor, ...writerOpts } = {}) {
+  /**
+   * Open an NDJSON response. `retryKey` (scope + the client's streamKey) supersedes an older
+   * request with the same key: it is aborted before this one starts. A blank line every
+   * `heartbeatMs` keeps the connection visibly alive (parsers skip blank lines), so the
+   * client's idle watchdog only fires on a dead connection.
+   *
+   * Every DIL stream (lesson, tutor, Teacher) resolves its <Figure/>s: a lookup that lands
+   * mid-stream re-sends the program (writer.refresh), and settleFigures runs before complete.
+   */
+  function startNdjson(t, { record, retryKey, appData, appDataFor, ...writerOpts } = {}) {
+    const claim = retryKey ? inflight.claim(retryKey) : null;
     const io = t.openStream({ 'Content-Type': CONTENT_TYPE, 'Cache-Control': 'no-store', 'X-Accel-Buffering': 'no' });
+    const signal = claim ? AbortSignal.any([io.signal, claim.signal]) : io.signal;
+    let writer = null;
+    const beat = heartbeatMs > 0 ? setInterval(() => { if (!writer?.finished && !signal.aborted) io.write('\n'); }, heartbeatMs) : null;
+    beat?.unref?.();
+    io.onClose(() => { clearInterval(beat); claim?.release(); });
     // WONDER_RECORD_DIR: tee the NDJSON of each stream to a file (fixture capture; records hold no credentials)
     let tee = null;
     if (recordDir && record) {
       try { fs.mkdirSync(recordDir, { recursive: true }); tee = fs.createWriteStream(path.join(recordDir, `${record}-${new Date().toISOString().replace(/[:.]/g, '-')}.ndjson`)); io.onClose(() => tee.end()); } catch { tee = null; }
     }
-    const figures = createFigureResolver({ lookup: figureLookup, logger, cache: figureCache, signal: io.signal });
-    const writer = createTurnWriter({ write: (s) => { io.write(s); tee?.write(s); }, ...writerOpts, appDataFor: withFigures(appDataFor || (() => appData), figures) });
+    const figures = createFigureResolver({ lookup: figureLookup, logger, cache: figureCache, signal });
+    writer = createTurnWriter({ write: (s) => { io.write(s); tee?.write(s); }, ...writerOpts, appDataFor: withFigures(appDataFor || (() => appData), figures) });
     let queued = false;
     figures.onUpdate(() => {
       if (queued) return;
       queued = true;
       queueMicrotask(() => {
         queued = false;
-        if (writer.finished || io.signal.aborted) return;
+        if (writer.finished || signal.aborted) return;
         try { writer.refresh(); } catch (err) { logger.warn?.(`[wonder] figure refresh failed: ${err?.message || err}`); }
       });
     });
-    return { writer, signal: io.signal, figures };
+    return { writer, signal, figures };
   }
   /** Before the final record: wait briefly for image lookups, then report the rest as not found. */
   async function settleFigures(writer, figures, signal) {
@@ -256,7 +274,7 @@ export function createWonderCore(opts = {}) {
       // The API error body (type + message) never contains credentials; log it for diagnosis.
       const detail = err?.status ? ` (HTTP ${err.status}: ${err?.error?.error?.message || err.message})` : '';
       logger.error?.(`[wonder] Claude request failed: ${f.code}${detail}`);
-      writer.fail(f.message, f.code);
+      writer.fail(f.message, f.code, f);
       return { status: 'failed' };
     }
   }
@@ -306,7 +324,8 @@ export function createWonderCore(opts = {}) {
     const userTurn = (text) => (material ? [documentBlock(material.meta, material.data), { type: 'text', text }] : text);
     // a continuation seeds the kept pages' sources and numbers new refs after theirs
     const sources = cont ? createContinuationSources({ turnIndex: 0, kept: cont.kept, seed: cont.sources }) : createSourceRegistry({ turnIndex: 0 });
-    const { writer, signal, figures } = startNdjson(t, { record: 'lesson', appDataFor: citationAppData(sources), ...(cont?.messageId ? { messageId: cont.messageId } : {}) });
+    const streamKey = cleanKey(body.streamKey);
+    const { writer, signal, figures } = startNdjson(t, { record: 'lesson', retryKey: streamKey && `lesson:${streamKey}`, appDataFor: citationAppData(sources), ...(cont?.messageId ? { messageId: cont.messageId } : {}) });
     writer.start();
     if (cont) applyContinue(writer, cont);
     else writer.reasoning('Planning the lesson…');
@@ -434,7 +453,8 @@ export function createWonderCore(opts = {}) {
     while (history.length && history[0].role !== 'user') history.shift();
     const useWebSearch = body.useWebSearch === true; // Phase 3: off for the tutor unless asked
     const sources = createSourceRegistry({ turnIndex: Math.floor(history.length / 2) + 1 });
-    const { writer, signal, figures } = startNdjson(t, { record: 'tutor', appDataFor: citationAppData(sources) });
+    const streamKey = cleanKey(body.streamKey);
+    const { writer, signal, figures } = startNdjson(t, { record: 'tutor', retryKey: streamKey && `tutor:${streamKey}`, appDataFor: citationAppData(sources) });
     writer.start();
     writer.reasoning('Thinking about your question…');
     const onText = (t) => writer.append(t);
@@ -512,12 +532,15 @@ export function createWonderCore(opts = {}) {
     const threadId = typeof body.threadId === 'string' && /^[\w-]{1,80}$/.test(body.threadId) ? body.threadId : undefined;
     const history = cleanHistory(body.history, { map: stripCardMarkup });
     const appData = { opGenui: { componentResults: {}, modelDataBindings: {} } };
-    const { writer, signal, figures } = startNdjson(t, { appData, record: 'teacher' });
+    // a retried turn (same turnId) supersedes the attempt it replaces and replays its tool calls
+    const turnId = cleanKey(body.turnId);
+    const { writer, signal, figures } = startNdjson(t, { appData, record: 'teacher', retryKey: turnId && `teacher:${turnId}` });
+    const turn = turnId ? teacherTurns.open(turnId) : null;
     writer.start({ conversationId: threadId });
     writer.reasoning('Thinking…');
     const params = buildStreamParams({
       system: TEACHER_SYSTEM_PROMPT,
-      context: joinContext(memoryEnabled ? memory.promptBlock({ withIds: true }) || 'The learner\'s memory is empty so far.' : MEMORY_OFF_CONTEXT, learnerKnows(body, 'teacher')),
+      context: joinContext(memoryEnabled ? memory.promptBlock({ withIds: true }) || 'The learner\'s memory is empty so far.' : MEMORY_OFF_CONTEXT, learnerKnows(body, 'teacher'), turn ? retryNote(turn.recorded) : ''),
       messages: [],
       effort: 'medium',
       maxTokens: 32000,
@@ -529,10 +552,12 @@ export function createWonderCore(opts = {}) {
       messages: withMessage(history, message),
       writer,
       signal,
-      execute: createTeacherToolkit({ memory, progress: body.progress, mastery: body.mastery, memoryEnabled }),
-      onCard: (cardState) => {
-        const rid = newResolutionId();
-        appData.opGenui.componentResults[rid] = resolved(teacherCards.set(rid, cardState));
+      execute: (() => { const ex = createTeacherToolkit({ memory, progress: body.progress, mastery: body.mastery, memoryEnabled }); return turn ? turn.wrap(ex) : ex; })(),
+      onCard: (cardState, card) => {
+        const rid = card?.rid || newResolutionId();
+        // a replayed card keeps its id and whatever state it has reached since
+        const known = card?.replayed ? teacherCards.get(rid) : null;
+        appData.opGenui.componentResults[rid] = resolved(known || teacherCards.set(rid, cardState));
         return rid;
       },
       logger,
@@ -551,7 +576,7 @@ export function createWonderCore(opts = {}) {
         const f = friendlyError(err);
         const detail = err?.status ? ` (HTTP ${err.status}: ${err?.error?.error?.message || err.message})` : '';
         logger.error?.(`[wonder] Teacher request failed: ${f.code}${detail}`);
-        writer.fail(f.message, f.code);
+        writer.fail(f.message, f.code, f);
         return t.end();
       }
     }
@@ -669,7 +694,7 @@ function nodeTransport(req, res) {
       res.flushHeaders?.();
       const ac = new AbortController();
       res.on('close', () => { if (!res.writableFinished) ac.abort(); });
-      return { write: (s) => { if (!res.destroyed) res.write(s); }, signal: ac.signal, onClose: (fn) => res.on('close', fn) };
+      return { write: (s) => { if (!res.destroyed && !res.writableEnded) res.write(s); }, signal: ac.signal, onClose: (fn) => res.on('close', fn) };
     },
     end: () => res.end(),
   };
