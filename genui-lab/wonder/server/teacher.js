@@ -138,7 +138,7 @@ export const TEACHER_TOOLS = Object.freeze([
   },
   {
     name: 'get_progress',
-    description: 'Read the learner\'s progress: review deck size and due cards, streak, XP, recent lessons (with quiz scores), courses, saved study plans, memory items and per-concept mastery (shaky / fading / learning / mastered, estimated from graded answers). Call this before planning, or when they ask how they are doing or what to study next.',
+    description: 'Read the learner\'s progress: review deck size and due cards, streak, XP, recent lessons (with quiz scores), courses (cards due, mean memory %, and reviewSuggested when the learner should review the whole course at once, mixed), saved study plans, memory items and per-concept mastery (shaky / fading / learning / mastered, estimated from graded answers). Call this before planning, or when they ask how they are doing or what to study next.',
     input_schema: { type: 'object', additionalProperties: false, required: [], properties: {} },
   },
 ].map((t) => ({ ...t, strict: true, eager_input_streaming: true })));
@@ -256,7 +256,12 @@ export function sanitizeProgress(p) {
       ...(l?.recall != null && Number.isFinite(Number(l.recall)) ? { recall: Math.min(100, n(l.recall)), recallReviews: n(l.recallReviews) } : {}),
       when: oneLine(l?.when, 40),
     })).filter((l) => l.title),
-    courses: list(o.courses, 6).map((c) => ({ title: oneLine(c?.title, 160), done: n(c?.done), total: n(c?.total) })).filter((c) => c.title),
+    courses: list(o.courses, 6).map((c) => ({
+      title: oneLine(c?.title, 160), done: n(c?.done), total: n(c?.total),
+      ...(c?.cardsDue != null ? { cardsDue: n(c.cardsDue) } : {}),
+      ...(c?.memory != null && Number.isFinite(Number(c.memory)) ? { memory: Math.min(100, n(c.memory)) } : {}),
+      ...(c?.reviewSuggested === true ? { reviewSuggested: true } : {}),
+    })).filter((c) => c.title),
     plans: list(o.plans, 3).map((p2) => ({ goal: oneLine(p2?.goal, 160), days: n(p2?.days), opened: n(p2?.opened), total: n(p2?.total) })).filter((x) => x.goal),
     outcomes: sanitizeOutcomes(o.outcomes),
   };

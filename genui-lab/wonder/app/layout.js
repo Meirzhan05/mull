@@ -8,6 +8,7 @@ import './styles/extras.css';
 import './styles/lesson-menu.css';
 import './styles/math.css';
 import './styles/outcomes.css'; // Phases 9-10
+import './styles/course-review.css'; // whole-course review
 
 // Type: Geist for everything you read and press, Geist Mono for figures, labels and markers.
 const sans = Geist({ subsets: ['latin'], variable: '--font-sans-face', display: 'swap' });

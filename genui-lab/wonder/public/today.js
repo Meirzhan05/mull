@@ -252,6 +252,12 @@ function queueRow(n, i, ctx) {
       meta: [measured ? `${n.recall}% recall over ${n.reviews} reviews` : n.memoryToday != null ? `about ${n.memoryToday}% remembered today` : null, n.slipping ? `${n.slipping} card${n.slipping === 1 ? '' : 's'} keep slipping` : null].filter(Boolean).join(' · '),
       cta: 'Refresh', href: `#/review/lesson/${n.lessonId}` });
   }
+  if (n.kind === 'course-review') { // a course slipping as a whole: mixed recall across its lessons
+    return row({ kind: 'Course review', title: `Review all of “${n.title}”`,
+      body: 'Cards from every lesson, mixed together. Recalling ideas side by side is what makes a course stick.',
+      meta: [`about ${n.memory}% remembered across ${n.lessons} lessons`, n.due ? `${n.due} due` : null].filter(Boolean).join(' · '),
+      cta: 'Review', href: `#/review/course/${n.courseId}` });
+  }
   if (n.kind === 'plan') { // Phase 10: by calendar day
     const when = n.when === 'overdue' ? `Study plan · overdue since ${dayLabel(n.date)}` : n.when === 'upcoming' ? `Study plan · ahead, ${dayLabel(n.date)}` : `Study plan · today, day ${n.day}`;
     return row({ kind: when, title: n.title, body: n.goal, cta: n.itemKind === 'quiz' ? 'Quiz' : 'Open', onclick: () => actions.openPlanItem(n.planId, n.dayIndex, n.itemIndex) });

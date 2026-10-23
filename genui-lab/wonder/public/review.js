@@ -23,10 +23,12 @@ function shuffle(list, seed) {
   return a;
 }
 
-export function renderReview(root, { store, onExit, onXp, lessonId = null }) {
+// `entries` (optional): a ready-made queue, e.g. a whole-course review (course-review-core.js);
+// `summary(results)` (optional) adds a node to the end-of-session card.
+export function renderReview(root, { store, onExit, onXp, lessonId = null, entries = null, summary = null }) {
   const now = new Date();
   // a lesson refresh (Phase 9) reviews that lesson's weakest cards, due or not
-  const queue = lessonId ? lessonEntries(store.data.deck, lessonId, now, SESSION_SIZE) : dueEntries(store.data.deck, now, SESSION_SIZE);
+  const queue = entries || (lessonId ? lessonEntries(store.data.deck, lessonId, now, SESSION_SIZE) : dueEntries(store.data.deck, now, SESSION_SIZE));
   const session = { index: 0, correct: 0, answered: 0, xp: 0, results: [] };
   // keyboard: digits pick choices / grades, T and F answer true-false, Space reveals, Enter continues
   let keys = {};
@@ -279,13 +281,14 @@ export function renderReview(root, { store, onExit, onXp, lessonId = null }) {
         el('div', { class: 'stat' }, el('strong', null, `${acc}%`), el('span', null, 'correct')),
         el('div', { class: 'stat' }, el('strong', null, `+${session.xp}`), el('span', null, 'XP')),
         el('div', { class: 'stat' }, el('strong', null, String(currentStreak(store.data.stats))), el('span', null, 'day streak'))),
+      summary ? summary(session.results) : null,
       session.results.length ? el('ul', { class: 'next-list' }, ...session.results.slice(0, 6).map((r) => el('li', null,
         el('span', { class: `dot ${r.correct ? 'ok' : 'bad'}` }),
         el('span', { class: 'next-q' }, inlineMd(r.entry.item.prompt || r.entry.item.front)),
         el('span', { class: 'muted small' }, formatDue(r.nextDue))))) : null,
       el('p', { class: 'muted' }, stats.due ? `${stats.due} more card${stats.due === 1 ? '' : 's'} due now.` : stats.nextDue ? `Next card due ${formatDue(stats.nextDue)}.` : ''),
       el('div', { class: 'review-actions' },
-        stats.due && !lessonId ? el('button', { class: 'btn btn-secondary', type: 'button', onclick: () => { cleanup(); renderReview(root, { store, onExit, onXp }); } }, 'Keep going') : null,
+        stats.due && !lessonId && !entries ? el('button', { class: 'btn btn-secondary', type: 'button', onclick: () => { cleanup(); renderReview(root, { store, onExit, onXp }); } }, 'Keep going') : null,
         el('button', { class: 'btn', type: 'button', onclick: onExit }, 'Done'))));
   }
 
