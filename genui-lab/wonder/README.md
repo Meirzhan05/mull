@@ -33,7 +33,7 @@ cp .env.example .env        # then put your key after ANTHROPIC_API_KEY=
 npm run dev                 # next dev → http://localhost:8750
 ```
 
-For production, `npm run build && npm start` (`next start -p 8750`). `ANTHROPIC_API_KEY=... npm run dev` also works, as does an `ant auth login` profile. The server never reads, prints or logs the key. `GET /api/status` returns only `{mode: "claude"|"demo", model}`. Pass `-p <port>` to `next` to change the port. `WONDER_MODE=demo` forces demo mode even when credentials exist. `WONDER_MEMORY_FILE` moves the learner memory file. `WONDER_FIGURES=off` stops `<Figure/>` from looking images up on Wikimedia Commons. `WONDER_RECORD_DIR=<dir>` writes each lesson, tutor and Teacher stream's NDJSON to a file there; that is how the fixtures were captured, and the records contain no credentials.
+For production, `npm run build && npm start` (`next start -p 8750`). `ANTHROPIC_API_KEY=... npm run dev` also works, as does an `ant auth login` profile. The server never reads, prints or logs the key. `GET /api/status` returns only `{mode: "claude"|"demo", model}`. Pass `-p <port>` to `next` to change the port. `WONDER_MODE=demo` forces demo mode even when credentials exist. `WONDER_MEMORY_FILE` moves the learner memory file. `WONDER_FIGURES=off` stops `<Figure/>` from looking images up on Wikimedia Commons, and `WONDER_FIGURE_CHECK=off` skips the Figure vision check. `WONDER_RECORD_DIR=<dir>` writes each lesson, tutor and Teacher stream's NDJSON to a file there; that is how the fixtures were captured, and the records contain no credentials.
 
 ### Demo mode
 
@@ -98,6 +98,7 @@ All of this lives in `server/claude.js`. The client is dependency-injected, so t
   - Text comes from `content_block_delta`/`text_delta` events, followed by `await stream.finalMessage()`.
   - `stop_reason === "refusal"` produces a graceful message. `"max_tokens"` marks the turn as truncated (`debug.truncated`).
 - **Course plans and practice extraction** use `client.messages.create` with `output_config: {effort: "low", format: {type: "json_schema", schema}}`. The JSON is parsed and every item is validated.
+- **The Figure vision check** (`server/figures.js`) is the same structured call on `claude-haiku-5-5` with the image as `{type: "image", source: {type: "url", url}}`. See [Diagrams and real images](#diagrams-and-real-images).
 - **Teacher turns** (`server/teacher.js`) run a manual streaming tool loop, at most 6 requests per turn:
   - Six client tools, all `strict: true` with `additionalProperties: false` and `required` on every object, and `eager_input_streaming: true` (the request is streamed): `create_lesson`, `plan_study`, `quiz_me`, `remember`, `forget`, `get_progress`. They are static and render before the system prompt, so the one `cache_control` breakpoint on the system prompt caches tools + system. Learner memory goes in a second system block after it. There is no `tool_choice` (forcing a tool is a 400 on this model).
   - Because eager streaming skips server-side validation, every parsed input is checked against its schema plus semantic bounds (3–7 plan days, Quiz props through the catalog validator, fact ≤ 200 chars) before anything runs. A failure becomes an `is_error` tool_result echoing the JSON-encoded input. An SDK `AnthropicError` that is not an `APIError` (unparseable tool JSON) re-issues the turn, at most twice.
@@ -230,9 +231,10 @@ Memory holds free-text facts. The learner model tracks what the learner actually
   - 2–5 KeyTerms;
   - one ExplainBack;
   - a worked example;
-  - no invalid components.
+  - no invalid components. The detail names each one with its validator error (`Diagram (Shape 3 is outside the 400x250 canvas)`). A tag that never closes, because its JSON props have unbalanced braces, counts as invalid: the compiler cuts the lesson at it. `stats.media` counts valid and invalid Diagrams and Figures.
 - **Critic.** After a Claude lesson streams (not refused, not truncated), a second Claude call (structured output, effort medium, 120 s timeout) reviews the lesson:
   - It checks answer keys, facts, arithmetic and cited claims (shown the cited text), plus level fit and widget sense.
+  - It also checks the words inside Diagrams and Figures. The props are long JSON, so after the lesson the message lists, by page, each valid Diagram's title, labels, part texts, step labels and texts, and caption, and each Figure's query, caption, alt, question and answer (`mediaDigest`). A false claim there is a `factual` issue. A mislabeled part, steps out of order, or a Figure question its answer does not answer is a `widget` issue. The critic cannot see Figure images; that is the vision check's job.
   - It returns issues and `quizFixes`. A fix is applied to the Quiz props only if the rewritten Quiz still validates, and the lesson is then updated with one `replace` record.
   - A `quality-report` control record carries the lint result, the critic verdict, the issues and the fixes. The lesson's end panel shows it as a collapsible note.
   - Demo mode runs the lint only. `verify: false` on the request skips both checks.
@@ -240,11 +242,18 @@ Memory holds free-text facts. The learner model tracks what the learner actually
   - Generates a lesson per topic in `evals/topics.json` through an in-process server, so it runs the real prompts, compile, lint and critic. It uses an empty in-memory learner memory, and web search is off unless `--web` is passed.
   - Scores each lesson with an LLM judge (`server/judge.js`), 1–5 with a rationale on accuracy, clarity, level fit, interactivity and quiz quality.
   - Writes `evals/reports/<timestamp>.json` and `.md`: per-lesson rows, means, the most-failed format checks, and notes.
-  - Options: `--limit n`, `--concurrency n`, `--topics file`, `--no-judge`, `--no-verify`, `--web`, `--out dir`. `--demo` runs with no API calls.
-  - A Claude run costs about 3 calls per lesson: lesson, critic and judge.
+  - Reports media per lesson (`media` in the JSON, a "Diagrams and figures" table in the markdown):
+    - every Diagram and Figure, and whether it validated (`compileWonder(...).components` status and error; `unclosed` for a tag that never closed);
+    - a valid Diagram's part and step counts;
+    - for a Figure, whether the final record has an image (`found`, with the Commons title), the vision check dropped it (`rejected`, with why), or nothing was found.
+  - The summary aggregates these: lessons with a Diagram, with a Figure and with a shown image, plus valid, found, dropped and missing counts.
+  - Five topics tagged `media` are physical or spatial (heart, camera lens, plate tectonics, water cycle, Moon phases). `--tag media` runs only those.
+  - Options: `--limit n`, `--concurrency n`, `--topics file`, `--tag name`, `--no-judge`, `--no-verify`, `--web`, `--out dir`. `--demo` runs with no API calls.
+  - A Claude run costs about 3 calls per lesson: lesson, critic and judge. Each found Figure adds a vision check on Haiku.
 
 ```sh
 npm run eval -- --limit 3
+npm run eval -- --tag media
 ```
 
 ## Free response and "Guide me" (Phase 8)
@@ -376,7 +385,7 @@ Interactive widgets keep their state across reloads and when a lesson is reopene
 - **Teacher history is text.** Earlier turns go back to Claude as markdown with `[Card: …]` notes, not as the original tool_use/tool_result blocks. Card state on the server is in memory, but cards carry their state, so they survive restarts.
 - **Memory is one file for one local learner.** There are no accounts. It is not encrypted; "Forget everything" deletes it.
 - **Inherited from chatgpt-dil:** a best-effort sandbox lockdown and no SVG `<text>` in the captured client. Flowchart and ConceptMap are therefore laid out with boxes rather than drawn edges. Wonder's host adds an `svg-text` primitive for `Diagram` labels.
-- **Figure needs the network and Wikimedia.** The server queries Wikimedia Commons, and the learner's browser loads the image from `upload.wikimedia.org` / `thumb.wikimedia.org` (no referrer). Offline, or with `WONDER_FIGURES=off`, Figures are left out and the lesson reads without them. Claude never sees the picture, so captions are written to be true of any good image of the subject.
+- **Figure needs the network and Wikimedia.** The server queries Wikimedia Commons, and the learner's browser loads the image from `upload.wikimedia.org` / `thumb.wikimedia.org` (no referrer). Offline, or with `WONDER_FIGURES=off`, Figures are left out and the lesson reads without them. Claude never sees the picture when it writes, so captions are written to be true of any good image of the subject; the vision check then drops an image that does not fit.
 
 ## Credentials
 
@@ -705,6 +714,18 @@ Two catalog components put pictures next to the explanation.
   - **Loading.** A "Finding an image…" frame shows while the lookup runs.
   - **Image.** A tall image is letterboxed to 1.25:1 until tapped.
   - **Text.** Caption, an optional "Look closer" question whose answer is revealed and saved, and `Image: author · license · Wikimedia Commons` with a Source button that opens the file page.
+- **Vision check.** Claude wrote the caption without seeing the image, so after a lookup finds one, a small structured call (`createFigureCheck`) asks Claude whether it fits.
+  - **Request.** The thumbnail goes as an image block by URL, followed by the search phrase, the Commons title, the caption, the alt text, and the question and answer. The schema is `{depicts, fits, problem}`, effort `low`, no tools.
+  - **Verdict.** `fits: false` turns the Figure into `{found: false, rejected: {title, depicts, problem}}`, which renders nothing, as when no image is found. The server logs why. A kept image gets `checked: true`.
+  - **Caching.** The verdict is cached with the lookup: with the check on, the cache key also includes the caption, alt, question and answer. A rejection expires like a miss, after 10 minutes.
+  - **Failures fail open.** An API error, refusal or timeout (15 s) shows the image unchecked, for that stream only. It is not cached, so the next stream checks again.
+  - **Download fallback.** The API fetches the URL itself, and Wikimedia sometimes refuses its fetcher with HTTP 400 "Unable to download the file". In a first live run 16 of 26 checks failed that way, even for images that downloaded fine from here. On that error only, the server fetches the same thumbnail once and sends it as a base64 block: allow-listed Wikimedia hosts only, our User-Agent, JPEG, PNG, GIF or WebP, at most 4 MB.
+  - **Settle budget.** The check runs inside the figure's pending lookup, so `settle(figureSettleMs)` bounds it like the lookup itself. A check still running when the stream ends leaves that Figure out of this stream, and its verdict is cached for the next one. Lookups start as soon as a Figure tag compiles, and the critic runs before the settle, so checks usually finish mid-lesson.
+  - **Model.** `claude-haiku-5-5`, measured against `claude-opus-5-5`. Six real Commons images were each paired with their own caption, a caption from another topic, and subtle near-misses: a cumulus photo captioned as an anvil thunderstorm, a plate map captioned with "red earthquake dots", a seafloor map captioned as black smokers. That made 19 cases, run twice each.
+    - Haiku: 36/38 right, median 1.6 s, max 2.8 s. Both misses were the same strict call: it rejected a convex-lens ray diagram captioned "meeting at the focal point" because the drawing labels that point a circle of confusion.
+    - Opus: 38/38, median 2.7 s, max 5.1 s, at about 40× Haiku's per-token price.
+    - Haiku's failure mode is dropping an image, not showing a wrong one, so it is the default. `WONDER_FIGURE_CHECK_MODEL` (or `figureCheckModel`) overrides it.
+  - **Switches.** On by default in claude mode. Off in demo mode (no client) and in the tests (`test/index.js` sets `WONDER_FIGURE_CHECK=off`). `WONDER_FIGURE_CHECK=off` or `figureCheck: false` turns it off; `figureCheck: fn` replaces it (tests).
 - **Settings.** `WONDER_FIGURES=off`, or `figureLookup: null` in `createWonderCore`, skips the network. The tests stub the lookup. `figureSettleMs` changes the end-of-stream wait.
 - **Demo.** The sky-blue sample shows a photo of white clouds in a blue sky on its Mie-scattering page.
 

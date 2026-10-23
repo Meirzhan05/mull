@@ -68,10 +68,10 @@ export function buildStreamParams({ system, context, messages, effort = 'medium'
   };
 }
 
-/** Structured-output request for small extraction calls. */
-export function buildStructuredParams({ system, schema, user, effort = 'low', maxTokens = 16000 }) {
+/** Structured-output request for small extraction calls. `user` is a string or content blocks. */
+export function buildStructuredParams({ system, schema, user, effort = 'low', maxTokens = 16000, model = MODEL }) {
   return {
-    model: MODEL,
+    model,
     max_tokens: maxTokens,
     thinking: { type: 'adaptive' },
     output_config: { effort, format: { type: 'json_schema', schema } },
@@ -135,9 +135,9 @@ export async function streamText(client, params, { onText, signal, idleMs } = {}
   }
 }
 
-/** Non-streaming structured call; returns parsed JSON or throws. */
-export async function createStructured(client, params) {
-  const message = await client.messages.create(params);
+/** Non-streaming structured call; returns parsed JSON or throws. `options`: SDK request options ({signal, maxRetries}). */
+export async function createStructured(client, params, options) {
+  const message = await (options ? client.messages.create(params, options) : client.messages.create(params));
   if (message.stop_reason === 'refusal') {
     const err = new Error('Claude declined to produce this output');
     err.code = 'refusal';

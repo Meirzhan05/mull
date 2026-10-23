@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 
 process.env.WONDER_FIGURES ??= 'off'; // see test/index.js
+process.env.WONDER_FIGURE_CHECK ??= 'off';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createLearningRuntime, createMirror } from '../public/learning-runtime.js';
