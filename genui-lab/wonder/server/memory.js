@@ -61,17 +61,19 @@ function sanitizeItem(raw) {
 }
 
 /**
- * @param {{file?: string|null, now?: () => Date, maxItems?: number, logger?: Console}} [opts]
+ * `items` + `onSave` (account sync, server/sync/user-stores.js): start from these items instead of
+ * a file and hand every saved list to onSave.
+ * @param {{file?: string|null, now?: () => Date, maxItems?: number, logger?: Console, items?: object[], onSave?: (items: object[]) => void}} [opts]
  */
-export function createMemoryStore({ file = DEFAULT_MEMORY_FILE, now = () => new Date(), maxItems = MAX_ITEMS, logger = console } = {}) {
+export function createMemoryStore({ file = DEFAULT_MEMORY_FILE, now = () => new Date(), maxItems = MAX_ITEMS, logger = console, items: initial = null, onSave = null } = {}) {
   let items = null; // newest last
 
   function load() {
     if (items) return items;
     items = [];
-    if (!file) return items;
+    if (!file && !initial) return items;
     try {
-      const parsed = JSON.parse(fs.readFileSync(/* turbopackIgnore: true */ file, 'utf8'));
+      const parsed = initial ? { items: initial.slice().sort((a, b) => String(a?.createdAt).localeCompare(String(b?.createdAt))) } : JSON.parse(fs.readFileSync(/* turbopackIgnore: true */ file, 'utf8'));
       const list = Array.isArray(parsed?.items) ? parsed.items : [];
       const seen = new Set();
       for (const raw of list) {
@@ -86,6 +88,7 @@ export function createMemoryStore({ file = DEFAULT_MEMORY_FILE, now = () => new 
   }
 
   function save() {
+    if (onSave) { onSave(items.map((i) => ({ ...i }))); return; }
     if (!file) return;
     const dir = path.dirname(file);
     fs.mkdirSync(dir, { recursive: true });

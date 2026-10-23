@@ -12,8 +12,8 @@ const nextConfig = {
   reactStrictMode: true,
   turbopack: { root: labRoot },
   outputFileTracingRoot: labRoot,
-  // the Anthropic SDK stays a plain Node dependency of the route handlers
-  serverExternalPackages: ['@anthropic-ai/sdk'],
+  // the Anthropic SDK, pg and web-push stay plain Node dependencies of the route handlers
+  serverExternalPackages: ['@anthropic-ai/sdk', 'pg', 'web-push'],
   poweredByHeader: false,
   devIndicators: false, // the badge sits on the mobile tab bar; build errors still show the overlay
 };

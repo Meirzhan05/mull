@@ -3,6 +3,7 @@
 // and You (stats, settings, learner memory).
 
 import { createStore, uid } from './store.js';
+import { openLocalCache, startAccount, pushActive, onSyncStatus } from './account.js'; // account sync
 import { DilSurface, mergeComponentResults } from './dil-surface.js';
 import { streamTurn, postJson, failureError, retryDelay } from './stream-client.js';
 import { retryControl } from './retry-ui.js'; // recoverable streams
@@ -32,7 +33,9 @@ import { storeEvidence, quizEvidence, explainEvidence, requestMastery } from './
 import { qualitySummary } from './quality-core.js'; // Phase 7
 import { pickVariant, insightsForPrompt, lessonOutcome, RECALL_MIN, STYLE_VARIANTS } from './outcomes-core.js'; // Phase 9
 
-const store = createStore();
+// Signed in: this account's IndexedDB cache (synced with the server); signed out: localStorage.
+const localCache = await openLocalCache();
+const store = createStore({ storage: localCache.storage });
 const PAGE_ID = uid('page'); // this page load: a 'streaming' lesson owned by another id was interrupted
 // Cross-tab lock per lesson, held for any stream of it. Released by the lesson's own pagehide
 // handler (after its last save), so a waiting tab never reads the lesson before that save.
@@ -42,7 +45,7 @@ const STORE_KEY = 'wonder.v1'; // store.js KEY: the waiting tab re-reads the les
 /** Replace this tab's in-memory copy of a lesson with the stored one (no write back). */
 function syncLessonFromStorage(lessonId) {
   try {
-    const fresh = JSON.parse(localStorage.getItem(STORE_KEY) || 'null')?.lessons?.[lessonId];
+    const fresh = JSON.parse((localCache.storage || localStorage).getItem(STORE_KEY) || 'null')?.lessons?.[lessonId];
     if (!fresh || typeof fresh !== 'object') return false;
     store.data.lessons[lessonId] = fresh; // in memory only: the writing tab owns the stored copy
     return true;
@@ -159,6 +162,7 @@ const REMINDED_KEY = 'wonder.reminded';
 function checkReminder() {
   try {
     if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return;
+    if (pushActive()) return; // the server sends it over Web Push (account sync), also with no tab open
     const last = localStorage.getItem(REMINDED_KEY);
     if (!reminderDue(store.data.settings, store.data.stats, new Date(), last)) return;
     localStorage.setItem(REMINDED_KEY, new Date().toLocaleDateString('en-CA'));
@@ -654,9 +658,11 @@ function renderLesson(lessonId) {
     if (stopWatch) return;
     const onStorage = (e) => { if (e.key === STORE_KEY && syncLessonFromStorage(lessonId)) renderStored(); };
     window.addEventListener('storage', onStorage);
+    const offCache = localCache.storage?.onChange?.((key) => onStorage({ key })); // signed in: the account cache's feed
     let reopen = 0;
     stopWatch = lessonLocks.watch(lessonId, () => {
       window.removeEventListener('storage', onStorage);
+      offCache?.();
       // the writer saves right before it releases; give that save a moment to land
       reopen = setTimeout(() => {
         if (ac.signal.aborted) return;
@@ -666,7 +672,7 @@ function renderLesson(lessonId) {
         window.scrollTo(0, y);
       }, 250);
     });
-    teardown.push(() => { stopWatch?.(); clearTimeout(reopen); window.removeEventListener('storage', onStorage); });
+    teardown.push(() => { stopWatch?.(); clearTimeout(reopen); window.removeEventListener('storage', onStorage); offCache?.(); });
   }
 
   // In Resume / Revise mode, another tab may take the lesson (its own Resume / Revise): follow it.
@@ -1319,4 +1325,10 @@ refreshChrome();
 loadStatus().then(() => {
   route();
   if (needsOnboarding(store.data)) showOnboarding({ store, onDone: () => { refreshChrome(); if (!location.hash || location.hash === '#/') route(); } });
+  // account sync: changes from other devices redraw Today / Library when that cannot disturb reading
+  onSyncStatus((s) => {
+    if (s.state === 'synced' && s.applied && ['home', 'library'].includes(document.body.dataset.screen) && window.scrollY < 40 && !document.querySelector('.onboard, dialog[open]')) route();
+    else refreshChrome();
+  });
+  startAccount({ store, toast }).catch((e) => console.warn('[wonder] account sync could not start', e));
 });
