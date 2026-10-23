@@ -182,3 +182,33 @@ test('import-local: signed-out server memory and material move into one account,
   assert.equal((await sync.db.getFile('alice', m.item.id)).bytes.toString('utf8'), NOTES);
   assert.equal(await sync.db.getFile('bob', m.item.id), null);
 });
+
+test('recoverable streams with accounts: a streamKey only supersedes the same user\'s request', async () => {
+  // the first upstream call hangs until aborted; later ones answer at once
+  const calls = [];
+  const client = { beta: { messages: { stream(params, { signal } = {}) {
+    const n = calls.push({ signal });
+    return {
+      async *[Symbol.asyncIterator]() {
+        yield { type: 'message_start', message: { id: 'msg' } };
+        yield { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } };
+        yield { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: '# Steady\n\nSome text.\n' } };
+        if (n === 1) await new Promise((_, rej) => signal.addEventListener('abort', () => rej(Object.assign(new Error('Request was aborted.'), { name: 'APIUserAbortError' })), { once: true }));
+        yield { type: 'message_delta', delta: { stop_reason: 'end_turn' } };
+      },
+      async finalMessage() { return { stop_reason: 'end_turn', content: [] }; },
+    };
+  } } } };
+  await withServer({ mode: 'claude', client }, async ({ alice, bob }) => {
+    const body = { topic: 'steady', streamKey: 'lesson-shared-12345678', useWebSearch: false, verify: false };
+    const first = alice('POST', '/api/lesson/stream', body);
+    for (let i = 0; i < 100 && calls.length < 1; i++) await new Promise((r) => setTimeout(r, 10));
+    const other = await bob('POST', '/api/lesson/stream', body);
+    assert.match(other.text, /"status":"complete"/);
+    assert.equal(calls[0].signal.aborted, false, 'Bob\'s request with the same key leaves Alice\'s stream alone');
+    const again = await alice('POST', '/api/lesson/stream', body);
+    assert.match(again.text, /"status":"complete"/);
+    assert.equal(calls[0].signal.aborted, true, 'Alice\'s own retry supersedes her older request');
+    await first;
+  });
+});
