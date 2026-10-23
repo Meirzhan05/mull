@@ -7,10 +7,12 @@ import { dueEntries, lessonEntries, reviewEntry, previewDue, deckStats, awardXp,
 import { gradePracticeItem } from './practice-core.js';
 import { recordEvidence, ratingScore } from './mastery-core.js';
 import { postJson } from './stream-client.js';
+import { createVisualPractice, isVisualItem, visualFeedbackTitle, VISUAL_TYPE_LABEL } from './review-visual.js';
 
 const SESSION_SIZE = 12;
 const TYPE_LABEL = { mcq: 'Multiple choice', cloze: 'Fill the blank', binary_choice: 'True or false', flashcard: 'Recall', explain: 'Explain it' };
 const GRADE_WORDS = ['Not yet', 'Partly there', 'Nearly there', 'Spot on'];
+Object.assign(TYPE_LABEL, VISUAL_TYPE_LABEL); // number_line / chart_select / order_steps
 
 function shuffle(list, seed) {
   const a = list.slice();
@@ -36,12 +38,14 @@ export function renderReview(root, { store, onExit, onXp, lessonId = null, entri
     if (e.metaKey || e.ctrlKey || e.altKey || !root.isConnected) return;
     const t = e.target;
     if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA') && e.key !== 'Enter') return;
+    if (t?.closest?.('.dil-root') && (e.key === 'Enter' || e.key === ' ')) return; // a focused widget button handles these itself
     const k = e.key === ' ' ? 'space' : e.key.toLowerCase();
     const fn = keys[k];
     if (fn) { e.preventDefault(); fn(); }
   };
   document.addEventListener('keydown', onKey);
-  const cleanup = () => document.removeEventListener('keydown', onKey);
+  const visual = createVisualPractice(); // one sandboxed DIL surface for the session's visual cards
+  const cleanup = () => { document.removeEventListener('keydown', onKey); visual.destroy(); };
 
   root.replaceChildren();
   const wrap = el('section', { class: 'review' });
@@ -242,6 +246,11 @@ export function renderReview(root, { store, onExit, onXp, lessonId = null, entri
       } }, input, el('div', { class: 'review-actions' }, status, check));
       card.append(form);
       setTimeout(() => input.focus(), 30);
+    } else if (isVisualItem(item)) {
+      keys = visual.show(card, item, (g) => {
+        const due = record(entry, g.rating, g.correct);
+        feedback(card, { ...g, explanation: item.explanation, nextDue: due, title: visualFeedbackTitle(item, g) });
+      }, hint);
     } else {
       card.append(el('h2', { class: 'review-prompt' }, inlineMd(item.front)));
       const reveal = el('button', { class: 'btn btn-lg', type: 'button', onclick: () => {

@@ -1,0 +1,23 @@
+/* Visual practice cards in the review session (public/catalog-practice.js). */
+.review-visual { min-width: 0; }
+.review-visual .dil-root { font-family: var(--font); color: var(--ink); }
+
+/* number line: the whole track is the touch target; − and + are the keyboard controls */
+.dil-root [data-dil-catalog="PracticeNLCell"] { cursor: pointer; touch-action: manipulation; transition: background 120ms ease; }
+.dil-root [data-dil-catalog="PracticeNLCell"]:hover { background: var(--hover); }
+.dil-root [data-dil-catalog="PracticeNLLabel"] > * { white-space: nowrap; overflow: visible; }
+.dil-root [data-dil-catalog="PracticeNLTrack"] > * > [data-d-component="box"]:not(:last-child) { position: relative; z-index: 1; flex: 0 0 auto; box-shadow: var(--shadow-sm); }
+
+/* chart select: bars and points are buttons */
+.dil-root button[data-d-component="pressable"][data-variant^="pick"] { border: 0; touch-action: manipulation; transition: background 120ms ease, box-shadow 120ms ease; } /* outlines are inset shadows: no gaps in a line */
+.dil-root button[data-d-component="pressable"][data-variant="pick"]:hover:not([disabled]) { background: var(--hover); }
+.dil-root button[data-d-component="pressable"][data-variant="pick-on"] { background: var(--brand-subtle); box-shadow: inset 0 0 0 1px var(--accent), var(--ring); }
+.dil-root button[data-d-component="pressable"][data-variant="pick-right"] { background: var(--success-subtle); box-shadow: inset 0 0 0 1px var(--success); }
+.dil-root button[data-d-component="pressable"][data-variant="pick-wrong"] { background: var(--danger-subtle); box-shadow: inset 0 0 0 1px var(--danger); }
+.dil-root button[data-d-component="pressable"][data-variant="pick-dim"] { opacity: 0.6; }
+.dil-root button[data-d-component="pressable"][data-variant^="pick"][disabled] { cursor: default; }
+.dil-root [data-dil-catalog="PracticeChartLabel"] { overflow-wrap: anywhere; hyphens: auto; }
+
+/* order steps */
+.dil-root [data-dil-catalog="PracticeOrderRow"] { transition: background 160ms ease, border-color 160ms ease; }
+.dil-root [data-dil-catalog^="Practice"] button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }

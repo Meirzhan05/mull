@@ -10,6 +10,7 @@ import './styles/math.css';
 import './styles/outcomes.css'; // Phases 9-10
 import './styles/course-review.css'; // whole-course review
 import './styles/search.css';
+import './styles/practice.css'; // visual practice cards
 
 // Type: Geist for everything you read and press, Geist Mono for figures, labels and markers.
 const sans = Geist({ subsets: ['latin'], variable: '--font-sans-face', display: 'swap' });
