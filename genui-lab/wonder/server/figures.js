@@ -229,7 +229,7 @@ export function createFigureCheck({ client, model = FIGURE_CHECK_MODEL, timeoutM
       raw = await ask(await inlineImage(state.src, fetch, sig));
     }
     if (typeof raw?.fits !== 'boolean') throw new Error('figure check returned no verdict');
-    return { fits: raw.fits, depicts: str(raw.depicts, 200), problem: str(raw.problem, 200) };
+    return { fits: raw.fits, depicts: str(raw.depicts, 300), problem: str(raw.problem, 300) };
   };
 }
 

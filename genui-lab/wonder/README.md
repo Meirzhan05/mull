@@ -753,4 +753,27 @@ Two catalog components put pictures next to the explanation.
   - **Diagram.** The sky-blue diagram stepped Noon → Sunset → Compare. Tapping the orange arrow opened "Sunset light", and the step and selection survived a reload. Checked in light and dark, at desktop and 375 px widths.
   - **Claude.** A live lesson on "How the human heart pumps blood" came back with a valid `Diagram` on the first try: four chambers, the septum and the valves as 6 tappable parts, and "Tap each chamber below" in the prose. It surfaced two fixes. Rects need `width`/`height` passed through by the host. Free labels inside a shape now join that shape's part, so tapping a chamber's name selects the chamber and its label doesn't dim. Claude chose no `Figure` for that topic.
   - **Figure.** The live Commons lookup found "Clouds in the sky in August 2014" (Jakec, CC BY-SA 4.0) in about 0.5 s. It rendered with its caption, Look closer and credit, and reloaded from the saved lesson.
+- **`test/media-checks.test.js`** (fake client, no network):
+  - the vision check's request (an image block by URL, the figure's text, the schema);
+  - a matching figure is kept, a mismatched one dropped as not found, and both verdicts are cached;
+  - a failed check fails open for that stream only;
+  - the inline fallback when the API cannot download the URL;
+  - the settle budget, and the check's own timeout;
+  - the core switches (claude, demo, env, `figureCheck`);
+  - a claude-mode lesson stream whose Figure the check drops;
+  - invalid and unclosed Diagram/Figure tags in the lint;
+  - the critic prompt and its diagram/figure text;
+  - the eval's per-lesson media, the summary and the report.
+- **Live eval** (`npm run eval -- --tag media --limit 3`, claude mode, critic and judge on, vision check on Haiku, 2026-10-23):
+
+  | Topic | Diagram | Figure | Image | Lint | Judge |
+  | --- | --- | --- | --- | --- | --- |
+  | How the heart pumps blood | 1 valid (6 parts, 0 steps) | – | – | 1 | 4.4 |
+  | How a camera lens forms an image (intermediate) | 2 valid (3 parts / 3 steps; 4 parts / 4 steps) | – | – | 0.92 | 4.2 |
+  | Plate tectonics and earthquakes | 2 valid (4 parts / 0 steps; 2 parts / 4 steps) | 1 valid | dropped by the vision check | 0.92 | 4.2 |
+
+  - **Diagrams.** A Diagram in 3/3 lessons, 5/5 valid on the first try.
+  - **Figures.** A Figure in only 1/3 lessons, and no image was shown. The Commons lookup found "San Andreas Fault, Carrizo Plain National Monument" (Ken Lund, CC BY-SA 2.0). The check rejected it: the photo is mostly an airliner wing over mountain ranges, with the fault a faint line near the bottom edge, while the caption promised "a long, straight scar" across the plain. Looking at the thumbnail, that call is defensible.
+  - **Critic.** 0 issues on all three lessons. The judge's weakest dimension was quiz quality (3.33). The only failed format check was `key_terms` (6 and 7 distinct KeyTerms), ×2.
+  - **Takeaway.** Claude reaches for `Diagram` readily on spatial topics and rarely for `Figure`.
 
