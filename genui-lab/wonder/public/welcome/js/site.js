@@ -42,7 +42,11 @@ fetch('/api/account', { credentials: 'same-origin' })
     barIn.textContent = 'Sign in';
     barIn.href = `${APP}#/signin`;
     document.querySelectorAll('[data-next]').forEach((n) => {
-      n.innerHTML = "You'll sign in with Google so your lessons and cards are saved to your account. <b>Your topic will be waiting.</b>";
+      // The hero's note stays one line (it sits under the headline); it offers the lesson on this
+      // page that needs no sign-in. The others say why sign-in comes first.
+      n.innerHTML = n.hasAttribute('data-try')
+        ? "Sign in with Google to save your lessons, or <a href=\"#p2\">try a real one first</a>, no sign-in."
+        : "You'll sign in with Google so your lessons and cards are saved to your account. <b>Your topic will be waiting.</b>";
       n.hidden = false;
     });
   })
