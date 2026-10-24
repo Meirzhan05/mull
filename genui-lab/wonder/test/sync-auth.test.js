@@ -1,7 +1,7 @@
 // Account sync over HTTP: per-user authorization on every endpoint (sync, memory, material, push),
 // signed-out behaviour on a server with accounts, and a static check that every Postgres
 // statement touching learner data is scoped to one user. Auth is faked with a test header that
-// only these servers read (createWonderServer's getUserId); the real one is Clerk (server/auth.js).
+// only these servers read (createWonderServer's getUserId); the real one is Neon Auth (server/auth.js).
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -33,11 +33,12 @@ async function withServer(opts, fn) {
 test('sync config: off unless both an auth provider and a database are configured', () => {
   assert.equal(syncConfig({}).enabled, false);
   assert.equal(syncConfig({ DATABASE_URL: 'postgres://x' }).enabled, false, 'no accounts without auth');
-  const clerk = { CLERK_SECRET_KEY: 'sk', NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: 'pk' };
-  assert.equal(syncConfig(clerk).enabled, false, 'no database');
-  assert.equal(syncConfig({ CLERK_SECRET_KEY: 'sk', DATABASE_URL: 'postgres://x' }).enabled, false, 'no way to sign in without the publishable key');
-  assert.deepEqual(syncConfig({ ...clerk, DATABASE_URL: 'postgres://x' }), { enabled: true, auth: 'clerk', db: 'postgres' });
-  assert.equal(syncConfig({ ...clerk, WONDER_SYNC_DB: 'memory' }).db, 'memory');
+  const neon = { NEON_AUTH_BASE_URL: 'https://ep-x.neonauth.example/neondb/auth', NEON_AUTH_COOKIE_SECRET: 'x'.repeat(32) };
+  assert.equal(syncConfig(neon).enabled, false, 'no database');
+  assert.equal(syncConfig({ NEON_AUTH_BASE_URL: neon.NEON_AUTH_BASE_URL, DATABASE_URL: 'postgres://x' }).enabled, false, 'no session cookies without the cookie secret');
+  assert.deepEqual(syncConfig({ ...neon, DATABASE_URL: 'postgres://x' }), { enabled: true, auth: 'neon', db: 'postgres' });
+  assert.equal(syncConfig({ ...neon, WONDER_SYNC_DB: 'memory' }).db, 'memory');
+  assert.equal(syncConfig({ CLERK_SECRET_KEY: 'sk', NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: 'pk', DATABASE_URL: 'postgres://x' }).enabled, false, 'Clerk keys no longer turn accounts on');
 });
 
 test('account sync over HTTP: /api/sync is per user; signed out is 401; a stale account cache is refused', async () => {

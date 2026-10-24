@@ -28,7 +28,7 @@ import { renderToday } from './today.js';
 import { renderLibrary } from './library.js';
 import { renderYou, TEXT_SIZES } from './you.js';
 import { needsOnboarding, showOnboarding } from './onboarding.js';
-import { dailyProgress, courseProgress, roman, readingMinutes } from './progress-core.js';
+import { dailyProgress, courseProgress, roman, readingMinutes, levelOf } from './progress-core.js';
 import { storeEvidence, quizEvidence, explainEvidence, requestMastery } from './mastery-core.js'; // Phase 6 + 8
 import { qualitySummary } from './quality-core.js'; // Phase 7
 import { pickVariant, insightsForPrompt, lessonOutcome, RECALL_MIN, STYLE_VARIANTS } from './outcomes-core.js'; // Phase 9
@@ -58,7 +58,7 @@ let teardown = [];
 // ------------------------------------------------------------------ actions shared by screens
 
 /** Start a lesson on a topic (Today, palette, Library, suggestions). */
-function startLesson(topic, level = 'beginner', extra = {}) {
+function startLesson(topic, level = levelOf(store.data.settings), extra = {}) {
   const t = String(topic || '').trim();
   if (!t) return;
   const id = createLesson({ topic: t, title: t, level, ...extra });
@@ -69,25 +69,25 @@ function startLesson(topic, level = 'beginner', extra = {}) {
 // reloads the page (account.js), sometimes after an OAuth round trip, so the topic waits in this
 // tab's sessionStorage for a page load that has an account (for half an hour at most).
 const AFTER_SIGN_IN = 'wonder.afterSignIn';
-function startAfterSignIn(topic) {
-  try { sessionStorage.setItem(AFTER_SIGN_IN, JSON.stringify({ topic, at: Date.now() })); } catch {}
+function startAfterSignIn(topic, level) {
+  try { sessionStorage.setItem(AFTER_SIGN_IN, JSON.stringify({ topic, level, at: Date.now() })); } catch {}
 }
 function takeAfterSignIn() {
   if (!localCache.account) return null;
   try {
     const p = JSON.parse(sessionStorage.getItem(AFTER_SIGN_IN) || 'null');
     sessionStorage.removeItem(AFTER_SIGN_IN);
-    return p?.topic && Date.now() - p.at < 30 * 60_000 ? p.topic : null;
+    return p?.topic && Date.now() - p.at < 30 * 60_000 ? p : null;
   } catch { return null; }
 }
 
 /** Phase 10: a lesson taught from the learner's own material (a stored material id). */
-function startMaterialLesson(material, level = 'beginner') {
+function startMaterialLesson(material, level = levelOf(store.data.settings)) {
   startLesson(material.title, level, { materialId: material.id, materialTitle: material.title });
 }
 
 /** Plan a course with Claude, then open its map. Resolves false on failure. */
-async function planCourse(topic, level = 'beginner', material = null) {
+async function planCourse(topic, level = levelOf(store.data.settings), material = null) {
   const t = String(topic || '').trim();
   if (!t) return false;
   toast('Planning your course…', 6000);
@@ -120,7 +120,7 @@ function openPlanItem(planId, di, ii) {
   if (it.kind === 'quiz') { queueTeacherMessage(`Quiz me on ${it.topic || it.title}.`); location.hash = plan.threadId ? `#/teacher/${plan.threadId}` : '#/teacher'; return; }
   const known = store.data.teacherLessons?.[`${plan.id}:${it.id}`];
   if (known && store.data.lessons[known]) { location.hash = `#/lesson/${known}`; return; }
-  const id = createLesson({ topic: it.topic || it.title, title: it.title, level: 'beginner', teacherThreadId: plan.threadId });
+  const id = createLesson({ topic: it.topic || it.title, title: it.title, level: levelOf(store.data.settings), teacherThreadId: plan.threadId });
   store.update((dd) => { dd.teacherLessons = { ...(dd.teacherLessons || {}), [`${plan.id}:${it.id}`]: id }; return dd; });
   location.hash = `#/lesson/${id}`;
 }
@@ -920,7 +920,7 @@ function renderLesson(lessonId) {
         el('h2', { class: 'h-md' }, signedOut ? 'Sign in to start this lesson' : limited ? 'Today\u2019s lesson limit is reached' : 'The lesson could not be generated'),
         el('p', { class: 'muted' }, e.message || 'Something went wrong.'),
         signedOut
-          ? el('button', { class: 'btn btn-primary', type: 'button', onclick: () => { if (dropped) startAfterSignIn(lesson.topic); signIn().catch((err) => toast(err.message || 'Sign-in is not available right now')); } }, 'Sign in')
+          ? el('button', { class: 'btn btn-primary', type: 'button', onclick: () => { if (dropped) startAfterSignIn(lesson.topic, lesson.level); signIn().catch((err) => toast(err.message || 'Sign-in is not available right now')); } }, 'Sign in')
           : limited ? el('button', { class: 'btn', type: 'button', onclick: () => { location.hash = '#/'; } }, 'Back to Today')
             : el('button', { class: 'btn', type: 'button', onclick: () => { card.hidden = false; surface.host.clear(); runStream(); } }, icon('refresh'), 'Try again'));
     } finally {
@@ -1346,11 +1346,11 @@ function route() {
   else if ((m = /^#\/review\/course\/([\w-]+)$/.exec(h))) { screen = 'review'; document.body.dataset.screen = screen; renderCourseReview(screenCtx(), m[1]); }
   else if ((m = /^#\/teacher(?:\/([\w-]+))?$/.exec(h))) { screen = 'teacher'; document.body.dataset.screen = screen; renderTeacher(screenCtx(), m[1] || null); }
   else if (h === '#/library') { screen = 'library'; document.body.dataset.screen = screen; renderLibrary(screenCtx()); }
-  else if (h === '#/you' || h === '#/memory' || h === '#/mastery') { screen = 'you'; document.body.dataset.screen = screen; renderYou(screenCtx()); }
+  else if (h === '#/you' || h === '#/memory' || h === '#/mastery' || h === '#/interests') { screen = 'you'; document.body.dataset.screen = screen; renderYou(screenCtx()); }
   else { document.body.dataset.screen = screen; renderToday(screenCtx()); }
   shell.setActive(screen);
   refreshChrome();
-  if (h !== '#/memory' && h !== '#/mastery') window.scrollTo(0, 0);
+  if (h !== '#/memory' && h !== '#/mastery' && h !== '#/interests') window.scrollTo(0, 0);
   const titles = { home: 'Today', library: 'Library', review: 'Review', teacher: 'Teacher', you: 'You', course: 'Course', lesson: 'Lesson' };
   document.title = screen === 'home' ? 'Wonder' : `${titles[screen]} · Wonder`;
 }
@@ -1363,9 +1363,9 @@ observeMath(document.body);
 refreshChrome();
 loadStatus().then(() => {
   const afterSignIn = takeAfterSignIn();
-  if (afterSignIn) startLesson(afterSignIn); // its hashchange routes
+  if (afterSignIn) startLesson(afterSignIn.topic, afterSignIn.level || undefined); // its hashchange routes
   else route();
-  if (needsOnboarding(store.data)) showOnboarding({ store, onDone: () => { refreshChrome(); if (!location.hash || location.hash === '#/') route(); } });
+  if (needsOnboarding(store.data)) showOnboarding({ store, startLesson, onDone: () => { refreshChrome(); if (!location.hash || location.hash === '#/') route(); } });
   // account sync: changes from other devices redraw Today / Library when that cannot disturb reading
   onSyncStatus((s) => {
     if (s.state === 'synced' && s.applied && ['home', 'library'].includes(document.body.dataset.screen) && window.scrollY < 40 && !document.querySelector('.onboard, dialog[open]')) route();

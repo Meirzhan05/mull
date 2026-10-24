@@ -16,6 +16,13 @@ export const DAILY_GOALS = Object.freeze([
 ]);
 export const DEFAULT_GOAL = 30;
 
+/** The level a new lesson starts at (settings.level), offered at onboarding and in You. */
+export const LEVELS = Object.freeze([
+  { id: 'beginner', label: 'Beginner', hint: 'Start from the ground up' },
+  { id: 'intermediate', label: 'Intermediate', hint: 'I know the basics' },
+  { id: 'advanced', label: 'Advanced', hint: 'Skip ahead to the depth' },
+]);
+
 /** Interests offered at onboarding, each with lesson topics to suggest. */
 export const INTERESTS = Object.freeze({
   science: { label: 'Science', topics: ['Why the sky is blue', 'How vaccines train your immune system', 'What is entropy, really?', 'How photosynthesis powers life'] },
@@ -40,6 +47,10 @@ function addDays(key, n) {
 }
 
 const weekdayOf = (key) => new Date(`${key}T12:00:00Z`).getUTCDay(); // 0 = Sunday
+
+export function levelOf(settings) {
+  return LEVELS.some((l) => l.id === settings?.level) ? settings.level : 'beginner';
+}
 
 export function goalOf(settings) {
   const g = Number(settings?.dailyGoal);
@@ -137,6 +148,14 @@ function courseNext(data, course, skipId = null) {
 }
 
 /** Course progress {done, total} (finished lessons). */
+/** The lessons opened most recently, newest first. */
+export function recentLessons(data, count) {
+  return Object.values(data.lessons).sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || '')).slice(0, count);
+}
+
+/** A lesson's state for lists: [css class, label]. */
+export const lessonState = (l) => (l.finished ? ['done', 'Finished'] : l.status === 'complete' ? ['ready', l.readPage > 1 ? `Page ${l.readPage}` : 'In progress'] : l.status === 'failed' ? ['warn', 'Failed'] : ['', l.status === 'new' ? 'Not started' : 'Unfinished']);
+
 export function courseProgress(data, course) {
   const { done, total } = courseNext(data, course);
   return { done, total };

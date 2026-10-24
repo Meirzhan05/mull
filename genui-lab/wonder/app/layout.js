@@ -1,7 +1,6 @@
 // Root layout: fonts (self-hosted by next/font), global CSS, metadata and the pre-paint theme
 // script. The page body is the Wonder app shell (app/wonder-app.js).
 import { Geist, Geist_Mono } from 'next/font/google';
-import { ClerkProvider } from '@clerk/nextjs';
 import { syncConfig } from '../server/sync/index.js';
 import { landingScript } from './landing-script.js';
 import '../../chatgpt-dil/src/dil.css';
@@ -39,9 +38,6 @@ export const viewport = {
 // apply the saved theme before first paint (no flash); the shell manages it afterwards
 const THEME_SCRIPT = "try{var t=localStorage.getItem('wonder.theme');if(t==='light'||t==='dark')document.documentElement.setAttribute('data-theme',t)}catch(e){}";
 
-// Accounts (sync across devices) only when Clerk is configured; the vanilla client reaches it as
-// window.Clerk (public/account.js). Without the keys the page is exactly as before.
-const ACCOUNTS = !!(process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY && process.env.CLERK_SECRET_KEY);
 
 // signed out (account sync on) or a first visit: the home page opens on the landing page
 const LANDING_SCRIPT = landingScript({ accounts: syncConfig().enabled });
@@ -53,7 +49,7 @@ export default function RootLayout({ children }) {
         <script dangerouslySetInnerHTML={{ __html: LANDING_SCRIPT }} />
         <script dangerouslySetInnerHTML={{ __html: THEME_SCRIPT }} />
       </head>
-      <body>{ACCOUNTS ? <ClerkProvider>{children}</ClerkProvider> : children}</body>
+      <body>{children}</body>
     </html>
   );
 }

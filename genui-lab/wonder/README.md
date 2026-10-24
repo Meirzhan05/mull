@@ -61,7 +61,7 @@ Five sections, in a sidebar on desktop and a bottom tab bar on phones, plus a �
 - **You (`#/you`).** Name, totals, a 22-week activity heatmap, settings (daily goal, theme, lesson text size), learner memory, and data export or erase.
 - **Onboarding.** On first run: a name, interests and a daily goal, all skippable.
 - **Landing page (`/welcome`).** A scroll page that replays a recorded lesson, ending in a **Start a lesson** box that opens `#/learn/<topic>` in the app. The home page `/` opens on it instead of Today (a pre-paint script, `app/landing-script.js`, run by `app/layout.js`):
-  - **Account sync on:** for anyone signed out of Clerk, every time. A browser whose account session merely ended (`wonder.account` is set) stays in the app, where **Sign in again** is.
+  - **Account sync on:** for any browser without an account, every time. A browser that has signed in before (`wonder.account` is set) stays in the app, where **Sign in again** is if its session ended. A page coming back from Google sign-in (`?neon_auth_session_verifier=`) stays too, so the app can finish the sign-in. Neon Auth's cookies are HttpOnly, so the script goes by the account marker, not cookies.
   - **Accounts off:** for a first-time visitor, once (`wonder.welcomed`), when this browser has no Wonder data (`wonder.v1`, `wonder.account`).
   - Deep links such as `#/lesson/<id>` never redirect. The page is static files in `public/welcome/`; `next.config.mjs` rewrites `/welcome` to its `index.html`. It began as the ScrollCraft build in `scrollcraft/builds/wonder`, but `public/welcome/` is now the copy to edit: it has the app-only parts the standalone build lacks.
   - **Real recordings.** The replayed lesson ("Why the Roman Empire Fell", `test/fixtures/claude-lesson-rome.ndjson`, steered once with Simpler) and the Teacher's week (`claude-teacher-statistics.ndjson`) are real claude-opus-5-5 turns. `npm run welcome:data` rebuilds `public/welcome/js/data.js` from them.
@@ -390,7 +390,7 @@ Interactive widgets keep their state across reloads and when a lesson is reopene
 - **Server-side widget state is in memory** (quiz answers per resolution id). The client persists `componentResults` with each lesson, so reloads still restore it, but a server restart forgets its copy.
 - **One sandbox worker per surface**: the lesson plus each tutor reply. Very long tutor threads therefore start many workers. They are terminated when you leave the lesson.
 - **Tutor replies are not lesson-specific in demo mode.** They are templates that use the lesson's KeyTerms and Quiz. Any other topic streams one of the three sample lessons.
-- **Accounts are optional.** Without Clerk and a database, courses, lessons, the deck and XP live in this browser's localStorage, and the app falls back to in-memory storage when localStorage is blocked. With them, see [Accounts, sync and daily limits](#accounts-sync-and-daily-limits).
+- **Accounts are optional.** Without Neon Auth and a database, courses, lessons, the deck and XP live in this browser's localStorage, and the app falls back to in-memory storage when localStorage is blocked. With them, see [Accounts, sync and daily limits](#accounts-sync-and-daily-limits).
 - **Multi-tab is safe.**
   - The cross-tab lock keeps two tabs from streaming the same lesson.
   - `store.js` writes with a three-way merge per lesson, thread, course and plan, and idle tabs pick up other tabs' saves. So one tab no longer wipes another tab's changes.
@@ -843,17 +843,20 @@ Three catalog components put pictures or video next to the explanation.
 
 ## Accounts, sync and daily limits
 
-Accounts are off unless **both** Clerk keys and a database are set. Without them Wonder runs exactly as before: browser-only, one local learner.
+Accounts are off unless **both** Neon Auth and a database are set. Without them Wonder runs exactly as before: browser-only, one local learner.
 
 **Settings.** These go in `.env`, `.env.local` or `~/.config/wonder/.env`:
-- `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` and `CLERK_SECRET_KEY`, from the Clerk dashboard's **API keys** page. Copy the secret with the copy button: the shortened `sk_test_…` text the dashboard displays is not the key.
-- `DATABASE_URL`, a Postgres connection string such as Neon via the Vercel Marketplace. Or set `WONDER_SYNC_DB=memory` to try accounts with data that lasts until the server stops.
+- `NEON_AUTH_BASE_URL`, the Neon Auth URL of the database branch. Adding Neon from the Vercel Marketplace provisions Neon Auth with the database; `vercel env pull` fetches it.
+- `NEON_AUTH_COOKIE_SECRET`, 32 or more random characters that sign this app's session cookies (`openssl rand -base64 32`).
+- `DATABASE_URL`, the Postgres connection string. Or set `WONDER_SYNC_DB=memory` to try accounts with data that lasts until the server stops.
 
-`next.config.mjs` loads `~/.config/wonder/.env` at startup, because the Clerk keys must be set before `proxy.js` and `app/layout.js` decide whether accounts are on. Restart the dev server after changing them.
+`next.config.mjs` loads `~/.config/wonder/.env` at startup. Restart the dev server after changing these.
 
-**Sign-in.**
-- Clerk's prebuilt dialog handles sign-in. Turn on Google (or other providers) in the Clerk dashboard.
-- Only `ClerkProvider` may load Clerk in the browser, because it attaches the dialog's UI. `public/account.js` waits for it rather than calling `Clerk.load()` itself.
+**Sign-in** uses Neon Auth (managed Better Auth): users and sessions live in the Neon database's own auth schema.
+- **The flow.** The You page's Sign in starts Google sign-in (`signIn.social`) through Neon's browser client, which `app/wonder-app.js` creates as `globalThis.__wonderAuth`. Google returns the browser with a one-time session verifier. The client's `getSession()` sends it to `/api/auth/get-session`, which exchanges it for the session cookie on this origin.
+- **Routes and server checks.** `app/api/auth/[...path]` is Neon's proxy (`auth.handler()`). The server reads the user with `auth.getSession()` (`server/auth.js`). No middleware is needed: signed-out visitors can browse, and only the API enforces sign-in.
+- **Google credentials.** Development uses Neon's shared Google credentials. For production, register your own Google OAuth client in Neon Auth (its callback is `{NEON_AUTH_BASE_URL}/callback/google`, on Neon's host, so no custom domain is needed).
+- **Trusted domains.** Add each site origin, such as the `….vercel.app` address, to Neon Auth's trusted domains. Localhost is allowed by default.
 
 **Sync.**
 - Each signed-in browser keeps a cache in IndexedDB and syncs it through `POST /api/sync`. The server keeps a revision counter per user and merges conflicting edits.

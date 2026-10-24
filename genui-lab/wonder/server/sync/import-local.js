@@ -4,7 +4,7 @@
 //
 //   node --env-file-if-exists=.env.local server/sync/import-local.js --user <user id>
 //
-// The user id is the Clerk id shown on the You screen when signed in (user_...). Items the
+// The user id is the Neon Auth user id of the signed-in account (GET /api/account returns it). Items the
 // account already has (same id) are skipped; the local files are left as they are.
 
 import { createSyncService } from './service.js';

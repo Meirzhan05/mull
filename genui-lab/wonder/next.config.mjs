@@ -10,9 +10,9 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const labRoot = path.resolve(here, '..');
 
 // ~/.config/wonder/.env (or $WONDER_ENV_FILE) is loaded here, at startup, not only on the first
-// API request (server/web.js loadUserEnv): the Clerk keys must be in process.env before proxy.js
-// and app/layout.js decide whether accounts are on, and NEXT_PUBLIC_* values are inlined into
-// the browser bundle when it compiles. Variables already set (shell, .env, .env.local) win.
+// API request (server/web.js loadUserEnv): the Neon Auth settings must be in process.env before
+// app/api/auth/[...path] decides whether accounts are on, and NEXT_PUBLIC_* values are inlined
+// into the browser bundle when it compiles. Variables already set (shell, .env, .env.local) win.
 const userEnv = process.env.WONDER_ENV_FILE || path.join(os.homedir(), '.config', 'wonder', '.env');
 if (fs.existsSync(userEnv)) {
   try { process.loadEnvFile(userEnv); } catch (e) { console.warn(`Could not load ${userEnv}: ${e.message}`); }
