@@ -1,5 +1,5 @@
-// Is account sync on, and with which storage? On only when an auth provider is configured (both
-// Clerk keys: NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY for sign-in, CLERK_SECRET_KEY for sessions) and a
+// Is account sync on, and with which storage? On only when an auth provider is configured (Neon
+// Auth: NEON_AUTH_BASE_URL and NEON_AUTH_COOKIE_SECRET, see server/auth.js) and a
 // database is: DATABASE_URL (Postgres), or WONDER_SYNC_DB=memory to try
 // accounts locally without one (data lasts until the server stops). Otherwise Wonder runs exactly
 // as before: browser-only state, data/memory.json and data/materials.
@@ -11,7 +11,7 @@ import { createSyncService } from './service.js';
 import { createMemoryDb } from './memory-db.js';
 
 export function syncConfig(env = process.env) {
-  const auth = env.CLERK_SECRET_KEY && env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY ? 'clerk' : null;
+  const auth = env.NEON_AUTH_BASE_URL && env.NEON_AUTH_COOKIE_SECRET ? 'neon' : null;
   const db = env.DATABASE_URL ? 'postgres' : env.WONDER_SYNC_DB === 'memory' ? 'memory' : null;
   return { enabled: !!(auth && db), auth, db };
 }

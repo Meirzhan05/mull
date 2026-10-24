@@ -1,5 +1,5 @@
-// Accounts in the browser: which local cache this page uses, sign-in (Clerk, as window.Clerk from
-// the layout's ClerkProvider) and the first-sign-in migration, the sync engine, sign-out, and Web
+// Accounts in the browser: which local cache this page uses, sign-in (Neon Auth with Google, through
+// globalThis.__wonderAuth from app/wonder-app.js) and the first-sign-in migration, the sync engine, sign-out, and Web
 // Push. Everything here is inert unless the server says account sync is on (GET /api/account).
 //
 //   signed out:  store.js over localStorage ('wonder.v1'), exactly as before accounts existed
@@ -64,19 +64,33 @@ function setStatus(s) {
   for (const fn of statusListeners) { try { fn(syncStatus); } catch {} }
 }
 
-/**
- * Wait for Clerk's browser SDK, or null when accounts are off. Only ClerkProvider (app/layout.js)
- * may call Clerk.load(): it passes the prebuilt sign-in UI (@clerk/ui). A load() from here can win
- * the race and load Clerk without it, and openSignIn() then throws "not loaded with Ui components".
- */
-export async function clerk(timeoutMs = 15000) {
+/** Neon Auth's browser client (made by app/wonder-app.js before this module loads), or null. */
+async function authClient(timeoutMs = 8000) {
   const t0 = Date.now();
   while (Date.now() - t0 < timeoutMs) {
-    const c = globalThis.Clerk;
-    if (c?.loaded) return c;
-    await new Promise((r) => setTimeout(r, 100));
+    if (globalThis.__wonderAuth) return globalThis.__wonderAuth;
+    await new Promise((r) => setTimeout(r, 50));
   }
   return null;
+}
+
+let sessionUser = null; // the signed-in Neon Auth user ({id, email, name, ...}), when known
+const VERIFIER = 'neon_auth_session_verifier';
+const RETURN_HASH = 'wonder.signInReturn';
+
+/**
+ * The signed-in user per Neon Auth, or null. Back from Google, the URL carries a one-time session
+ * verifier: the client's getSession() sends it to /api/auth/get-session, which exchanges it for
+ * the session cookie (then strips it from the URL).
+ */
+async function loadSessionUser() {
+  const a = await authClient();
+  if (!a) return null;
+  try {
+    const { data } = await a.getSession();
+    sessionUser = data?.user || null;
+  } catch { sessionUser = null; }
+  return sessionUser;
 }
 
 /**
@@ -87,15 +101,22 @@ export async function clerk(timeoutMs = 15000) {
 export async function startAccount({ store, toast = () => {}, onChange = () => {} }) {
   theStore = store;
   watchAccountSwitch();
+  // back from Google: finish the sign-in (sets the session cookie) before asking the server
+  const returning = new URLSearchParams(location.search).has(VERIFIER);
+  if (returning) await loadSessionUser();
+  try {
+    const back = sessionStorage.getItem(RETURN_HASH);
+    if (back != null) { sessionStorage.removeItem(RETURN_HASH); if (!location.hash && back) history.replaceState(history.state, '', back); }
+  } catch {}
   try { info = await getJson('/api/account'); } catch { info = { sync: false }; }
   if (!info.sync) { if (current) setStatus({ state: 'unavailable' }); return info; }
+  if (info.signedIn && !returning) await loadSessionUser(); // for the account label
   if (!current) {
-    // signed in with Clerk but this browser has no account cache yet: a fresh sign-in
-    const c = await clerk(8000);
+    // signed in but this browser has no account cache yet: a fresh sign-in
     // (not twice in a row: if the switch did not stick, e.g. storage is full, stay signed out)
     let recent = false;
     try { recent = Date.now() - Number(sessionStorage.getItem('wonder.beginAccount') || 0) < 15000; } catch {}
-    if (c?.user && info.signedIn && info.userId === c.user.id && !recent) await beginAccount(c.user.id, { store });
+    if (sessionUser && info.signedIn && info.userId === sessionUser.id && !recent) await beginAccount(sessionUser.id, { store });
     setStatus({ state: 'signedOut' });
     return info;
   }
@@ -161,15 +182,20 @@ export async function beginAccount(userId, { store } = {}) {
   location.reload();
 }
 
-/** Open Clerk's sign-in; the account switch happens when it reports a user. */
+/**
+ * Sign in with Google (Neon Auth). The browser goes to Google and comes back to this page with a
+ * session verifier; startAccount() then finishes the sign-in and switches to the account (a new
+ * one, the same one whose session had ended, or the mismatch prompt for another one).
+ */
 export async function signIn() {
-  const c = await clerk();
-  if (!c) throw new Error('Sign-in is not available right now. Reload and try again.');
-  // same account again (its session had ended): keep the cache; another one: replace the cache
-  const done = (user) => (current && user.id === current.userId ? location.reload() : current ? switchToSignedIn() : beginAccount(user.id));
-  if (c.user) return done(c.user);
-  const off = c.addListener(({ user }) => { if (user) { off?.(); done(user); } });
-  c.openSignIn({ forceRedirectUrl: location.href, signUpForceRedirectUrl: location.href });
+  const a = await authClient();
+  if (!a) throw new Error('Sign-in is not available right now. Reload and try again.');
+  const user = sessionUser || (await loadSessionUser());
+  if (user) return current && user.id === current.userId ? location.reload() : current ? switchToSignedIn() : beginAccount(user.id);
+  // the callback is this page without its #route (the verifier goes in the query); the route comes back after
+  try { sessionStorage.setItem(RETURN_HASH, location.hash || ''); } catch {}
+  const { error } = await a.signIn.social({ provider: 'google', callbackURL: `${location.origin}${location.pathname}` });
+  if (error) throw new Error(error.message || 'Could not start sign-in with Google');
 }
 
 /** Changes in this browser's account cache that the server does not have yet. */
@@ -188,15 +214,19 @@ function confirmLoss(what) {
   return !left || confirm(`${left} change${left === 1 ? ' has' : 's have'} not reached your account yet. ${what} anyway and lose ${left === 1 ? 'it' : 'them'}? (Cancel, then “Export my data” below keeps a copy.)`);
 }
 
-/** Sync what is left, stop push here, sign out of Clerk, then delete this account's cache. */
+/** Sync what is left, stop push here, sign out of Neon Auth, then delete this account's cache. */
 export async function signOut() {
   if (engine) await engine.syncNow();
   if (!confirmLoss('Sign out')) return false;
   engine?.stop();
   await disablePush().catch(() => {});
-  const c = await clerk(5000);
-  // signed out of Clerk first: if that fails, keep everything (otherwise the next load signs back in)
-  if (c?.user) await c.signOut();
+  // signed out first: if that fails, keep everything (otherwise the next load signs back in)
+  const a = await authClient(5000);
+  if (a && (sessionUser || (await loadSessionUser()))) {
+    const { error } = await a.signOut();
+    if (error) throw new Error(error.message || 'Could not sign out');
+  }
+  sessionUser = null;
   try { ls()?.removeItem(ACCOUNT_KEY); ls()?.removeItem(MIGRATED_KEY); } catch {}
   await cache?.destroy?.();
   location.reload();
@@ -208,15 +238,14 @@ export async function switchToSignedIn() {
   if (!confirmLoss('Switch accounts')) return;
   try { ls()?.removeItem(ACCOUNT_KEY); } catch {}
   await cache?.destroy?.();
-  const c = await clerk();
-  if (c?.user) return beginAccount(c.user.id);
+  const u = await loadSessionUser();
+  if (u) return beginAccount(u.id);
   location.reload();
 }
 
-/** The signed-in person's email (or name) from Clerk, when it has loaded. */
+/** The signed-in person's email (or name), when the session has loaded. */
 export function accountLabel() {
-  const u = globalThis.Clerk?.user;
-  return u?.primaryEmailAddress?.emailAddress || u?.fullName || u?.username || null;
+  return sessionUser?.email || sessionUser?.name || null;
 }
 
 export const accountInfo = () => info;

@@ -5,6 +5,7 @@
 // modules stay unbundled ES modules on purpose: the lesson renderer runs model-written UI in a
 // sandboxed Web Worker (public/wonder-worker.js) that imports the DIL runtime by URL.
 import { useEffect } from 'react';
+import { createAuthClient } from '@neondatabase/auth/next';
 
 let started = false;
 
@@ -12,6 +13,9 @@ export default function WonderApp() {
   useEffect(() => {
     if (started) return; // Strict Mode runs effects twice in development
     started = true;
+    // Neon Auth's browser client for the vanilla app (public/account.js): sign-in with Google,
+    // the OAuth session exchange on return, sign-out. It only talks to /api/auth/* when used.
+    globalThis.__wonderAuth ??= createAuthClient();
     import(/* webpackIgnore: true */ /* turbopackIgnore: true */ '/app.js').catch((err) => {
       console.error('[wonder] client failed to start', err);
       const main = document.getElementById('app');

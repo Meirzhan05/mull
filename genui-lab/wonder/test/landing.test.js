@@ -18,20 +18,19 @@ function land(accounts, { url = 'http://localhost/', cookie = '', storage = {} }
 test('landing, accounts on: every signed-out visit to the home page goes to /welcome', () => {
   assert.equal(land(true), '/welcome');
   assert.equal(land(true, { url: 'http://localhost/#/' }), '/welcome');
-  assert.equal(land(true, { cookie: '__client_uat=0; __client_uat_XTs=0' }), '/welcome');
+  assert.equal(land(true, { cookie: 'a=1' }), '/welcome', 'cookies are not read (Neon Auth\'s are HttpOnly)');
   // seen it before, or guest data in this browser: still signed out, still the landing page
   assert.equal(land(true, { storage: { 'wonder.welcomed': '1', 'wonder.v1': '{}' } }), '/welcome');
 });
 
-test('landing, accounts on: signed in, a lapsed account session, a sign-in redirect and deep links stay', () => {
-  assert.equal(land(true, { cookie: 'a=1; __client_uat=1792807381' }), null);
-  assert.equal(land(true, { storage: { 'wonder.account': '{"userId":"user_1"}' } }), null);
-  assert.equal(land(true, { url: 'http://localhost/?__clerk_db_jwt=x' }), null);
+test('landing, accounts on: a browser with an account, the return from Google sign-in and deep links stay', () => {
+  assert.equal(land(true, { storage: { 'wonder.account': '{"userId":"9e3c-user"}' } }), null);
+  assert.equal(land(true, { url: 'http://localhost/?neon_auth_session_verifier=6JZQs6Bv' }), null, 'back from Google: account.js finishes the sign-in');
+  assert.equal(land(true, { url: 'http://localhost/?x=1&neon_auth_session_verifier=6JZ' }), null);
+  assert.equal(land(true, { url: 'http://localhost/?not_neon_auth_session_verifier=1' }), '/welcome');
   assert.equal(land(true, { url: 'http://localhost/#/learn/black%20holes' }), null);
   assert.equal(land(true, { url: 'http://localhost/#/lesson/lesson-1' }), null);
   assert.equal(land(true, { url: 'http://localhost/welcome' }), null);
-  // a cookie that only ends in __client_uat is not Clerk's
-  assert.equal(land(true, { cookie: 'x__client_uat=5' }), '/welcome');
 });
 
 test('landing, accounts off: only a first visit goes to /welcome', () => {
@@ -39,7 +38,6 @@ test('landing, accounts off: only a first visit goes to /welcome', () => {
   assert.equal(land(false, { storage: { 'wonder.welcomed': '1' } }), null);
   assert.equal(land(false, { storage: { 'wonder.v1': '{}' } }), null);
   assert.equal(land(false, { storage: { 'wonder.account': '{}' } }), null);
-  assert.equal(land(false, { cookie: '__client_uat=1792807381' }), null);
   assert.equal(land(false, { url: 'http://localhost/#/review' }), null);
 });
 
