@@ -1,11 +1,12 @@
-// App shell: the desktop sidebar, the mobile top bar and bottom tabs, the daily-goal mini ring,
-// the theme switch, the demo notice and the ⌘K (or /) command palette, which also searches
-// the learner's lessons, courses, cards and Teacher chats (search-core.js). Screens render
-// into #app; the shell only reflects the current route and the learner's stats.
+// App shell: the desktop sidebar (sections, then recent lessons and courses to jump back into),
+// the mobile top bar and bottom tabs, the daily-goal mini ring, the theme switch, the demo
+// notice and the ⌘K (or /) command palette, which also searches the learner's lessons,
+// courses, cards and Teacher chats (search-core.js). Screens render into #app; the shell only
+// reflects the current route and the learner's stats.
 
 import { el, icon, toast } from './ui.js';
 import { deckStats, currentStreak } from './deck.js';
-import { dailyProgress, matchScore } from './progress-core.js';
+import { dailyProgress, matchScore, courseProgress, recentLessons, lessonState } from './progress-core.js';
 import { searchStoreGroups, openResult, resultBody, hasTitleHit, TYPE_ICON, resultCount } from './search-ui.js';
 
 const NAV = [
@@ -20,6 +21,9 @@ const SECTION = { home: 'today', course: 'library', lesson: 'library', library: 
 
 const THEMES = ['system', 'light', 'dark'];
 const THEME_ICON = { system: 'monitor', light: 'sun', dark: 'moon' };
+
+const RECENT_LESSONS = 5;
+const RECENT_COURSES = 4;
 
 const isMac = () => /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent || '');
 
@@ -65,7 +69,38 @@ export function createShell({ store, getStatus, actions }) {
   const searchBtn = el('button', { class: 'search-trigger', type: 'button', 'aria-label': 'Search or start a lesson', onclick: () => openPalette() },
     icon('search'), el('span', { class: 'search-trigger-text' }, 'Search or begin…'), el('kbd', null, isMac() ? '⌘K' : 'Ctrl K'));
   const goalMini = el('a', { class: 'goal-mini', href: '#/you', title: 'Daily goal' });
-  sidebar.replaceChildren(brand(), searchBtn, nav, el('div', { class: 'sidebar-foot' }, goalMini, themeBtn));
+  const recent = el('nav', { class: 'side-recent', 'aria-label': 'Recent lessons and courses' });
+  sidebar.replaceChildren(brand(), searchBtn, nav, recent, el('div', { class: 'sidebar-foot' }, goalMini, themeBtn));
+
+  // Rebuilt only when what it shows changes: refresh() runs on every store write (a streaming
+  // lesson saves each second), and replacing the links would drop focus and in-flight clicks.
+  let recentKey = '';
+  function drawRecent(d) {
+    const lessons = recentLessons(d, RECENT_LESSONS).map((l) => {
+      const [state, label] = lessonState(l);
+      return { href: `#/lesson/${l.id}`, label: l.title || l.topic || l.materialTitle || 'Untitled lesson', state, note: label };
+    });
+    const courses = d.courses.slice(0, RECENT_COURSES).map((c) => {
+      const p = courseProgress(d, c);
+      return { href: `#/course/${c.id}`, label: c.title || 'Untitled course', meta: `${p.done}/${p.total}` };
+    });
+    const key = JSON.stringify([lessons, courses]);
+    if (key !== recentKey) {
+      recentKey = key;
+      const group = (id, title, items) => el('div', { role: 'group', 'aria-labelledby': id }, el('h2', { class: 'side-head', id }, title), ...items);
+      recent.replaceChildren(
+        group('side-recent-h', 'Recent', lessons.length
+          ? lessons.map((l) => el('a', { class: 'side-item', href: l.href, title: `${l.label} · ${l.note}` },
+            el('span', { class: `dotmark ${l.state}`, 'aria-hidden': 'true' }), el('span', { class: 'side-item-label' }, l.label)))
+          : [el('p', { class: 'side-empty' }, 'Lessons you start show up here.')]),
+        ...(courses.length ? [group('side-courses-h', 'Courses', courses.map((c) => el('a', { class: 'side-item', href: c.href, title: c.label },
+          icon('library'), el('span', { class: 'side-item-label' }, c.label), el('span', { class: 'side-item-meta' }, c.meta))))] : []));
+    }
+    for (const a of recent.querySelectorAll('.side-item')) {
+      if (a.getAttribute('href') === location.hash) a.setAttribute('aria-current', 'page');
+      else a.removeAttribute('aria-current');
+    }
+  }
 
   // -- top bar (mobile)
   const streakChip = el('a', { class: 'chip chip-streak', href: '#/you', title: 'Streak' });
@@ -78,7 +113,7 @@ export function createShell({ store, getStatus, actions }) {
   const tabBadges = {};
   tabbar.replaceChildren(...NAV.map((n) => {
     tabBadges[n.id] = el('span', { class: 'badge', hidden: true });
-    tabLinks[n.id] = el('a', { class: 'tab', href: n.href }, icon(n.icon), el('span', null, n.label), tabBadges[n.id]);
+    tabLinks[n.id] = el('a', { class: 'tab', href: n.href }, icon(n.icon), el('span', { class: 'tab-label' }, n.label), tabBadges[n.id]);
     return tabLinks[n.id];
   }));
 
@@ -97,6 +132,7 @@ export function createShell({ store, getStatus, actions }) {
     const streak = currentStreak(d.stats);
     const day = dailyProgress(d.stats, d.settings);
     const due = deckStats(d.deck).due;
+    drawRecent(d);
     for (const b of [navBadges.review, tabBadges.review]) { b.hidden = !due; b.textContent = due > 99 ? '99+' : String(due); }
     streakChip.classList.toggle('lit', streak > 0);
     streakChip.replaceChildren(el('span', { class: 'chip-unit' }, 'Day'), ` ${streak}`);
@@ -172,9 +208,7 @@ export function createShell({ store, getStatus, actions }) {
         if (top && hasTitleHit(top)) groups.push(...searchGroups, learn);
         else groups.push(learn, ...searchGroups);
       } else {
-        const lessons = Object.values(d.lessons)
-          .sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''))
-          .slice(0, 4)
+        const lessons = recentLessons(d, 4)
           .map((l) => ({ icon: l.finished ? 'check' : 'book', text: l.title || l.topic, hint: l.finished ? 'Finished' : 'Lesson', run: () => { location.hash = `#/lesson/${l.id}`; } }));
         if (lessons.length) groups.push(['Recent lessons', lessons]);
         const courses = d.courses.slice(0, 4).map((c) => ({ icon: 'layers', text: c.title, hint: 'Course', run: () => { location.hash = `#/course/${c.id}`; } }));
