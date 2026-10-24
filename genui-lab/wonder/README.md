@@ -60,6 +60,10 @@ Five sections, in a sidebar on desktop and a bottom tab bar on phones, plus a ‚å
 - **Teacher (`#/teacher`).** The agent chat with tool cards (below).
 - **You (`#/you`).** Name, totals, a 22-week activity heatmap, settings (daily goal, theme, lesson text size), learner memory, and data export or erase.
 - **Onboarding.** On first run: a name, interests and a daily goal, all skippable.
+- **Landing page (`/welcome`).** A scroll page that replays a recorded lesson, ending in a **Start a lesson** box that opens `#/learn/<topic>` in the app. The home page `/` opens on it instead of Today (a pre-paint script, `app/landing-script.js`, run by `app/layout.js`):
+  - **Account sync on:** for any browser without an account, every time. A browser that has signed in before (`wonder.account` is set) stays in the app, where **Sign in again** is if its session ended. A page coming back from Google sign-in (`?neon_auth_session_verifier=`) stays too, so the app can finish the sign-in. Neon Auth's cookies are HttpOnly, so the script goes by the account marker, not cookies.
+  - **Accounts off:** for a first-time visitor, once (`wonder.welcomed`), when this browser has no Wonder data (`wonder.v1`, `wonder.account`).
+  - Deep links such as `#/lesson/<id>` never redirect. The page is static files in `public/welcome/`, copied from the ScrollCraft build in `scrollcraft/builds/wonder`; `next.config.mjs` rewrites `/welcome` to its `index.html`.
 
 **Design.** A neutral design system in light and dark (Vercel-style grays: white and near-black), with one blue accent for focus, links and the current state. Geist for text and Geist Mono for numbers and keys (both self-hosted by `next/font`); soft corners, filled controls with focus rings, pill segmented controls and cards with a hairline border and a light shadow. Each section has its own layout: **Today** is a dashboard (a command bar, the "Up next" queue, suggestion tiles and recent reading, and a rail with today's XP, the streak, the deck and the study plan); **Library** is a pair of sortable tables; **Review** puts the card beside a live session panel (position, accuracy, the queue, the deck, the keys); **Teacher** adds a column showing what it sees (your progress, memory and plan); **You** is a settings page with a section nav. Lessons are a clean article with numbered pages; finishing one turns its ideas into cards. Reading time is estimated from the prose plus about half a minute per interactive widget.
 
@@ -347,6 +351,7 @@ server/videos.js          Video validation, YouTube lookup, segment picking, dem
 server/media-resolver.js  per-stream Video lookups (componentResults); combines them with Figure's
 public/catalog-media.js   Diagram + Figure + Video (in-sandbox components)
 public/figure-hosts.js, video-hosts.js   what the renderer may load / embed
+public/welcome/           landing page (static; served at /welcome)   app/landing-script.js   who lands there
 test/*.test.js, test/index.js, test/helpers.js
 ```
 
@@ -857,7 +862,7 @@ Accounts are off unless **both** Neon Auth and a database are set. Without them 
 - The database tables are created on first use.
 
 **Who may use Claude** (`server/usage.js`). With accounts on:
-- **Sign-in required.** Every route that calls Claude needs a signed-in user: lessons, tutor, Teacher, course plans, card and memory extraction, and free-response grading. A signed-out request gets `401 {signedOut: true}`, and the lesson page shows **Sign in to start this lesson** with a Sign in button.
+- **Sign-in required.** Every route that calls Claude needs a signed-in user: lessons, tutor, Teacher, course plans, card and memory extraction, and free-response grading. A signed-out request gets `401 {signedOut: true}`, and the lesson page shows **Sign in to start this lesson** with a Sign in button. A new lesson refused this way is not kept, so it never shows as Failed in Recent. Signing in from that button starts the same topic again on the account; the topic waits in the tab's `sessionStorage` (`wonder.afterSignIn`, up to 30 minutes) across the sign-in reload.
 - **Daily caps.** In Claude mode, each user has these caps per UTC day:
 
 | Kind | Default | Override |
@@ -879,6 +884,7 @@ Accounts are off unless **both** Neon Auth and a database are set. Without them 
 
 **Tests.**
 - `test/usage.test.js`: caps per user, kind and day; free retries and their bounds; failing open; 401 and 429 over HTTP; demo mode and accounts off; non-retryable errors in the browser.
+- `test/landing.test.js`: who the home page sends to `/welcome`, with account sync on and off.
 - `test/sync*.test.js`: sync, authorization and statement scoping.
 - **Live checks.** Sign-in with Google, sync of a generated lesson to Neon, and the Postgres cap under 4 concurrent requests (exactly the cap got through).
 

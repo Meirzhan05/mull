@@ -1,6 +1,8 @@
 // Root layout: fonts (self-hosted by next/font), global CSS, metadata and the pre-paint theme
 // script. The page body is the Wonder app shell (app/wonder-app.js).
 import { Geist, Geist_Mono } from 'next/font/google';
+import { syncConfig } from '../server/sync/index.js';
+import { landingScript } from './landing-script.js';
 import '../../chatgpt-dil/src/dil.css';
 import 'katex/dist/katex.min.css';
 import './styles/styles.css';
@@ -37,10 +39,14 @@ export const viewport = {
 const THEME_SCRIPT = "try{var t=localStorage.getItem('wonder.theme');if(t==='light'||t==='dark')document.documentElement.setAttribute('data-theme',t)}catch(e){}";
 
 
+// signed out (account sync on) or a first visit: the home page opens on the landing page
+const LANDING_SCRIPT = landingScript({ accounts: syncConfig().enabled });
+
 export default function RootLayout({ children }) {
   return (
     <html lang="en" className={`${sans.variable} ${mono.variable}`} suppressHydrationWarning>
       <head>
+        <script dangerouslySetInnerHTML={{ __html: LANDING_SCRIPT }} />
         <script dangerouslySetInnerHTML={{ __html: THEME_SCRIPT }} />
       </head>
       <body>{children}</body>

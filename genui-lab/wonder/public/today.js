@@ -8,7 +8,7 @@
 
 import { el, icon, toast, relTime } from './ui.js';
 import { currentStreak, deckStats, formatDue } from './deck.js';
-import { dailyProgress, weekStrip, upNext, suggestedTopics, greeting, courseProgress, learnerTotals, topicInterest, readingMinutes } from './progress-core.js';
+import { dailyProgress, weekStrip, upNext, suggestedTopics, greeting, courseProgress, learnerTotals, topicInterest, readingMinutes, recentLessons } from './progress-core.js';
 import { pageCount } from './steering-core.js';
 import { practiceConcepts } from './mastery-screen.js'; // Phase 6
 import { lessonOutcome, outcomeLabel } from './outcomes-core.js'; // Phase 9
@@ -176,7 +176,7 @@ export function renderToday(ctx) {
     el('ol', { class: 'queue' }, ...next.map((n, i) => queueRow(n, i, ctx)), ...(next[0]?.kind === 'start' ? quickRows(ctx) : [])));
 
 
-  const recent = Object.values(d.lessons).sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || '')).slice(0, 5);
+  const recent = recentLessons(d, 5);
   const recentSec = recent.length ? el('section', { class: 'panel-section' },
     sectionHead('Recent', null, el('a', { class: 'link-btn', href: '#/library' }, 'Library', icon('arrow-right'))),
     el('ul', { class: 'rows' }, ...recent.map((l) => el('li', null, readRow(l, d))))) : null;

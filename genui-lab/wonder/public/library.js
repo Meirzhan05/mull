@@ -4,15 +4,13 @@
 // mention the query, best match first, and lists matching cards and Teacher chats below.
 
 import { el, icon, toast, relTime } from './ui.js';
-import { courseProgress, readingMinutes } from './progress-core.js';
+import { courseProgress, readingMinutes, lessonState } from './progress-core.js';
 import { pageCount } from './steering-core.js';
 import { searchStoreGroups, hitText, resultLink, openResult, resultCount } from './search-ui.js';
 
 const MORE_LIMIT = 20; // cards / chats listed under the tables
 const FILTERS = [['all', 'All'], ['progress', 'In progress'], ['finished', 'Finished'], ['courses', 'Courses']];
 const SORTS = { recent: 'Last opened', title: 'Title', length: 'Length' };
-
-const lessonState = (l) => (l.finished ? ['done', 'Finished'] : l.status === 'complete' ? ['ready', l.readPage > 1 ? `Page ${l.readPage}` : 'In progress'] : l.status === 'failed' ? ['warn', 'Failed'] : ['', l.status === 'new' ? 'Not started' : 'Unfinished']);
 
 /** @param {{app: HTMLElement, store: object, actions: object}} ctx */
 export function renderLibrary(ctx) {

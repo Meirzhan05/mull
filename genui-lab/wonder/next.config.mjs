@@ -27,6 +27,10 @@ const nextConfig = {
   serverExternalPackages: ['@anthropic-ai/sdk', 'pg', 'web-push'],
   poweredByHeader: false,
   devIndicators: false, // the badge sits on the mobile tab bar; build errors still show the overlay
+  // the landing page (public/welcome) at /welcome; first-time visitors land there (app/layout.js)
+  async rewrites() {
+    return [{ source: '/welcome', destination: '/welcome/index.html' }];
+  },
 };
 
 export default nextConfig;
