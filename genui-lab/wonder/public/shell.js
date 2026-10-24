@@ -275,6 +275,7 @@ export function createShell({ store, getStatus, actions }) {
   }
 
   document.addEventListener('keydown', (e) => {
+    if (document.querySelector('.onboard')) return; // the first-run welcome has the keyboard to itself
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); paletteOpen ? paletteOpen.close() : openPalette(); return; }
     const t = e.target;
     const typing = t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable);

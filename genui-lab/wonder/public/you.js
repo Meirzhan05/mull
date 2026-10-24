@@ -2,7 +2,8 @@
 // size), learner memory, and data export / reset.
 
 import { el, icon, toast } from './ui.js';
-import { learnerTotals, activityGrid, DAILY_GOALS, goalOf } from './progress-core.js';
+import { learnerTotals, activityGrid, DAILY_GOALS, LEVELS, goalOf, levelOf } from './progress-core.js';
+import { interestGrid } from './onboarding.js';
 import { memoryPanel } from './memory-screen.js';
 import { masteryPanel } from './mastery-screen.js'; // Phase 6
 import { insightsPanel } from './insights-panel.js'; // Phase 9
@@ -206,6 +207,16 @@ export function renderYou(ctx) {
         el('div', { class: 'setting-text' }, el('strong', null, 'Daily goal'), el('p', { class: 'muted small' }, 'XP to earn each day. A finished lesson gives 50 or more; each review 1 to 5.')),
         Object.assign(radioSeg('Daily goal', DAILY_GOALS.map((g) => [g.xp, `${g.label} · ${g.xp}`]), goal, (v) => { setSetting({ dailyGoal: Number(v) }); toast(`Daily goal: ${v} XP`); }), { className: 'seg seg-grid' })),
       el('div', { class: 'setting' },
+        el('div', { class: 'setting-text' }, el('strong', null, 'Lesson level'), el('p', { class: 'muted small' }, 'Where new lessons start. Each lesson can still pick its own.')),
+        radioSeg('Lesson level', LEVELS.map((l) => [l.id, l.label]), levelOf(settings()), (v) => setSetting({ level: v }))),
+      el('div', { class: 'setting setting-stack', id: 'interests' },
+        el('div', { class: 'setting-text' }, el('strong', null, 'Interests'), el('p', { class: 'muted small' }, 'They shape the suggested topics on Today.')),
+        interestGrid(new Set(settings().interests || []), (k, on) => {
+          const now = new Set(settings().interests || []);
+          if (on) now.add(k); else now.delete(k);
+          setSetting({ interests: [...now] });
+        })),
+      el('div', { class: 'setting' },
         el('div', { class: 'setting-text' }, el('strong', null, 'Theme')),
         radioSeg('Theme', [['system', 'System', 'monitor'], ['light', 'Light', 'sun'], ['dark', 'Dark', 'moon']], shell.theme, (v) => shell.setTheme(v))),
       el('div', { class: 'setting' },
@@ -268,4 +279,5 @@ export function renderYou(ctx) {
   ctx.teardown?.push(() => io.disconnect());
   if (location.hash === '#/mastery') requestAnimationFrame(() => document.getElementById('you-knowledge')?.scrollIntoView({ block: 'start' }));
   if (location.hash === '#/memory') requestAnimationFrame(() => document.getElementById('you-memory')?.scrollIntoView({ block: 'start' }));
+  if (location.hash === '#/interests') requestAnimationFrame(() => document.getElementById('interests')?.scrollIntoView({ block: 'center' }));
 }

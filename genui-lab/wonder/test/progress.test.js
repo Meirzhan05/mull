@@ -1,11 +1,18 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { dailyProgress, weekStrip, activityGrid, learnerTotals, suggestedTopics, upNext, courseProgress, matchScore, goalOf, INTERESTS, DEFAULT_GOAL } from '../public/progress-core.js';
+import { dailyProgress, weekStrip, activityGrid, learnerTotals, suggestedTopics, upNext, courseProgress, matchScore, goalOf, levelOf, LEVELS, INTERESTS, DEFAULT_GOAL } from '../public/progress-core.js';
 import { emptyStats, awardXp, emptyDeck, addItems } from '../public/deck.js';
 import { emptyState } from '../public/store.js';
 
 const TZ = 'UTC';
 const T0 = new Date('2026-10-21T09:00:00Z'); // a Wednesday
+
+test('lesson level: a known settings.level, else beginner', () => {
+  assert.deepEqual(LEVELS.map((l) => l.id), ['beginner', 'intermediate', 'advanced']);
+  assert.equal(levelOf({ level: 'advanced' }), 'advanced');
+  assert.equal(levelOf({ level: 'expert' }), 'beginner');
+  assert.equal(levelOf(undefined), 'beginner');
+});
 
 test('daily goal: today XP against the goal, default goal when unset', () => {
   let stats = emptyStats();
