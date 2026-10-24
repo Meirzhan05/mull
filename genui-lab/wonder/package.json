@@ -9,7 +9,8 @@
     "start": "next start -p 8750",
     "eval": "node --env-file-if-exists=.env evals/run.js",
     "test": "node --test --test-timeout=120000 --test-force-exit test/index.js",
-    "sync:import-local": "node --env-file-if-exists=.env.local server/sync/import-local.js"
+    "sync:import-local": "node --env-file-if-exists=.env.local server/sync/import-local.js",
+    "welcome:data": "node tools/welcome-data.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.137.0",

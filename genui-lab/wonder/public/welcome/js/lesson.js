@@ -203,6 +203,36 @@ const WIDGETS = {
     });
     return el;
   },
+  Timeline(p) {
+    const el = div('w w-timeline');
+    el.innerHTML = `<p class="w__title">${esc(p.title || '')}</p><ol class="w-timeline__list">${(p.events || []).map((ev) => `
+      <li><span class="w-timeline__date">${esc(ev.date || '')}</span><span class="w-timeline__label">${md(ev.label || '')}</span>${ev.description ? `<span class="w-timeline__desc">${md(ev.description)}</span>` : ''}</li>`).join('')}</ol>`;
+    return el;
+  },
+  Cycle(p) {
+    const el = div('w w-cycle');
+    const stages = p.stages || [];
+    el.innerHTML = `<p class="w__title">${esc(p.title || '')}</p>
+      ${p.centerLabel ? `<p class="w-cycle__center">${md(p.centerLabel)}</p>` : ''}
+      <ol class="w-cycle__list">${stages.map((st) => `<li><span class="w-cycle__label">${md(st.label || '')}</span>${st.description ? `<span class="w-cycle__desc">${md(st.description)}</span>` : ''}</li>`).join('')}</ol>
+      <p class="w-cycle__loop">…and back to the start, faster each time.</p>`;
+    return el;
+  },
+  // In Wonder the answer is graded against the rubric. This page can't grade, so it shows the
+  // points and a model answer instead of pretending to.
+  ExplainBack(p) {
+    const el = div('w w-explain');
+    el.innerHTML = `<p class="w__title">Explain it back</p><p>${md(p.prompt || '')}</p>
+      <textarea class="w-explain__field" rows="3" placeholder="Your answer, in your own words"></textarea>
+      <div class="w-steps__nav"><button type="button" class="is-primary" data-show>Show a model answer</button></div>
+      <div class="w-explain__answer" hidden>
+        <p class="w-steps__label">In Wonder, your answer is checked for these points:</p>
+        <ul class="w-compare__list">${(p.rubric || []).map((r) => `<li>${md(r)}</li>`).join('')}</ul>
+        <p class="w-steps__label">A model answer</p><p>${md(p.sampleAnswer || '')}</p>
+      </div>`;
+    el.querySelector('[data-show]').addEventListener('click', (e) => { el.querySelector('.w-explain__answer').hidden = false; e.currentTarget.disabled = true; });
+    return el;
+  },
   Sources(_p, _b, ctx) {
     const el = div('w w-sources');
     const list = Object.values(ctx.sources).sort((a, b) => a.n - b.n);
@@ -219,7 +249,9 @@ function renderBlock(b, ctx) {
     if (!b.complete) {
       // The tag is still being written: the compiler cuts it. We show where it will land.
       const el = div('w w-pending');
-      el.innerHTML = `<span class="w-pending__name">${esc(b.tag ? `<${b.tag}>` : '<…>')}</span><span class="w-pending__bar"></span>`;
+      // In words a reader understands, not the tag name (cold readers took "<BarChart>" for a bug).
+      const doing = { Timeline: 'Laying out a timeline', Cycle: 'Drawing the loop', ExplainBack: 'Writing a question for you', BarChart: 'Drawing a chart', Quiz: 'Writing the quiz', CompareToggle: 'Building a comparison', LessonStepper: 'Laying out a worked example', Reveal: 'Writing a quick check', Callout: 'Adding a note', Sources: 'Listing the sources' }[b.tag] || 'Adding something you can use';
+      el.innerHTML = `<span class="w-pending__name">${esc(doing)}…</span><span class="w-pending__bar"></span>`;
       return el;
     }
     const t = parseTagAt(s, 0);

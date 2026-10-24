@@ -20,6 +20,8 @@ document.querySelectorAll('[data-composer]').forEach((form) => {
     const input = form.querySelector('input');
     const topic = input.value.trim();
     if (!topic) {
+      // An example is showing in the field: hand it over, so a second press starts it.
+      if (input.dataset.example) { input.value = input.dataset.example; input.focus(); return; }
       form.classList.remove('is-empty'); void form.offsetWidth; form.classList.add('is-empty');
       input.focus();
       return;
@@ -27,6 +29,43 @@ document.querySelectorAll('[data-composer]').forEach((form) => {
     location.href = learnUrl(topic);
   });
 });
+
+// ------------------------------------------------------------------ what happens next
+// With accounts on, Claude needs a signed-in user: say so before the click, and give people who
+// already use Wonder a way straight in. Without the app behind this page (the standalone build),
+// /api/account is missing and the page keeps "Open Wonder".
+fetch('/api/account', { credentials: 'same-origin' })
+  .then((r) => (r.ok ? r.json() : null))
+  .then((a) => {
+    if (!a?.sync || a.signedIn) return;
+    const barIn = $('#bar-in');
+    barIn.textContent = 'Sign in';
+    barIn.href = `${APP}#/signin`;
+    document.querySelectorAll('[data-next]').forEach((n) => {
+      n.innerHTML = "You'll sign in with Google so your lessons and cards are saved to your account. <b>Your topic will be waiting.</b>";
+      n.hidden = false;
+    });
+  })
+  .catch(() => {});
+
+// ------------------------------------------------------------------ example questions
+// A blank box asks people to have an idea first. Real topics Wonder suggests type themselves in.
+const EXAMPLES = ['Why some chords sound sad', 'How index funds work', 'Black holes for beginners', 'Why we procrastinate', 'How vaccines train your immune system', 'The birthday paradox'];
+const exInput = $('[data-examples]');
+if (exInput && !reduce) {
+  let ex = 0, len = 0, dir = 1, hold = 0;
+  const base = exInput.placeholder;
+  setInterval(() => {
+    if (document.activeElement === exInput || exInput.value || scrollY > innerHeight * 0.4) return;
+    const word = EXAMPLES[ex];
+    if (hold > 0) { hold--; return; }
+    len += dir;
+    if (len >= word.length) { len = word.length; dir = -1; hold = 34; }
+    if (len <= 0) { len = 0; dir = 1; hold = 6; ex = (ex + 1) % EXAMPLES.length; }
+    exInput.placeholder = len ? `${word.slice(0, len)}` : base;
+    exInput.dataset.example = len === word.length ? word : '';
+  }, 55);
+}
 
 // ------------------------------------------------------------------ the bar
 const bar = $('#bar');
@@ -49,7 +88,7 @@ function updateBar() {
     segs.get(current.id).setAttribute('aria-current', 'step');
     where.textContent = `Page ${current.dataset.page} of 5`;
   } else {
-    where.textContent = scrollY < vh ? '5 pages · 4 min' : 'Cards';
+    where.textContent = scrollY < vh ? '' : 'Start';
   }
 }
 
@@ -130,34 +169,48 @@ function updateSpill() {
 }
 addEventListener('resize', () => { spillKey = ''; });
 
-// ------------------------------------------------------------------ page 1: forgetting the wall
-const p1 = $('#p1');
-const wallLines = [...document.querySelectorAll('#wall span')];
-function updateWall() {
-  const p = actP(p1);
-  wallLines.forEach((s, k) => {
-    if (k === 0) return;
-    const t = clamp01((p - (0.24 + (wallLines.length - k) * 0.03)) / 0.12);
-    s.style.opacity = (1 - 0.84 * t).toFixed(3);
-  });
+// ------------------------------------------------------------------ page 1: anything
+// Rows of the topics Wonder offers at onboarding (public/progress-core.js), drifting in opposite
+// directions as you scroll (pure CSS off --sc-p). Every topic starts a lesson.
+const FALLBACK_INTERESTS = {
+  science: { label: 'Science', topics: ['Why the sky is blue', 'How vaccines train your immune system', 'What is entropy, really?', 'How photosynthesis powers life'] },
+  space: { label: 'Space', topics: ['Black holes for beginners', 'How rockets reach orbit', 'Why planets are round', 'What is dark matter?'] },
+  money: { label: 'Money', topics: ['Compound interest', 'How index funds work', 'What causes inflation', 'How credit scores are calculated'] },
+  psychology: { label: 'Mind', topics: ['How habits form', 'Cognitive biases that fool us', 'Why we procrastinate', 'How memory works'] },
+};
+async function buildTopics() {
+  let interests = FALLBACK_INTERESTS;
+  try { interests = (await import('/progress-core.js')).INTERESTS || interests; } catch {}
+  const all = Object.values(interests).flatMap((it) => it.topics.map((t) => ({ tag: it.label, t })));
+  const ROWS = 4;
+  const rows = Array.from({ length: ROWS }, () => []);
+  all.forEach((x, i) => rows[i % ROWS].push(x)); // deal round-robin so each row mixes subjects
+  $('#topics').innerHTML = rows.map((row, r) => `<div class="topics__row" style="--dir:${r % 2 ? 1 : -1};--spd:${180 + r * 40}px">${
+    row.map((x) => `<a class="chip" href="${esc(learnUrl(x.t))}"><span class="chip__tag">${esc(x.tag)}</span>${esc(x.t)}</a>`).join('')}</div>`).join('');
 }
+buildTopics();
 
 // ------------------------------------------------------------------ page 2: the stream (peak)
 // Precompute the lesson at every record, so scrubbing in either direction is a lookup.
+const WIDGET_DONE = /<(?:Timeline|Cycle|CompareToggle|BarChart|Reveal|LessonStepper|Quiz)\b[\s\S]*?\/>/;
 const frames = [];
 {
-  let md = '', status = 'Planning the lesson…', rev = 0, steered = false, done = false;
+  let md = '', status = 'Planning the lesson…', steered = false, done = false, searched = false, widget = false;
   let activity = [];
   for (const [k, v] of STREAM) {
-    if (k === 'a') { md += v; rev++; }
-    else if (k === 'r') { md = v; rev++; }
-    else if (k === 's') { status = v; if (!md) activity = [...activity, v]; }
+    if (k === 'a') md += v;
+    else if (k === 'r') md = v;
+    else if (k === 's') { status = v; if (/^Searching/.test(v)) searched = true; if (!md) activity = [...activity, v]; }
     else if (k === 'steer') { steered = true; status = `Steering: ${v}`; }
-    else if (k === 'done') { done = true; status = 'Done. All 10 components valid.'; }
-    frames.push({ md, status, rev, steered, done, kind: k, activity: md ? null : activity });
+    else if (k === 'done') done = true;
+    if (!widget && (k === 'a' || k === 'r') && WIDGET_DONE.test(md.slice(-4000))) widget = true;
+    frames.push({ md, status, steered, done, searched, widget, kind: k, activity: md ? null : activity });
   }
+  const last = frames[frames.length - 1];
+  const pages = (last.md.match(/^## /gm) || []).length;
+  const questions = (last.md.match(/"question_type"/g) || []).length;
+  last.status = `Finished: ${pages} pages and a ${questions}-question check.`;
 }
-const REVS = frames[frames.length - 1].rev;
 // Scroll weight per record: the searches and the steer get room to be read.
 const WEIGHT = { a: 1, r: 6, s: 12, steer: 40, done: 70 };
 const cum = [];
@@ -168,11 +221,13 @@ const stream = $('#stream');
 const p2 = $('#p2');
 const lessonEl = $('#lesson');
 const viewEl = $('#reader-view');
-const wireEl = $('#wire');
 const statusText = $('#status-text');
-const revEl = $('#rev');
 const steerEl = $('#steer');
+const titleEl = $('#reader-title');
+const segEls = [...document.querySelectorAll('#reader-segs i')];
+const noteEls = Object.fromEntries([...document.querySelectorAll('#notes [data-note]')].map((n) => [n.dataset.note, n]));
 const activityEl = $('#activity');
+const yourTurn = $('#yourturn');
 const view = createLessonView(lessonEl, SOURCES);
 let shown = -1;
 let follow = 0;
@@ -183,32 +238,37 @@ function frameAt(u) {
   while (lo < hi) { const mid = (lo + hi) >> 1; if (cum[mid] < w) lo = mid + 1; else hi = mid; }
   return lo;
 }
-function wireHtml(md) {
-  let tail = md.slice(-1500);
-  const nl = tail.indexOf('\n');
-  if (md.length > 1500 && nl > -1 && nl < 240) tail = tail.slice(nl + 1);
-  return esc(tail)
-    .replace(/^(#{1,2} .*)$/gm, '<span class="h">$1</span>')
-    .replace(/(&lt;\/?[A-Z][A-Za-z]*|\/&gt;|&lt;\/[A-Z][A-Za-z]*&gt;)/g, '<span class="t">$1</span>') + '<span class="c"></span>';
-}
 function showFrame(i) {
   if (i === shown) return;
   const forward = i > shown;
   const f = frames[i];
   const fresh = view.update(f.md);
-  // Before the first word, the reader shows what Claude is doing, as the app's activity rows do.
+  // Before the first word, the reader shows what Wonder is doing, as the app's activity rows do.
   activityEl.hidden = !f.activity;
   if (f.activity) activityEl.innerHTML = f.activity.map((a, k) => `<li class="${k === f.activity.length - 1 ? 'is-now' : ''}">${esc(a)}</li>`).join('');
   if (forward && !reduce) fresh.forEach((el) => {
     el.classList.add('is-snapped');
     el.addEventListener('animationend', () => el.classList.remove('is-snapped'), { once: true });
   });
-  wireEl.innerHTML = wireHtml(f.md);
+  // The reader's own bar: the title once it's written, one segment per page.
+  const title = /^# (.+)\n/.exec(f.md);
+  titleEl.textContent = title ? title[1] : 'New lesson';
+  const pages = (f.md.match(/^## /gm) || []).length;
+  segEls.forEach((s, k) => { s.className = k < pages - 1 || (f.done && k < pages) ? 'is-done' : k === pages - 1 ? 'is-now' : ''; });
   statusText.textContent = f.status;
-  revEl.textContent = `revision ${f.rev} of ${REVS}`;
   if (f.steered && steerEl.hidden) { steerEl.hidden = false; if (!reduce) steerEl.classList.add('is-fresh'); }
   if (!f.steered) { steerEl.hidden = true; steerEl.classList.remove('is-fresh'); }
+  // Margin notes light up at the moment in the recording they describe, and stay lit.
+  noteEls.search?.classList.toggle('is-on', f.searched);
+  noteEls.widget?.classList.toggle('is-on', f.widget);
+  noteEls.steer?.classList.toggle('is-on', f.steered);
+  noteEls.done?.classList.toggle('is-on', f.done);
   stream.classList.toggle('is-done', f.done);
+  // The moment the lesson is finished is the moment to ask for theirs.
+  if (yourTurn.classList.contains('is-on') !== f.done) {
+    yourTurn.classList.toggle('is-on', f.done);
+    yourTurn.querySelectorAll('input, button').forEach((x) => (x.tabIndex = f.done ? 0 : -1));
+  }
   stream.dataset.scVerifyState = String(i);
   shown = i;
 }
@@ -225,13 +285,20 @@ function updateStream() {
   lessonEl.style.transform = `translate3d(0, ${-follow.toFixed(1)}px, 0)`;
 }
 
+// ------------------------------------------------------------------ page 4: the lesson's own cards
+{
+  const final = frames[frames.length - 1].md;
+  const terms = [...final.matchAll(/<KeyTerm term="([^"]+)" definition="([^"]+)"\/>/g)].map((m) => ({ term: m[1], def: m[2] }));
+  $('#keep').innerHTML = terms.slice(0, 4).map((t, k) => `<li class="kc" style="--i:${k}"><p class="kc__t">${esc(t.term)}</p><p class="kc__d">${esc(t.def)}</p></li>`).join('');
+}
+
 // ------------------------------------------------------------------ page 3: Guide me
 const log = $('#tutor-log');
 const choices = $('#tutor-choices');
 let wrong = 0;
 const HINTS = {
-  slow: "Not quite. Light always travels at the same speed, so it can't be slowing down. Think about the waves themselves: what happens to them when the space they travel through grows?",
-  fade: "Close in spirit, because it does change color. But nothing is lost; it shifts. What would happen to a wave if the space it's travelling through were stretched?",
+  fall: "Not quite. Picture a seller who notices your coin holds less silver than it used to. Would they give you more for it, or ask for more of it?",
+  same: "People did notice, though. Once a seller knows a coin holds less silver, how many of those coins would they want for the same loaf of bread?",
 };
 function say(cls, html) {
   const li = document.createElement('li');
@@ -244,14 +311,14 @@ choices.addEventListener('click', (e) => {
   if (!b || b.disabled) return;
   say('msg--you', esc(b.textContent));
   b.disabled = true;
-  if (b.dataset.a === 'stretch') {
-    say('msg--tutor msg--right', 'Exactly. As space expands, the waves get pulled longer, toward red and then infrared. That\'s <strong>redshift</strong>, and you just worked it out yourself.<br><span class="chip-saved">Saved to your cards: redshift</span>');
+  if (b.dataset.a === 'rise') {
+    say('msg--tutor msg--right', 'Exactly. Each coin is worth less, so sellers ask for more of them and prices climb. A soldier\'s pay bought less and less. That\'s <strong>debasement</strong>, and you just worked out why it mattered.<br><span class="chip-saved">Saved to your cards: debasement</span>');
     choices.querySelectorAll('button').forEach((x) => (x.disabled = true));
     return;
   }
   wrong++;
   if (wrong < 2) { say('msg--tutor msg--hint', HINTS[b.dataset.a]); return; }
-  say('msg--tutor', 'You\'ve tried twice, so here it is: the light gets <strong>stretched</strong>. As space expands, its waves are pulled to longer, redder wavelengths. Astronomers call it redshift.<br><span class="chip-saved">Saved to your cards: redshift</span>');
+  say('msg--tutor', 'You\'ve tried twice, so here it is: prices <strong>rise</strong>. Each coin is worth less, so it takes more of them to buy the same thing, and a soldier\'s pay buys less. That\'s debasement.<br><span class="chip-saved">Saved to your cards: debasement</span>');
   choices.querySelectorAll('button').forEach((x) => (x.disabled = true));
 });
 
@@ -273,7 +340,7 @@ const sched = [];
 const S0 = sched[0].S;
 const reviews = sched.slice(1).map((s) => s.t).filter((t) => t > 0.5);
 const gaps = sched.slice(1, 5).map((s) => s.gap);
-$('#p4-body').textContent = `Every idea you meet becomes a card. Wonder schedules each one with FSRS, so it comes back just before you'd forget it, and the gaps keep growing: ${gaps[0]} days, then ${gaps[1]}, then ${gaps[2]}, then ${gaps[3]}.`;
+$('#p4-body').textContent = `When you finish a lesson, its key ideas become cards. Wonder brings each one back just before you'd forget it, and the gaps keep growing: ${gaps[0]} days, then ${gaps[1]}, then ${gaps[2]}, then ${gaps[3]}.`;
 const TMAX = 190;
 const X0 = 48, X1 = 700, Y0 = 24, Y1 = 330;
 const xOf = (t) => X0 + (X1 - X0) * Math.sqrt(Math.min(t, TMAX) / TMAX);
@@ -326,7 +393,7 @@ const memory = $('#memory');
 const cvClip = $('#cv-clip');
 const cvHead = $('#cv-head');
 const cvRevs = [...document.querySelectorAll('.cv-rev')];
-const crDay = $('#cr-day'), crOff = $('#cr-off'), crOn = $('#cr-on');
+const crDay = $('#cr-day'), crNext = $('#cr-next');
 let lastDay = -1;
 function updateCurve() {
   const u = clamp01((actP(p4) - 0.06) / 0.84);
@@ -339,8 +406,9 @@ function updateCurve() {
   if (day !== lastDay) {
     lastDay = day;
     crDay.textContent = day;
-    crOff.textContent = `${Math.round(rOff(t) * 100)}%`;
-    crOn.textContent = `${Math.round(rOn(t) * 100)}%`;
+    const next = reviews.find((rt) => rt > t);
+    const left = next == null ? null : Math.max(1, Math.round(next - t));
+    crNext.textContent = left == null ? 'months away' : `in ${left} day${left === 1 ? '' : 's'}`;
     memory.dataset.scVerifyState = String(day);
   }
 }
@@ -351,7 +419,6 @@ function updateCurve() {
   const end = $('#approval');
   $('#goal').textContent = `${TEACHER.plan.goal} · ${TEACHER.plan.days.length} days`;
   $('#ask').textContent = `“${TEACHER.prompt}”`;
-  $('#trail').innerHTML = TEACHER.status.filter((s) => !/^(Thinking|Writing a reply)/.test(s)).map((s) => `<li>${esc(s)}</li>`).join('');
   $('#memchips').innerHTML = TEACHER.memory.map((m) => `<li><b>Remembered</b> ${esc(m.fact)}</li>`).join('');
   const days = TEACHER.plan.days;
   days.forEach((d, k) => {
@@ -359,7 +426,7 @@ function updateCurve() {
     art.className = 'day';
     art.style.setProperty('--i', k + 1);
     art.innerHTML = `<p class="day__n">Day ${d.day}</p><h3 class="day__f">${esc(d.focus)}</h3><ul>${d.items.map((it) => `<li><span class="kind kind--${esc(it.kind)}">${esc(it.kind)}</span><span>${esc(it.title)}</span></li>`).join('')}</ul>`;
-    rail.insertBefore(art, end);
+    rail.appendChild(art);
   });
   end.style.setProperty('--i', days.length + 1);
   const a = TEACHER.approval;
@@ -370,7 +437,7 @@ function updateCurve() {
       <p class="approval__r">${esc(a.reason)}</p>
       <div class="approval__go"><a class="btn btn--primary" href="${esc(learnUrl(a.topic))}">Start a lesson</a></div>
     </div>
-    <p class="rail__note">A real Teacher turn by claude-opus-5-5, recorded October 21, 2026. It called remember twice, get_progress, plan_study and create_lesson before replying.</p>`;
+    <p class="rail__note">A real plan the Teacher made for one learner, who asked the question above. You can see and delete anything it remembers.</p>`;
 }
 
 // ------------------------------------------------------------------ close
@@ -384,7 +451,6 @@ function updateClose() {
 function frame() {
   updateBar();
   updateHero();
-  updateWall();
   updateStream();
   updateCurve();
   updateClose();
