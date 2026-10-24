@@ -1,11 +1,11 @@
-// App shell: the desktop sidebar, the mobile top bar and bottom tabs, the daily-goal mini ring,
+// App shell: the desktop sidebar (sections, then recent lessons and courses to jump back into), the mobile top bar and bottom tabs, the daily-goal mini ring,
 // the theme switch, the demo notice and the ⌘K (or /) command palette, which also searches
 // the learner's lessons, courses, cards and Teacher chats (search-core.js). Screens render
 // into #app; the shell only reflects the current route and the learner's stats.
 
 import { el, icon, toast } from './ui.js';
 import { deckStats, currentStreak } from './deck.js';
-import { dailyProgress, matchScore } from './progress-core.js';
+import { dailyProgress, matchScore, courseProgress } from './progress-core.js';
 import { searchStoreGroups, openResult, resultBody, hasTitleHit, TYPE_ICON, resultCount } from './search-ui.js';
 
 const NAV = [
@@ -20,6 +20,9 @@ const SECTION = { home: 'today', course: 'library', lesson: 'library', library: 
 
 const THEMES = ['system', 'light', 'dark'];
 const THEME_ICON = { system: 'monitor', light: 'sun', dark: 'moon' };
+
+const RECENT_LESSONS = 5;
+const RECENT_COURSES = 4;
 
 const isMac = () => /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent || '');
 
@@ -65,7 +68,27 @@ export function createShell({ store, getStatus, actions }) {
   const searchBtn = el('button', { class: 'search-trigger', type: 'button', 'aria-label': 'Search or start a lesson', onclick: () => openPalette() },
     icon('search'), el('span', { class: 'search-trigger-text' }, 'Search or begin…'), el('kbd', null, isMac() ? '⌘K' : 'Ctrl K'));
   const goalMini = el('a', { class: 'goal-mini', href: '#/you', title: 'Daily goal' });
-  sidebar.replaceChildren(brand(), searchBtn, nav, el('div', { class: 'sidebar-foot' }, goalMini, themeBtn));
+  const recent = el('nav', { class: 'side-recent', 'aria-label': 'Recent' });
+  sidebar.replaceChildren(brand(), searchBtn, nav, recent, el('div', { class: 'sidebar-foot' }, goalMini, themeBtn));
+
+  const sideItem = (href, label, lead, trail) => {
+    const a = el('a', { class: 'side-item', href, title: label }, lead, el('span', { class: 'side-item-label' }, label), trail);
+    if (location.hash === href || location.hash.startsWith(`${href}/`)) a.setAttribute('aria-current', 'page');
+    return a;
+  };
+  function drawRecent(d) {
+    const lessons = Object.values(d.lessons).sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || '')).slice(0, RECENT_LESSONS);
+    const courses = d.courses.slice(0, RECENT_COURSES);
+    recent.replaceChildren(
+      el('div', { class: 'side-head' }, 'Recent'),
+      ...(lessons.length ? lessons.map((l) => sideItem(`#/lesson/${l.id}`, l.title || l.topic,
+        el('span', { class: `dotmark ${l.finished ? 'done' : l.status === 'complete' ? 'ready' : ''}`, 'aria-hidden': 'true' })))
+        : [el('p', { class: 'side-empty' }, 'Lessons you start show up here.')]),
+      ...(courses.length ? [el('div', { class: 'side-head' }, 'Courses'), ...courses.map((c) => {
+        const p = courseProgress(d, c);
+        return sideItem(`#/course/${c.id}`, c.title, icon('library'), el('span', { class: 'side-item-meta' }, `${p.done}/${p.total}`));
+      })] : []));
+  }
 
   // -- top bar (mobile)
   const streakChip = el('a', { class: 'chip chip-streak', href: '#/you', title: 'Streak' });
@@ -78,7 +101,7 @@ export function createShell({ store, getStatus, actions }) {
   const tabBadges = {};
   tabbar.replaceChildren(...NAV.map((n) => {
     tabBadges[n.id] = el('span', { class: 'badge', hidden: true });
-    tabLinks[n.id] = el('a', { class: 'tab', href: n.href }, icon(n.icon), el('span', null, n.label), tabBadges[n.id]);
+    tabLinks[n.id] = el('a', { class: 'tab', href: n.href }, icon(n.icon), el('span', { class: 'tab-label' }, n.label), tabBadges[n.id]);
     return tabLinks[n.id];
   }));
 
@@ -97,6 +120,7 @@ export function createShell({ store, getStatus, actions }) {
     const streak = currentStreak(d.stats);
     const day = dailyProgress(d.stats, d.settings);
     const due = deckStats(d.deck).due;
+    drawRecent(d);
     for (const b of [navBadges.review, tabBadges.review]) { b.hidden = !due; b.textContent = due > 99 ? '99+' : String(due); }
     streakChip.classList.toggle('lit', streak > 0);
     streakChip.replaceChildren(el('span', { class: 'chip-unit' }, 'Day'), ` ${streak}`);
@@ -181,6 +205,7 @@ export function createShell({ store, getStatus, actions }) {
         if (courses.length) groups.push(['Courses', courses]);
       }
       const due = deckStats(d.deck).due;
+    drawRecent(d);
       const go = [
         { icon: 'home', text: 'Today', run: () => { location.hash = '#/'; } },
         { icon: 'repeat', text: due ? `Review ${due} due card${due === 1 ? '' : 's'}` : 'Review', run: () => { location.hash = '#/review'; } },
