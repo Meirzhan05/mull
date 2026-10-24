@@ -353,7 +353,7 @@ main { display: block; padding: 20px 16px calc(var(--tabbar-h) + 32px + env(safe
 
 /* ---------------------------------------------------------------- generic */
 .card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-lg); box-shadow: var(--shadow-card); }
-.page { display: grid; gap: 24px; }
+.page { display: grid; grid-template-columns: minmax(0, 1fr); gap: 24px; }
 .page-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
 .page-head p { margin: 0; }
 .page-count { margin: 0; font-size: 0.8125rem; color: var(--ink-3); }
@@ -542,6 +542,9 @@ a.stat-panel:hover { border-color: var(--line-strong); }
 .search-box .ui-icon { color: var(--ink-3); width: 15px; height: 15px; }
 .search-box input { flex: 1; min-width: 0; border: 0; outline: none; background: transparent; font-size: 0.875rem; }
 .lib-tools .cmd-level { height: 36px; }
+/* the filter buttons can't wrap; on very narrow screens they scroll sideways instead of widening the page */
+.lib-tools .seg { max-width: 100%; overflow-x: auto; scrollbar-width: none; }
+.lib-tools .seg::-webkit-scrollbar { display: none; }
 .lib-body { display: grid; gap: 20px; }
 .lib-body .panel-section > .section-head { background: var(--surface); }
 .table { display: grid; }
