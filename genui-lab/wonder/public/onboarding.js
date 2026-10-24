@@ -3,20 +3,28 @@
 // 2. their pace (the level lessons start at and a daily goal),
 // 3. a first lesson, picked from those topics or typed in.
 // Skippable at any point (Esc or Skip keeps what was chosen so far); the choices live in
-// store.settings: name, interests, level, dailyGoal.
+// store.settings: name, interests, level, dailyGoal. Only what the learner actually set is
+// written, so settings that arrive meanwhile (account sync on a new device) are not reset.
 
 import { el, icon } from './ui.js';
-import { INTERESTS, DAILY_GOALS, DEFAULT_GOAL, suggestedTopics, topicInterest } from './progress-core.js';
+import { INTERESTS, DAILY_GOALS, LEVELS, suggestedTopics, topicInterest, goalOf, levelOf } from './progress-core.js';
 
-export const LEVELS = Object.freeze([
-  { id: 'beginner', label: 'Beginner', hint: 'Start from the ground up' },
-  { id: 'intermediate', label: 'Intermediate', hint: 'I know the basics' },
-  { id: 'advanced', label: 'Advanced', hint: 'Skip ahead to the depth' },
-]);
 const STEPS = ['Interests', 'Pace', 'First lesson'];
 
 export function needsOnboarding(data) {
   return !data.settings?.onboarded && !Object.keys(data.lessons || {}).length && !(data.courses || []).length;
+}
+
+/** The interest chips (onboarding, You): toggles report the key and whether it is now on. */
+export function interestGrid(selected, onToggle) {
+  return el('div', { class: 'interest-grid', role: 'group', 'aria-label': 'Interests' }, ...Object.entries(INTERESTS).map(([k, v]) => el('button', {
+    class: 'interest', type: 'button', 'aria-pressed': String(selected.has(k)),
+    onclick: (e) => {
+      const on = e.currentTarget.getAttribute('aria-pressed') !== 'true';
+      e.currentTarget.setAttribute('aria-pressed', String(on));
+      onToggle(k, on);
+    },
+  }, el('span', null, v.label), icon('check'))));
 }
 
 /**
@@ -24,8 +32,9 @@ export function needsOnboarding(data) {
  *   startLesson opens the first lesson; without it the last step only finishes.
  */
 export function showOnboarding({ store, onDone, startLesson }) {
-  const known = String(store.data?.settings?.name || globalThis.Clerk?.user?.firstName || '').trim();
-  const pick = { name: known, interests: new Set(store.data?.settings?.interests || []), level: 'beginner', dailyGoal: DEFAULT_GOAL };
+  const settings = store.data?.settings || {};
+  const pick = { name: String(settings.name || '').trim(), interests: new Set(settings.interests || []), level: levelOf(settings), dailyGoal: goalOf(settings) };
+  const touched = new Set(); // the picks the learner made; only these are saved
   let step = 0;
   let back = false;
   const body = el('div', { class: 'onboard-body' });
@@ -39,21 +48,33 @@ export function showOnboarding({ store, onDone, startLesson }) {
   // the app behind stays out of reach of Tab and screen readers while the welcome is up
   const behind = [...document.body.children].filter((n) => !n.inert);
   for (const n of behind) n.inert = true;
+  // and the page behind does not scroll under it
+  const scroller = document.documentElement;
+  const overflow = scroller.style.overflow;
+  scroller.style.overflow = 'hidden';
 
   function finish(topic) {
+    const patch = { onboarded: true };
+    if (touched.has('interests')) patch.interests = [...pick.interests];
+    if (touched.has('level')) patch.level = pick.level;
+    if (touched.has('dailyGoal')) patch.dailyGoal = pick.dailyGoal;
     const name = pick.name.trim();
     store.update((d) => {
-      d.settings = { ...(d.settings || {}), onboarded: true, interests: [...pick.interests], level: pick.level, dailyGoal: pick.dailyGoal, ...(name ? { name } : {}) };
+      if (touched.has('name') || (name && !d.settings?.name)) patch.name = name;
+      d.settings = { ...(d.settings || {}), ...patch };
       return d;
     });
     store.flush();
     for (const n of behind) n.inert = false;
+    scroller.style.overflow = overflow;
     root.remove();
     document.removeEventListener('keydown', onKey);
-    onDone?.();
+    // the lesson first: its hash change is the route, and onDone then has no Today to redraw
     if (topic) startLesson?.(topic, pick.level);
+    onDone?.();
   }
-  const onKey = (e) => { if (e.key === 'Escape') finish(); };
+  // Esc skips, unless it is cancelling an IME composition or another layer (the palette) took it
+  const onKey = (e) => { if (e.key === 'Escape' && !e.isComposing && !e.defaultPrevented) finish(); };
   document.addEventListener('keydown', onKey);
 
   const go = (n) => { back = n < step; step = n; draw(); };
@@ -73,24 +94,23 @@ export function showOnboarding({ store, onDone, startLesson }) {
       preview.replaceChildren(...topics.map((t) => el('li', null, el('span', { class: 'onboard-preview-tag' }, topicInterest(t) || 'Popular'), el('span', null, t))));
       count.textContent = pick.interests.size ? `${pick.interests.size} chosen` : 'Choose a few';
     };
-    const grid = el('div', { class: 'interest-grid', role: 'group', 'aria-label': 'Interests' }, ...Object.entries(INTERESTS).map(([k, v]) => el('button', {
-      class: 'interest', type: 'button', 'aria-pressed': String(pick.interests.has(k)),
-      onclick: (e) => {
-        if (pick.interests.has(k)) pick.interests.delete(k); else pick.interests.add(k);
-        e.currentTarget.setAttribute('aria-pressed', String(pick.interests.has(k)));
-        drawPreview();
-      },
-    }, el('span', null, v.label), icon('check'))));
-    const nameInput = el('input', { class: 'onboard-input', type: 'text', maxlength: '40', placeholder: 'Your first name', value: pick.name, autocomplete: 'given-name', 'aria-label': 'Your first name (optional)', oninput: (e) => { pick.name = e.target.value; } });
+    const grid = interestGrid(pick.interests, (k, on) => {
+      if (on) pick.interests.add(k); else pick.interests.delete(k);
+      touched.add('interests');
+      drawPreview();
+    });
+    // the account's first name (Clerk loads on its own time) fills an untouched, empty field
+    if (!pick.name && !touched.has('name')) pick.name = String(globalThis.Clerk?.user?.firstName || '').trim();
+    const nameInput = el('input', { class: 'onboard-input', type: 'text', maxlength: '40', placeholder: 'Your first name', value: pick.name, autocomplete: 'given-name', 'aria-label': 'Your first name (optional)', oninput: (e) => { pick.name = e.target.value; touched.add('name'); } });
     drawPreview();
     const form = el('form', { class: 'onboard-step', onsubmit: (e) => { e.preventDefault(); go(1); } },
-      heading(known ? `Hi ${known}. What are you curious about?` : 'What are you curious about?',
+      heading('What are you curious about?',
         'Wonder writes a short lesson on anything you name, with working diagrams and a tutor beside the text. Pick a few subjects and it will suggest where to start.'),
-      known ? null : el('label', { class: 'onboard-field' }, el('span', null, 'What should we call you? ', el('span', { class: 'muted' }, '(optional)')), nameInput),
+      el('label', { class: 'onboard-field' }, el('span', null, 'What should we call you? ', el('span', { class: 'muted' }, '(optional)')), nameInput),
       el('div', { class: 'onboard-field' }, el('span', { class: 'onboard-field-row' }, el('span', null, 'Subjects'), count), grid),
       el('aside', { class: 'onboard-preview', 'aria-live': 'polite' }, el('p', { class: 'onboard-preview-title' }, icon('sparkles'), 'Your front page will suggest'), preview),
       actions(el('button', { class: 'btn btn-lg', type: 'submit' }, 'Continue', icon('arrow-right'))));
-    return [form, known ? grid.firstChild : nameInput];
+    return [form, pick.name ? grid.firstChild : nameInput];
   }
 
   function paceStep() {
@@ -111,8 +131,8 @@ export function showOnboarding({ store, onDone, startLesson }) {
       });
       return group;
     };
-    const level = choice('Level', LEVELS.map((l) => ({ value: l.id, label: l.label, hint: l.hint })), pick.level, (v) => { pick.level = v; });
-    const goal = choice('Daily goal', DAILY_GOALS.map((g) => ({ value: g.xp, label: g.label, hint: g.hint, tag: `${g.xp} XP` })), pick.dailyGoal, (v) => { pick.dailyGoal = v; });
+    const level = choice('Level', LEVELS.map((l) => ({ value: l.id, label: l.label, hint: l.hint })), pick.level, (v) => { pick.level = v; touched.add('level'); });
+    const goal = choice('Daily goal', DAILY_GOALS.map((g) => ({ value: g.xp, label: g.label, hint: g.hint, tag: `${g.xp} XP` })), pick.dailyGoal, (v) => { pick.dailyGoal = v; touched.add('dailyGoal'); });
     const node = el('div', { class: 'onboard-step' },
       heading(`How should lessons feel${pick.name.trim() ? `, ${pick.name.trim()}` : ''}?`, 'Both are a starting point. You can change the level on any lesson, and the goal in You.'),
       el('div', { class: 'onboard-pace' },

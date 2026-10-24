@@ -147,6 +147,10 @@ export async function beginAccount(userId, { store } = {}) {
       : true;
     if (merge) mode = 'merge';
   }
+  // only the first-run welcome's choices (interests, level, goal, name): they come along too, no
+  // question asked. A merge keeps the account's own settings and fills in only what it lacks.
+  const settingsOnly = mode === 'pull' && !!anon?.settings?.onboarded;
+  if (settingsOnly) mode = 'merge';
   let target;
   try { target = await openIdbStorage(userId); } catch { target = prefixedLocalStorage(userId); }
   target.setItem(STATE_KEY, mode === 'merge' ? anonRaw : JSON.stringify(emptyState()));
@@ -154,7 +158,7 @@ export async function beginAccount(userId, { store } = {}) {
   await target.flushNow();
   try {
     sessionStorage.setItem('wonder.beginAccount', String(Date.now()));
-    if (mode === 'merge') ls()?.setItem(MIGRATED_KEY, userId);
+    if (mode === 'merge' && !settingsOnly) ls()?.setItem(MIGRATED_KEY, userId); // (no "lessons are in your account" toast for settings)
     ls()?.setItem(ACCOUNT_KEY, JSON.stringify({ userId }));
   } catch {}
   if (readJson(ACCOUNT_KEY)?.userId !== userId) throw new Error('This browser’s storage is full or blocked, so it cannot switch to your account. Free some space (or export and erase your data) and try again.');

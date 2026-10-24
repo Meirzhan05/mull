@@ -1063,7 +1063,7 @@ body[data-screen="lesson"] main { padding-top: 0; }
 .onboard-progress li.on i { background: var(--ink); border-color: var(--ink); color: var(--bg); }
 .onboard-progress li.done { color: var(--ink-2); }
 .onboard-progress li.done i { background: var(--brand-subtle); border-color: var(--accent); color: var(--accent); }
-.onboard-body { min-height: 0; overflow-y: auto; padding: clamp(28px, 7vh, 72px) 16px 32px; }
+.onboard-body { min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: clamp(28px, 7vh, 72px) 16px 32px; }
 .onboard-step { width: min(600px, 100%); margin: 0 auto; display: grid; gap: 24px; }
 .onboard-step.from-right { animation: onboard-in-right 280ms cubic-bezier(.2,.8,.2,1) both; }
 .onboard-step.from-left { animation: onboard-in-left 280ms cubic-bezier(.2,.8,.2,1) both; }

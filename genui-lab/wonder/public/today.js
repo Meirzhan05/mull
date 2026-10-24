@@ -8,7 +8,7 @@
 
 import { el, icon, toast, relTime } from './ui.js';
 import { currentStreak, deckStats, formatDue } from './deck.js';
-import { dailyProgress, weekStrip, upNext, suggestedTopics, greeting, courseProgress, learnerTotals, topicInterest, readingMinutes } from './progress-core.js';
+import { dailyProgress, weekStrip, upNext, suggestedTopics, greeting, courseProgress, learnerTotals, topicInterest, readingMinutes, LEVELS, levelOf } from './progress-core.js';
 import { pageCount } from './steering-core.js';
 import { practiceConcepts } from './mastery-screen.js'; // Phase 6
 import { lessonOutcome, outcomeLabel } from './outcomes-core.js'; // Phase 9
@@ -35,8 +35,6 @@ function readMaterialFile(file) {
     if (pdf) r.readAsDataURL(file); else r.readAsText(file);
   });
 }
-const LEVELS = ['beginner', 'intermediate', 'advanced'];
-const cap = (s) => s[0].toUpperCase() + s.slice(1);
 
 /**
  * @param {{app: HTMLElement, store: object, status: object, actions: object}} ctx
@@ -68,7 +66,7 @@ export function renderToday(ctx) {
 
   // -- command bar
   let mode = 'lesson';
-  let level = LEVELS.includes(settings.level) ? settings.level : 'beginner';
+  let level = levelOf(settings);
   const input = el('textarea', { rows: '1', maxlength: '300', autocomplete: 'off', class: 'composer-input', 'aria-label': 'What do you want to learn?' });
   const go = el('button', { class: 'composer-send', type: 'submit', 'aria-label': 'Begin', title: 'Begin (Enter)' }, icon('arrow-up'));
   const goLabel = el('span', { class: 'composer-hint' });
@@ -79,7 +77,7 @@ export function renderToday(ctx) {
   const autosize = () => { input.style.height = 'auto'; input.style.height = `${Math.min(220, input.scrollHeight)}px`; };
   input.addEventListener('input', () => { autosize(); go.classList.toggle('ready', !!input.value.trim() || mode === 'material'); });
   input.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); submit(); } });
-  const levelSel = el('select', { class: 'cmd-level', 'aria-label': 'Level', onchange: (e) => { level = e.target.value; } }, ...LEVELS.map((lv) => el('option', { value: lv, selected: lv === level }, cap(lv))));
+  const levelSel = el('select', { class: 'cmd-level', 'aria-label': 'Level', onchange: (e) => { level = e.target.value; } }, ...LEVELS.map((lv) => el('option', { value: lv.id, selected: lv.id === level }, lv.label)));
   // -- Phase 10: "Material": paste notes or attach a file; Begin writes a lesson from it, or a course
   let file = null;
   const notes = el('textarea', { class: 'cmd-notes', rows: '5', maxlength: '200000', placeholder: 'Paste your notes, a chapter or a syllabus. Wonder teaches from it and cites it.', 'aria-label': 'Your material' });
@@ -158,7 +156,7 @@ export function renderToday(ctx) {
     const list = mode === 'teacher' ? TEACHER_CHIPS : topics;
     chips.replaceChildren(...list.map((t) => el('button', { class: 'hero-chip', type: 'button', onclick: () => { input.value = t; autosize(); submit(); } },
       mode === 'teacher' ? null : el('span', { class: 'hero-chip-tag' }, topicInterest(t) || 'General'), t)),
-    ...(mode === 'teacher' ? [] : [el('a', { class: 'hero-chip hero-chip-link', href: '#/you', onclick: () => setTimeout(() => document.getElementById('interests')?.scrollIntoView({ block: 'center' }), 80) }, 'Interests', icon('arrow-right'))]));
+    ...(mode === 'teacher' ? [] : [el('a', { class: 'hero-chip hero-chip-link', href: '#/interests' }, 'Interests', icon('arrow-right'))]));
   }
   const composer = el('form', { class: 'composer', onsubmit: (e) => { e.preventDefault(); submit(); } },
     el('label', { class: 'composer-field' }, input),

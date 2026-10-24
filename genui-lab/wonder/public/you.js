@@ -2,8 +2,8 @@
 // size), learner memory, and data export / reset.
 
 import { el, icon, toast } from './ui.js';
-import { learnerTotals, activityGrid, DAILY_GOALS, INTERESTS, goalOf } from './progress-core.js';
-import { LEVELS } from './onboarding.js';
+import { learnerTotals, activityGrid, DAILY_GOALS, LEVELS, goalOf, levelOf } from './progress-core.js';
+import { interestGrid } from './onboarding.js';
 import { memoryPanel } from './memory-screen.js';
 import { masteryPanel } from './mastery-screen.js'; // Phase 6
 import { insightsPanel } from './insights-panel.js'; // Phase 9
@@ -208,18 +208,14 @@ export function renderYou(ctx) {
         Object.assign(radioSeg('Daily goal', DAILY_GOALS.map((g) => [g.xp, `${g.label} · ${g.xp}`]), goal, (v) => { setSetting({ dailyGoal: Number(v) }); toast(`Daily goal: ${v} XP`); }), { className: 'seg seg-grid' })),
       el('div', { class: 'setting' },
         el('div', { class: 'setting-text' }, el('strong', null, 'Lesson level'), el('p', { class: 'muted small' }, 'Where new lessons start. Each lesson can still pick its own.')),
-        radioSeg('Lesson level', LEVELS.map((l) => [l.id, l.label]), settings().level || 'beginner', (v) => setSetting({ level: v }))),
+        radioSeg('Lesson level', LEVELS.map((l) => [l.id, l.label]), levelOf(settings()), (v) => setSetting({ level: v }))),
       el('div', { class: 'setting setting-stack', id: 'interests' },
         el('div', { class: 'setting-text' }, el('strong', null, 'Interests'), el('p', { class: 'muted small' }, 'They shape the suggested topics on Today.')),
-        el('div', { class: 'interest-grid', role: 'group', 'aria-label': 'Interests' }, ...Object.entries(INTERESTS).map(([k, v]) => el('button', {
-          class: 'interest', type: 'button', 'aria-pressed': String((settings().interests || []).includes(k)),
-          onclick: (e) => {
-            const now = new Set(settings().interests || []);
-            if (now.has(k)) now.delete(k); else now.add(k);
-            setSetting({ interests: [...now] });
-            e.currentTarget.setAttribute('aria-pressed', String(now.has(k)));
-          },
-        }, el('span', null, v.label), icon('check'))))),
+        interestGrid(new Set(settings().interests || []), (k, on) => {
+          const now = new Set(settings().interests || []);
+          if (on) now.add(k); else now.delete(k);
+          setSetting({ interests: [...now] });
+        })),
       el('div', { class: 'setting' },
         el('div', { class: 'setting-text' }, el('strong', null, 'Theme')),
         radioSeg('Theme', [['system', 'System', 'monitor'], ['light', 'Light', 'sun'], ['dark', 'Dark', 'moon']], shell.theme, (v) => shell.setTheme(v))),
@@ -283,4 +279,5 @@ export function renderYou(ctx) {
   ctx.teardown?.push(() => io.disconnect());
   if (location.hash === '#/mastery') requestAnimationFrame(() => document.getElementById('you-knowledge')?.scrollIntoView({ block: 'start' }));
   if (location.hash === '#/memory') requestAnimationFrame(() => document.getElementById('you-memory')?.scrollIntoView({ block: 'start' }));
+  if (location.hash === '#/interests') requestAnimationFrame(() => document.getElementById('interests')?.scrollIntoView({ block: 'center' }));
 }
