@@ -64,13 +64,16 @@ function setStatus(s) {
   for (const fn of statusListeners) { try { fn(syncStatus); } catch {} }
 }
 
-/** Wait for Clerk's browser SDK (loaded by ClerkProvider), or null when accounts are off. */
+/**
+ * Wait for Clerk's browser SDK, or null when accounts are off. Only ClerkProvider (app/layout.js)
+ * may call Clerk.load(): it passes the prebuilt sign-in UI (@clerk/ui). A load() from here can win
+ * the race and load Clerk without it, and openSignIn() then throws "not loaded with Ui components".
+ */
 export async function clerk(timeoutMs = 15000) {
   const t0 = Date.now();
   while (Date.now() - t0 < timeoutMs) {
     const c = globalThis.Clerk;
     if (c?.loaded) return c;
-    if (c && typeof c.load === 'function' && !c.loaded && c.__wonderLoading !== true) { c.__wonderLoading = true; c.load().catch(() => {}); }
     await new Promise((r) => setTimeout(r, 100));
   }
   return null;
