@@ -7,7 +7,8 @@
 import { uid } from './store.js';
 import { DilSurface, mergeComponentResults } from './dil-surface.js';
 import { hasViewState } from './view-state.js';
-import { streamTurn, postJson } from './stream-client.js';
+import { streamTurn, postJson, failureError, retryDelay } from './stream-client.js';
+import { retryControl } from './retry-ui.js'; // recoverable streams
 import { XP, deckStats, currentStreak, dateKey } from './deck.js';
 import { dailyProgress, learnerTotals } from './progress-core.js';
 import { el, icon, toast } from './ui.js';
@@ -114,6 +115,7 @@ export function renderTeacher(ctx, threadId) {
   const surfaces = [];
   let busy = false;
   let ac = null;
+  let failed = null; // {rc}: the reply waiting for a Retry (recoverable streams)
   ctx.teardown.push(() => { ac?.abort(); for (const s of surfaces) s.destroy(); });
   const scrollDown = () => { scroller.scrollTop = scroller.scrollHeight; };
   const showFollowups = (list) => followups.replaceChildren(...(list || []).map((q) => el('button', { class: 'followup-chip', type: 'button', onclick: () => send(q) }, q)));
@@ -158,6 +160,9 @@ export function renderTeacher(ctx, threadId) {
     return {
       state,
       body,
+      retry: null, // the reply's retry control (recoverable streams)
+      /** A retry: drop the partial reply and show the typing dots again. */
+      restart() { surface.host.clear(); state.dil = null; state.pendingViewState = null; if (!typing.isConnected) body.insertBefore(typing, mount); },
       status(text) { if (!text) { statusLine.hidden = true; return; } statusLine.hidden = false; statusLine.lastChild.textContent = text; },
       done() { typing.remove(); statusLine.hidden = true; },
       render(dil, animated) { state.dil = dil; typing.remove(); surface.render({ code: dil.code, constants: dil.constants, appData: appData() }, { animated }); },
@@ -253,14 +258,33 @@ export function renderTeacher(ctx, threadId) {
     else if (m.content) { const a = addAssistant(m); a.done(); a.body.append(el('p', { class: 'muted small' }, 'This reply was archived to save space.')); }
   }
   showFollowups([...(thread?.messages || [])].reverse().find((m) => m.role === 'assistant')?.followups);
+  // a learner turn whose reply never finished (failed, or the tab closed mid-reply): offer Retry
+  const dangling = thread?.messages?.at(-1);
+  if (dangling?.role === 'user') {
+    const bot = addAssistant(null);
+    bot.done();
+    showRetry(bot, thread.messages.length - 1, 'This reply did not finish.');
+  }
   setTimeout(scrollDown, 0);
 
   // -- send
+  // recoverable streams: the learner's message stays in the thread when its reply fails. One
+  // automatic retry, then a Retry button on the reply. A retry re-sends that turn with its
+  // turnId: the server aborts any older request for it and replays the tool calls that already
+  // ran (no second remember / forget, cards keep their ids), see server/retry.js.
+  function abandonFailed() { failed?.rc.hide(); failed = null; }
+
+  function showRetry(bot, index, message) {
+    const rc = bot.retry || (bot.retry = retryControl({ className: 'msg-retry', onRetry: () => { abandonFailed(); bot.restart(); reply(bot, index); } }));
+    if (!rc.el.isConnected) bot.body.append(rc.el);
+    rc.show(message, 'Retry');
+    failed = { rc };
+  }
+
   async function send(text, { opener = false } = {}) {
     const message = opener ? TEACHER_OPENER : String(text || '').trim();
     if (!message || busy) return;
-    busy = true;
-    sendBtn.disabled = true;
+    abandonFailed();
     input.value = '';
     input.style.height = 'auto';
     showFollowups([]);
@@ -269,27 +293,39 @@ export function renderTeacher(ctx, threadId) {
       history.replaceState(null, '', `#/teacher/${thread.id}`);
       main.querySelector('.teacher-title').textContent = thread.title;
     }
-    const history2 = historyForModel(thread.messages);
-    thread.messages.push({ role: 'user', content: message, ...(opener ? { opener: true } : {}) });
+    thread.messages.push({ role: 'user', content: message, turnId: uid('turn'), ...(opener ? { opener: true } : {}) });
     persist();
     renderThreadList();
     if (!opener) addUser(message);
     const bot = addAssistant(null);
     scrollDown();
+    await reply(bot, thread.messages.length - 1);
+  }
+
+  /** Stream the reply to the learner turn at thread.messages[index]. */
+  async function reply(bot, index, { auto = false } = {}) {
+    const turn = thread.messages[index];
+    if (!turn || busy) return;
+    if (!turn.turnId) turn.turnId = uid('turn'); // a turn saved before turnIds existed
+    busy = true;
+    sendBtn.disabled = true;
+    bot.retry?.hide();
+    const history2 = historyForModel(thread.messages.slice(0, index));
     ac = new AbortController();
+    let again = false;
     try {
-      const r = await streamTurn('/api/teacher/stream', { threadId: thread.id, history: history2, ...(opener ? { opener: true } : { message }), progress: progressSnapshot(store.data), memoryEnabled: memoryOn(), mastery: requestMastery(store.data) }, {
+      const r = await streamTurn('/api/teacher/stream', { threadId: thread.id, turnId: turn.turnId, history: history2, ...(turn.opener ? { opener: true } : { message: turn.content }), progress: progressSnapshot(store.data), memoryEnabled: memoryOn(), mastery: requestMastery(store.data) }, {
         signal: ac.signal,
         onReasoning: (s) => bot.status(s.active === false ? '' : s.text),
         onContent: (msg, rec) => { if (rec.dil) bot.render(rec.dil, rec.status !== 'complete'); scrollDown(); },
       });
-      if (r.failure) throw new Error(r.failure.message || 'The Teacher could not answer');
+      if (r.failure) throw failureError(r.failure);
       bot.done();
       const d = r.message.dil;
       const dil = d ? { code: d.code, constants: d.constants, appData: d.appData } : null;
       const entry = { role: 'assistant', content: r.message.markdown, dil, componentResults: d?.appData?.opGenui?.componentResults || {}, followups: r.final?.followupPrompts || [], ...(bot.state.pendingViewState ? { viewState: bot.state.pendingViewState } : {}) };
       bot.state.msg = entry;
-      thread.messages.push(entry);
+      thread.messages.splice(index + 1, 0, entry);
       persist();
       store.flush();
       showFollowups(entry.followups);
@@ -298,10 +334,11 @@ export function renderTeacher(ctx, threadId) {
     } catch (e) {
       if (!ac.signal.aborted) {
         bot.done();
-        bot.body.append(el('p', { class: 'error-text' }, e.message || 'Something went wrong.'));
-        thread.messages.pop(); // let the learner resend
-        persist();
-        if (!opener) input.value = message;
+        if (e.retryable && !auto) {
+          const rc = bot.retry || (bot.retry = retryControl({ className: 'msg-retry', onRetry: () => { abandonFailed(); bot.restart(); reply(bot, index); } }));
+          if (!rc.el.isConnected) bot.body.append(rc.el);
+          again = await rc.countdown(retryDelay(0, { retryAfterMs: e.retryAfterMs }), e.message || 'Connection lost.', ac.signal);
+        } else showRetry(bot, index, e.message || 'Something went wrong.');
       }
     } finally {
       busy = false;
@@ -309,6 +346,7 @@ export function renderTeacher(ctx, threadId) {
       scrollDown();
       renderThreadList();
     }
+    if (again) { bot.restart(); await reply(bot, index, { auto: true }); }
   }
 
   // Phase 10: a check-in asked for from Today, or the first visit of the day to a new chat

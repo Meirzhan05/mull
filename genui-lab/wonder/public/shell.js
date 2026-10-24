@@ -1,10 +1,12 @@
 // App shell: the desktop sidebar, the mobile top bar and bottom tabs, the daily-goal mini ring,
-// the theme switch, the demo notice and the ⌘K command palette. Screens render into #app;
-// the shell only reflects the current route and the learner's stats.
+// the theme switch, the demo notice and the ⌘K (or /) command palette, which also searches
+// the learner's lessons, courses, cards and Teacher chats (search-core.js). Screens render
+// into #app; the shell only reflects the current route and the learner's stats.
 
 import { el, icon, toast } from './ui.js';
 import { deckStats, currentStreak } from './deck.js';
 import { dailyProgress, matchScore } from './progress-core.js';
+import { searchStoreGroups, openResult, resultBody, hasTitleHit, TYPE_ICON, resultCount } from './search-ui.js';
 
 const NAV = [
   { id: 'today', label: 'Today', icon: 'home', href: '#/' },
@@ -131,13 +133,14 @@ export function createShell({ store, getStatus, actions }) {
   function openPalette(initial = '') {
     if (paletteOpen) return;
     const prevFocus = document.activeElement;
-    const input = el('input', { type: 'text', placeholder: 'Search lessons, or type a topic to learn…', 'aria-label': 'Search or start a lesson', autocomplete: 'off', spellcheck: 'false', role: 'combobox', 'aria-expanded': 'true', 'aria-controls': 'palette-list' });
+    const input = el('input', { type: 'text', placeholder: 'Search your lessons, cards and chats, or type a topic…', 'aria-label': 'Search or start a lesson', autocomplete: 'off', spellcheck: 'false', role: 'combobox', 'aria-expanded': 'true', 'aria-controls': 'palette-list', 'aria-autocomplete': 'list' });
     input.value = initial;
-    const list = el('div', { class: 'palette-list', id: 'palette-list', role: 'listbox' });
-    const overlay = el('div', { class: 'modal-overlay', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Command palette' },
+    const list = el('div', { class: 'palette-list', id: 'palette-list', role: 'listbox', 'aria-label': 'Results' });
+    const live = el('div', { class: 'sr-only', role: 'status', 'aria-live': 'polite' });
+    const overlay = el('div', { class: 'modal-overlay', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Search and commands' },
       el('div', { class: 'palette' },
         el('div', { class: 'palette-input' }, icon('search'), input, el('kbd', null, 'esc')),
-        list,
+        list, live,
         el('div', { class: 'palette-foot' },
           el('span', null, el('kbd', null, '↑'), el('kbd', null, '↓'), 'move'),
           el('span', null, el('kbd', null, '↵'), 'open'),
@@ -149,26 +152,34 @@ export function createShell({ store, getStatus, actions }) {
       const q = input.value.trim();
       const d = store.data;
       const groups = [];
+      const learn = q ? ['Learn', [
+        { icon: 'play', text: `Start a lesson: “${q}”`, hint: 'Lesson', run: () => actions.startLesson(q) },
+        { icon: 'layers', text: `Plan a course: “${q}”`, hint: 'Course', run: () => actions.planCourse(q) },
+        { icon: 'teacher', text: `Ask your Teacher: “${q}”`, hint: 'Teacher', run: () => actions.askTeacher(q) },
+      ]] : null;
+      let found = 0;
       if (q) {
-        groups.push(['Learn', [
-          { icon: 'play', text: `Start a lesson: “${q}”`, hint: 'Lesson', run: () => actions.startLesson(q) },
-          { icon: 'layers', text: `Plan a course: “${q}”`, hint: 'Course', run: () => actions.planCourse(q) },
-          { icon: 'teacher', text: `Ask your Teacher: “${q}”`, hint: 'Teacher', run: () => actions.askTeacher(q) },
-        ]]);
+        // full-text search grouped by type, the group with the best match first (Enter opens
+        // it); a title hit at the top means "find", so results come before "Learn"
+        const grouped = searchStoreGroups(store, q, { perType: 4 }).sort((a, b) => b.results[0].score - a.results[0].score);
+        found = grouped.reduce((n, g) => n + g.total, 0);
+        const searchGroups = grouped.map((g) => [g.total > g.results.length ? `${g.label} · ${g.results.length} of ${g.total}` : g.label,
+          g.results.map((r) => ({ icon: TYPE_ICON[r.type], result: r, run: () => openResult(r) }))]);
+        if (grouped.some((g) => g.total > g.results.length)) {
+          searchGroups.push(['More', [{ icon: 'library', text: `See all ${found} results in the Library`, run: () => { try { sessionStorage.setItem('wonder.libQuery', q); } catch {} if (location.hash === '#/library') window.dispatchEvent(new HashChangeEvent('hashchange')); else location.hash = '#/library'; } }]]);
+        }
+        const top = grouped[0]?.results[0];
+        if (top && hasTitleHit(top)) groups.push(...searchGroups, learn);
+        else groups.push(learn, ...searchGroups);
+      } else {
+        const lessons = Object.values(d.lessons)
+          .sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''))
+          .slice(0, 4)
+          .map((l) => ({ icon: l.finished ? 'check' : 'book', text: l.title || l.topic, hint: l.finished ? 'Finished' : 'Lesson', run: () => { location.hash = `#/lesson/${l.id}`; } }));
+        if (lessons.length) groups.push(['Recent lessons', lessons]);
+        const courses = d.courses.slice(0, 4).map((c) => ({ icon: 'layers', text: c.title, hint: 'Course', run: () => { location.hash = `#/course/${c.id}`; } }));
+        if (courses.length) groups.push(['Courses', courses]);
       }
-      const lessons = Object.values(d.lessons)
-        .map((l) => ({ l, s: matchScore(l.title || l.topic, q) }))
-        .filter((x) => x.s > 0)
-        .sort((a, b) => b.s - a.s || (b.l.updatedAt || '').localeCompare(a.l.updatedAt || ''))
-        .slice(0, q ? 6 : 4)
-        .map(({ l }) => ({ icon: l.finished ? 'check' : 'book', text: l.title || l.topic, hint: l.finished ? 'Finished' : 'Lesson', run: () => { location.hash = `#/lesson/${l.id}`; } }));
-      if (lessons.length) groups.push([q ? 'Lessons' : 'Recent lessons', lessons]);
-      const courses = d.courses.filter((c) => matchScore(c.title, q) > 0).slice(0, 4)
-        .map((c) => ({ icon: 'layers', text: c.title, hint: 'Course', run: () => { location.hash = `#/course/${c.id}`; } }));
-      if (courses.length) groups.push(['Courses', courses]);
-      const threads = q ? (d.teacherThreads || []).filter((t) => matchScore(t.title, q) > 0).slice(0, 3)
-        .map((t) => ({ icon: 'chat', text: t.title, hint: 'Teacher chat', run: () => { location.hash = `#/teacher/${t.id}`; } })) : [];
-      if (threads.length) groups.push(['Teacher chats', threads]);
       const due = deckStats(d.deck).due;
       const go = [
         { icon: 'home', text: 'Today', run: () => { location.hash = '#/'; } },
@@ -182,19 +193,19 @@ export function createShell({ store, getStatus, actions }) {
       items = groups.flatMap(([, g]) => g);
       sel = Math.min(sel, Math.max(0, items.length - 1));
       let i = 0;
-      list.replaceChildren(...(items.length ? groups.flatMap(([title, g]) => [
-        el('div', { class: 'palette-group', role: 'presentation' }, title),
+      list.replaceChildren(...(items.length ? groups.map(([title, g], gi) => el('div', { class: 'palette-section', role: 'group', 'aria-labelledby': `pal-g${gi}` },
+        el('div', { class: 'palette-group', id: `pal-g${gi}`, role: 'presentation' }, title),
         ...g.map((it) => {
           const idx = i++;
-          return el('button', { class: 'palette-item', type: 'button', role: 'option', id: `pal-${idx}`, 'aria-selected': String(idx === sel), onclick: () => choose(idx), onmousemove: () => { if (sel !== idx) { sel = idx; mark(); } } },
-            icon(it.icon), el('span', { class: 'palette-item-text' }, it.text), it.hint ? el('span', { class: 'palette-item-hint' }, it.hint) : null);
-        }),
-      ]) : [el('div', { class: 'palette-empty' }, 'Type a topic to start a lesson on it.')]));
+          return el('div', { class: `palette-item ${it.result ? 'palette-result' : ''}`, role: 'option', id: `pal-${idx}`, 'aria-selected': String(idx === sel), onclick: () => choose(idx), onmousemove: () => { if (sel !== idx) { sel = idx; mark(); } } },
+            icon(it.icon), it.result ? resultBody(it.result) : el('span', { class: 'palette-item-text' }, it.text), it.hint ? el('span', { class: 'palette-item-hint' }, it.hint) : null);
+        }))) : [el('div', { class: 'palette-empty' }, 'Type a topic to start a lesson on it.')]));
+      live.textContent = q ? (found ? `${resultCount(found)} in your lessons, cards and chats` : 'Nothing in your lessons, cards or chats yet') : '';
       mark();
     }
     function mark() {
       for (const b of list.querySelectorAll('.palette-item')) b.setAttribute('aria-selected', String(b.id === `pal-${sel}`));
-      input.setAttribute('aria-activedescendant', `pal-${sel}`);
+      if (items.length) input.setAttribute('aria-activedescendant', `pal-${sel}`); else input.removeAttribute('aria-activedescendant');
       list.querySelector(`#pal-${sel}`)?.scrollIntoView({ block: 'nearest' });
     }
     function close() {
@@ -212,10 +223,15 @@ export function createShell({ store, getStatus, actions }) {
       if (e.key === 'Escape') { e.preventDefault(); close(); }
       else if (e.key === 'ArrowDown') { e.preventDefault(); sel = (sel + 1) % Math.max(1, items.length); mark(); }
       else if (e.key === 'ArrowUp') { e.preventDefault(); sel = (sel - 1 + items.length) % Math.max(1, items.length); mark(); }
+      else if ((e.key === 'Home' || e.key === 'End') && (e.ctrlKey || e.metaKey) && items.length) { e.preventDefault(); sel = e.key === 'Home' ? 0 : items.length - 1; mark(); }
+      else if (e.key === 'Tab') { e.preventDefault(); input.focus(); } // focus stays in the dialog
       else if (e.key === 'Enter' && document.activeElement === input) { e.preventDefault(); choose(sel); }
     }
     input.addEventListener('input', () => { sel = 0; build(); });
-    overlay.addEventListener('mousedown', (e) => { if (e.target === overlay) close(); });
+    overlay.addEventListener('mousedown', (e) => {
+      if (e.target === overlay) close();
+      else if (e.target !== input) e.preventDefault(); // clicks on results keep focus (and the keyboard) in the field
+    });
     document.addEventListener('keydown', onKey, true);
     document.body.append(overlay);
     paletteOpen = { close };

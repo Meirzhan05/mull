@@ -1,0 +1,8 @@
+/* Recoverable streams (public/retry-ui.js): "Connection lost — Retry" at the tail of a lesson
+   and on a failed tutor / Teacher reply. */
+.stream-retry { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; margin-top: 14px; padding: 10px 10px 10px 14px; border: 1px dashed color-mix(in srgb, var(--danger) 45%, var(--line)); border-radius: var(--r-md); background: color-mix(in srgb, var(--danger) 6%, transparent); color: var(--ink); font-size: 0.875rem; animation: rise 240ms ease both; }
+.stream-retry[hidden] { display: none; }
+.stream-retry[data-state="waiting"] { border-color: var(--line); background: var(--brand-subtle); }
+.stream-retry-text { flex: 1 1 12rem; min-width: 0; }
+.stream-retry-btn { flex: none; }
+.stream-retry.msg-retry { margin-top: 8px; padding: 8px 8px 8px 12px; font-size: 0.8125rem; }

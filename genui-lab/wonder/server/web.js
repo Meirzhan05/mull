@@ -24,10 +24,10 @@ async function readBody(request, limit) {
  * Handle one /api/* request with a core from createWonderCore.
  * @param {ReturnType<typeof createWonderCore>} core
  * @param {Request} request
- * @param {{logger?: Console}} [opts]
+ * @param {{logger?: Console, userId?: string|null}} [opts]  userId: the signed-in user (account sync)
  * @returns {Promise<Response>}
  */
-export async function handleWebRequest(core, request, { logger = console } = {}) {
+export async function handleWebRequest(core, request, { logger = console, userId = null } = {}) {
   const url = new URL(request.url);
   if (!core.hasRoute(request.method, url.pathname)) return json(404, { ok: false, error: 'Not found' });
   let body;
@@ -50,6 +50,8 @@ export async function handleWebRequest(core, request, { logger = console } = {})
     const encoder = new TextEncoder();
     const transport = {
       url: url.pathname + url.search,
+      userId,
+      authorization: request.headers.get('authorization') || '',
       json(status, data) {
         if (settled) return;
         settled = true;

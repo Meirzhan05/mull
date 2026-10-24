@@ -180,8 +180,11 @@ export function citeRefsIn(markdown) {
 // the current page was left by a reload or a closed tab, so it counts as interrupted, unless
 // another tab still holds the lesson's lock (public/lesson-lock.js): then it is 'elsewhere'.
 
-/** Failure codes that mean "the stream was cut", not "the request was bad": resumable. */
-export const RESUMABLE_FAILURES = Object.freeze(['stalled', 'network']);
+/**
+ * Failure codes that mean "the stream was cut" or "try again later", not "the request was
+ * bad": resumable (stream-client.js RETRYABLE_CODES, plus http_retryable for a 5xx/429 reply).
+ */
+export const RESUMABLE_FAILURES = Object.freeze(['stalled', 'network', 'rate_limited', 'overloaded', 'api_error', 'http_retryable']);
 export const isResumableFailure = (code) => RESUMABLE_FAILURES.includes(String(code || ''));
 
 /**
@@ -200,9 +203,9 @@ export function lessonPhase(lesson, { pageId, lockedElsewhere = false } = {}) {
 }
 
 /** The persisted status after a stream ends without completing. */
-export function statusAfterStop({ markdown, failureCode, aborted } = {}) {
+export function statusAfterStop({ markdown, failureCode, aborted, retryable = false } = {}) {
   const hasText = !!String(markdown || '').trim();
   if (aborted) return hasText ? 'interrupted' : 'new';
-  if (hasText && (failureCode == null || isResumableFailure(failureCode))) return 'interrupted';
+  if (hasText && (failureCode == null || retryable || isResumableFailure(failureCode))) return 'interrupted';
   return 'failed';
 }

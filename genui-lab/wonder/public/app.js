@@ -3,11 +3,14 @@
 // and You (stats, settings, learner memory).
 
 import { createStore, uid } from './store.js';
+import { openLocalCache, startAccount, pushActive, onSyncStatus } from './account.js'; // account sync
 import { DilSurface, mergeComponentResults } from './dil-surface.js';
-import { streamTurn, postJson } from './stream-client.js';
+import { streamTurn, postJson, failureError, retryDelay } from './stream-client.js';
+import { retryControl } from './retry-ui.js'; // recoverable streams
 import { addItems, deckStats, awardXp, formatDue, XP } from './deck.js';
 import { normalizePracticeItem } from './practice-core.js';
 import { renderReview } from './review.js';
+import { renderCourseReview, courseReviewButton } from './course-review-screen.js'; // whole-course review
 import { el, icon, toast, inlineMd, lessonTitleFrom } from './ui.js';
 import { observeMath } from './math.js';
 import { renderTeacher, queueTeacherMessage, queueTeacherOpener } from './teacher-screen.js';
@@ -30,7 +33,9 @@ import { storeEvidence, quizEvidence, explainEvidence, requestMastery } from './
 import { qualitySummary } from './quality-core.js'; // Phase 7
 import { pickVariant, insightsForPrompt, lessonOutcome, RECALL_MIN, STYLE_VARIANTS } from './outcomes-core.js'; // Phase 9
 
-const store = createStore();
+// Signed in: this account's IndexedDB cache (synced with the server); signed out: localStorage.
+const localCache = await openLocalCache();
+const store = createStore({ storage: localCache.storage });
 const PAGE_ID = uid('page'); // this page load: a 'streaming' lesson owned by another id was interrupted
 // Cross-tab lock per lesson, held for any stream of it. Released by the lesson's own pagehide
 // handler (after its last save), so a waiting tab never reads the lesson before that save.
@@ -40,7 +45,7 @@ const STORE_KEY = 'wonder.v1'; // store.js KEY: the waiting tab re-reads the les
 /** Replace this tab's in-memory copy of a lesson with the stored one (no write back). */
 function syncLessonFromStorage(lessonId) {
   try {
-    const fresh = JSON.parse(localStorage.getItem(STORE_KEY) || 'null')?.lessons?.[lessonId];
+    const fresh = JSON.parse((localCache.storage || localStorage).getItem(STORE_KEY) || 'null')?.lessons?.[lessonId];
     if (!fresh || typeof fresh !== 'object') return false;
     store.data.lessons[lessonId] = fresh; // in memory only: the writing tab owns the stored copy
     return true;
@@ -157,6 +162,7 @@ const REMINDED_KEY = 'wonder.reminded';
 function checkReminder() {
   try {
     if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return;
+    if (pushActive()) return; // the server sends it over Web Push (account sync), also with no tab open
     const last = localStorage.getItem(REMINDED_KEY);
     if (!reminderDue(store.data.settings, store.data.stats, new Date(), last)) return;
     localStorage.setItem(REMINDED_KEY, new Date().toLocaleDateString('en-CA'));
@@ -280,8 +286,10 @@ function renderCourse(courseId) {
           el('span', { class: 'ledger-label' }, 'Progress'),
           el('span', { class: 'ledger-value' }, String(p.done), el('small', null, ` of ${p.total} lessons`)),
           el('span', { class: 'ledger-bar', 'aria-hidden': 'true' }, el('i', { style: { width: `${Math.round(pct * 100)}%` } })))),
-      firstOpen ? el('div', null, el('button', { class: 'btn btn-lg', type: 'button', onclick: () => openCourseLesson(courseId, firstOpen.si, firstOpen.li) }, icon('play'), p.done ? `Continue: ${firstOpen.title}` : 'Start the course'))
-        : el('p', { class: 'byline' }, 'Every lesson in this course is finished.')),
+      el('div', { class: 'course-actions' },
+        firstOpen ? el('button', { class: 'btn btn-lg', type: 'button', onclick: () => openCourseLesson(courseId, firstOpen.si, firstOpen.li) }, icon('play'), p.done ? `Continue: ${firstOpen.title}` : 'Start the course')
+          : el('p', { class: 'byline' }, 'Every lesson in this course is finished.'),
+        courseReviewButton(store, course))),
     ...course.sections.map((s, si) => el('section', { class: 'path-section' },
       el('h2', { class: 'rubric path-title' }, `Part ${roman(si + 1)} · ${s.title}`),
       el('ol', { class: 'path' }, ...s.lessons.map((l, li) => {
@@ -321,7 +329,7 @@ function renderLesson(lessonId) {
   const endPanel = el('section', { class: 'card lesson-end pending', 'aria-label': 'End of lesson' });
   // Phase 4: live steer (a pill beside the status line), resume (open, top) and revise (sticky, after the lesson)
   const steerBar = createSteerBar({
-    onContinue: (req) => continueLesson(req),
+    onContinue: (req) => { autoRetried = false; continueLesson(req); },
     onOpen: () => onPageScroll(),
     onMode: (mode, node) => { if (mode === 'revise') errorBox.before(node); else writingRow.append(node); },
   });
@@ -385,7 +393,10 @@ function renderLesson(lessonId) {
   teardown.push(() => lessonMenu.destroy());
   // <<< widget state
 
-  const card = el('article', { class: 'lesson-card card', 'aria-label': 'Lesson' }, skeleton, mount);
+  // recoverable streams: "Connection lost — Retry from here" at the tail of the lesson text
+  let tailRetry = null; // what the tail control re-runs
+  const retryTail = retryControl({ className: 'lesson-retry', onRetry: () => { autoRetried = false; const f = tailRetry; tailRetry = null; f?.(); } });
+  const card = el('article', { class: 'lesson-card card', 'aria-label': 'Lesson' }, skeleton, mount, retryTail.el);
   const lessonMain = el('div', { class: 'lesson-main' },
     el('div', { class: 'lesson-bar' },
       el('a', { class: 'icon-btn', href: back, 'aria-label': 'Back' }, icon('arrow-left')),
@@ -596,6 +607,8 @@ function renderLesson(lessonId) {
   let streaming = false;
   let busy = false; // runStream holds (or is taking / releasing) the cross-tab lock
   let queued = null; // a continuation requested while a stream is still finishing
+  let retryNext = null; // {continueFrom}: the automatic retry, run once the lock is released
+  let autoRetried = false; // one automatic retry per learner action
   let failNote = '';
 
   // The "## " page in view (revise mode): the last page heading above 40% of the viewport.
@@ -610,13 +623,16 @@ function renderLesson(lessonId) {
   window.addEventListener('scroll', onPageScroll, { passive: true });
   teardown.push(() => window.removeEventListener('scroll', onPageScroll));
 
-  function showInterrupted(note = '') {
+  function showInterrupted(note = '', { lost = false, instruction = '' } = {}) {
     reasoning.hidden = true;
     skeleton.remove();
     updatePages();
     drawEnd();
     steerBar.setMode('resume');
     if (note) steerBar.setStatus(note);
+    // the same Resume at the tail, where the text stopped (a steer in force carries on)
+    tailRetry = () => continueLesson(instruction ? { instruction } : {});
+    retryTail.show(lost ? 'Connection lost.' : 'The lesson stopped here.', lost ? 'Retry from here' : 'Resume from here');
   }
 
   /** Show the stored program (another tab's latest save, or this lesson after a reload). */
@@ -642,9 +658,11 @@ function renderLesson(lessonId) {
     if (stopWatch) return;
     const onStorage = (e) => { if (e.key === STORE_KEY && syncLessonFromStorage(lessonId)) renderStored(); };
     window.addEventListener('storage', onStorage);
+    const offCache = localCache.storage?.onChange?.((key) => onStorage({ key })); // signed in: the account cache's feed
     let reopen = 0;
     stopWatch = lessonLocks.watch(lessonId, () => {
       window.removeEventListener('storage', onStorage);
+      offCache?.();
       // the writer saves right before it releases; give that save a moment to land
       reopen = setTimeout(() => {
         if (ac.signal.aborted) return;
@@ -654,7 +672,7 @@ function renderLesson(lessonId) {
         window.scrollTo(0, y);
       }, 250);
     });
-    teardown.push(() => { stopWatch?.(); clearTimeout(reopen); window.removeEventListener('storage', onStorage); });
+    teardown.push(() => { stopWatch?.(); clearTimeout(reopen); window.removeEventListener('storage', onStorage); offCache?.(); });
   }
 
   // In Resume / Revise mode, another tab may take the lesson (its own Resume / Revise): follow it.
@@ -683,7 +701,7 @@ function renderLesson(lessonId) {
     } else if (phase === 'interrupted' || phase === 'streaming') {
       // reload, closed tab or dropped connection mid-lesson: show what was written, offer Resume
       if (l.status !== 'interrupted') saveLesson(lessonId, { status: 'interrupted', streamOwner: null });
-      showInterrupted(l.interruptedReason || '');
+      showInterrupted(l.interruptedReason || '', { lost: !!l.interruptedReason });
     } else {
       runStream();
     }
@@ -726,13 +744,21 @@ function renderLesson(lessonId) {
     } finally {
       await lock?.release();
       busy = false;
+      const retry = retryNext;
+      retryNext = null;
+      // a continuation the learner asked for wins over the automatic retry
       if (queued && !ac.signal.aborted) { const q = queued; queued = null; continueLesson(q); }
+      else if (retry && !ac.signal.aborted) {
+        if (!retry.continueFrom) surface.host.clear();
+        runStream(retry.continueFrom);
+      }
     }
   }
 
   async function streamLesson(continueFrom, lock) {
     streaming = true;
     errorBox.hidden = true;
+    retryTail.hide();
     finishBtn.disabled = true;
     const l = store.data.lessons[lessonId];
     // continuation: results of the old program, pruned to the kept pages at the first replace
@@ -756,8 +782,10 @@ function renderLesson(lessonId) {
     steerBar.setMode('live');
     let r = null;
     let quality = null; // Phase 7: the server's quality-report control
+    let instruction = continueFrom?.instruction || ''; // the steer in force, carried into a retry
     try {
       r = await streamTurn('/api/lesson/stream', {
+        streamKey: lessonId, // the server aborts an older request for this lesson first
         topic: l.topic, level: l.level, lessonTitle: l.lessonTitle, lessonSummary: l.lessonSummary, course: l.course, memoryEnabled: memoryEnabled(), mastery: requestMastery(store.data),
         variant: l.variant, learnerInsights: memoryEnabled() ? insightsForPrompt(store.data) : [], // Phase 9
         ...(l.materialId ? { materialId: l.materialId } : {}), // Phase 10
@@ -766,6 +794,7 @@ function renderLesson(lessonId) {
         signal: ac.signal,
         onControl: (d) => {
           if (d.kind === 'quality-report' && d.report) { quality = d.report; return; } // Phase 7
+          if (d.kind === 'steering-status' && d.status === 'accepted' && d.instruction) instruction = d.instruction;
           steerBar.onControl(d);
         },
         onReasoning: (s) => {
@@ -795,12 +824,13 @@ function renderLesson(lessonId) {
           if (Date.now() - lastSave > 1000) { lastSave = Date.now(); persist(); }
         },
       });
-      if (r.failure) throw Object.assign(new Error(r.failure.message || 'Generation failed'), { code: r.failure.code || 'failed' });
+      if (r.failure) throw failureError(r.failure);
       const msg = r.message;
       const dil = msg.dil ? { code: msg.dil.code, constants: msg.dil.constants, appData: carried ? mergeContinuedAppData(carried, msg.dil.appData) : msg.dil.appData, requiredComponents: msg.dil.requiredComponents || [] } : null;
       current.dil = dil;
       latest = { markdown: msg.markdown, dil };
       streaming = false;
+      autoRetried = false;
       saveLesson(lessonId, { status: 'complete', streamOwner: null, markdown: msg.markdown, dil, appData: current.appData, messageId, title: lessonTitleFrom(msg.markdown, l.title), truncated: !!r.final?.debug?.truncated, interruptedReason: null, quality });
       const qs = qualitySummary(quality);
       if (qs?.tone === 'fixed') toast(qs.headline, 4200);
@@ -814,21 +844,42 @@ function renderLesson(lessonId) {
       streaming = false;
       if (ac.signal.aborted || unloading) { if (began) { persist('interrupted'); store.flush(); } return; }
       reasoning.hidden = true;
+      const hasText = !!String(latest.markdown || '').trim();
+      const retryable = e?.retryable === true;
+      // What a retry re-runs: the same continuation if this one never replaced anything, else a
+      // resume from what is on screen now (steer included), else the lesson from the start.
+      // streamTurn has already aborted the failed request, so the retry never overlaps it.
+      const retryFrom = !began ? continueFrom : hasText ? {
+        markdown: latest.markdown,
+        ...(instruction ? { instruction } : {}),
+        ...(messageId ? { messageId } : {}),
+        sources: sourcesFromAppData(current.dil?.appData),
+      } : null;
+      if (retryable && !autoRetried) {
+        // one automatic retry with backoff (Retry-After when the server sent one)
+        autoRetried = true;
+        if (began && hasText) { persist('interrupted'); store.flush(); }
+        skeleton.remove();
+        const go = await retryTail.countdown(retryDelay(0, { retryAfterMs: e.retryAfterMs }), e.message || 'Connection lost.', ac.signal);
+        if (go) retryNext = { continueFrom: retryFrom };
+        return;
+      }
       if (!began) {
         // the continuation never started: the persisted lesson is unchanged
         toast(e.message || 'Could not continue the lesson');
         if (prevPhase === 'complete') { markComplete(); steerBar.setMode('revise'); } else showInterrupted();
         steerBar.fail(e.message);
+        if (retryable) { tailRetry = () => runStream(continueFrom); retryTail.show(e.message || 'Connection lost.', 'Retry'); }
         return;
       }
-      const next = statusAfterStop({ markdown: latest.markdown, failureCode: e.code });
+      const next = statusAfterStop({ markdown: latest.markdown, failureCode: e.code, retryable });
       if (next === 'interrupted') {
-        // stalled / network / client-side drop: keep the pages, offer Resume (continueFrom)
+        // stalled / network / overloaded / client-side drop: keep the pages, offer Resume (continueFrom)
         failNote = e.code ? e.message : 'The connection dropped. Resume to continue from the last complete paragraph.';
         persist('interrupted');
         if (e.code) saveLesson(lessonId, { interruptedReason: failNote }); // a client-side drop may just be a reload: not persisted
         store.flush();
-        showInterrupted(failNote);
+        showInterrupted(failNote, { lost: true, instruction });
         return;
       }
       saveLesson(lessonId, { status: 'failed', streamOwner: null });
@@ -943,6 +994,7 @@ function createTutor(lessonId) {
   const fab = el('button', { class: 'tutor-fab btn', type: 'button', onclick: () => api.onOpenChange?.(true) }, icon('chat'), 'Ask tutor');
   const surfaces = [];
   let busy = false;
+  let failed = null; // {rc, bot}: the reply waiting for a Retry (recoverable streams)
   let ac = null;
 
   const lesson = () => store.data.lessons[lessonId];
@@ -1002,10 +1054,15 @@ function createTutor(lessonId) {
       surface.resetViewState();
       return graded;
     });
+    const body = wrapper.querySelector('.bot-body');
     return {
       typing,
       vsRef,
+      body,
+      retry: null, // the reply's retry control (recoverable streams)
       render(dil, animated) { dilRef = dil; surface.render({ code: dil.code, constants: dil.constants, appData: mergeComponentResults(dil.appData, appData.opGenui?.componentResults) }, { animated }); },
+      /** A retry: drop the partial reply and show the typing dots again. */
+      restart() { surface.host.clear(); dilRef = null; appData = {}; vsRef.pending = null; if (!typing.isConnected) body.insertBefore(typing, mount); },
     };
   }
 
@@ -1039,8 +1096,7 @@ function createTutor(lessonId) {
       if (!message || busy) return;
       const l = lesson();
       if (!l || l.status !== 'complete') { toast('Wait for the lesson to finish writing first'); return; }
-      busy = true;
-      sendBtn.disabled = true;
+      abandonFailed();
       input.value = '';
       input.style.height = 'auto';
       showFollowups([]);
@@ -1048,35 +1104,64 @@ function createTutor(lessonId) {
       addUser(message);
       const bot = addAssistant();
       scrollDown();
-      ac = new AbortController();
-      try {
-        const useWebSearch = /\b(sources?|cite|citations?|latest|current(ly)?|recent(ly)?|news|today|this year|search|look (it )?up)\b/i.test(message); // Phase 3: tutor searches only when asked
-        const r = await streamTurn('/api/tutor/stream', { message, history, lessonContext: { title: l.title, markdown: l.markdown }, useWebSearch, memoryEnabled: memoryEnabled(), mastery: requestMastery(store.data), mode: guided() ? 'socratic' : 'direct' }, {
-          signal: ac.signal,
-          onContent: (msg, rec) => {
-            if (rec.dil) { bot.typing.remove(); bot.render(rec.dil, rec.status !== 'complete'); }
-            scrollDown();
-          },
-        });
-        if (r.failure) throw new Error(r.failure.message || 'The tutor could not answer');
-        const dil = r.message.dil ? { code: r.message.dil.code, constants: r.message.dil.constants, appData: r.message.dil.appData } : null;
-        const prompts = r.final?.followupPrompts || [];
-        bot.vsRef.index = (l.tutor || []).length + 1; // widget state: later changes go to the saved entry
-        saveLesson(lessonId, { tutor: [...(l.tutor || []), { role: 'user', content: message }, { role: 'assistant', content: r.message.markdown, dil, followups: prompts, ...(bot.vsRef.pending ? { viewState: bot.vsRef.pending } : {}) }] });
-        showFollowups(prompts);
-      } catch (e) {
-        if (!ac.signal.aborted) {
-          bot.typing.remove();
-          log.lastChild.querySelector('.bot-body').append(el('p', { class: 'error-text' }, e.message || 'Something went wrong.'));
-        }
-      } finally {
-        busy = false;
-        sendBtn.disabled = false;
-        scrollDown();
-      }
+      await reply({ message, history, bot, turnId: uid('turn') });
     },
     destroy() { ac?.abort(); for (const s of surfaces) s.destroy(); },
   };
+
+  // recoverable streams: a failed reply keeps the learner's message and gets one automatic
+  // retry, then a Retry button on the reply itself. A retry re-sends the same message and
+  // history under the same turnId (the server aborts any older request for it first).
+  function abandonFailed() {
+    if (!failed) return;
+    failed.rc.hide();
+    failed = null;
+  }
+
+  async function reply({ message, history, bot, turnId }, { auto = false } = {}) {
+    busy = true;
+    sendBtn.disabled = true;
+    bot.retry?.hide();
+    ac = new AbortController();
+    let retryWith = null;
+    try {
+      const l = lesson();
+      const useWebSearch = /\b(sources?|cite|citations?|latest|current(ly)?|recent(ly)?|news|today|this year|search|look (it )?up)\b/i.test(message); // Phase 3: tutor searches only when asked
+      const r = await streamTurn('/api/tutor/stream', { message, history, lessonContext: { title: l.title, markdown: l.markdown }, useWebSearch, memoryEnabled: memoryEnabled(), mastery: requestMastery(store.data), mode: guided() ? 'socratic' : 'direct', streamKey: turnId }, {
+        signal: ac.signal,
+        onContent: (msg, rec) => {
+          if (rec.dil) { bot.typing.remove(); bot.render(rec.dil, rec.status !== 'complete'); }
+          scrollDown();
+        },
+      });
+      if (r.failure) throw failureError(r.failure);
+      const cur = lesson();
+      const dil = r.message.dil ? { code: r.message.dil.code, constants: r.message.dil.constants, appData: r.message.dil.appData } : null;
+      const prompts = r.final?.followupPrompts || [];
+      bot.vsRef.index = (cur.tutor || []).length + 1; // widget state: later changes go to the saved entry
+      saveLesson(lessonId, { tutor: [...(cur.tutor || []), { role: 'user', content: message }, { role: 'assistant', content: r.message.markdown, dil, followups: prompts, ...(bot.vsRef.pending ? { viewState: bot.vsRef.pending } : {}) }] });
+      showFollowups(prompts);
+    } catch (e) {
+      if (!ac.signal.aborted) {
+        bot.typing.remove();
+        const rc = bot.retry || (bot.retry = retryControl({ className: 'msg-retry', onRetry: () => { abandonFailed(); bot.restart(); reply({ message, history, bot, turnId }); } }));
+        bot.body.append(rc.el);
+        if (e.retryable && !auto) {
+          // the one automatic retry; the request that failed has already been aborted
+          const go = await rc.countdown(retryDelay(0, { retryAfterMs: e.retryAfterMs }), e.message || 'Connection lost.', ac.signal);
+          if (go) retryWith = true;
+        } else {
+          rc.show(e.message || 'Something went wrong.', 'Retry');
+          failed = { rc, bot };
+        }
+      }
+    } finally {
+      busy = false;
+      sendBtn.disabled = false;
+      scrollDown();
+    }
+    if (retryWith) { bot.restart(); await reply({ message, history, bot, turnId }, { auto: true }); }
+  }
   return api;
 }
 
@@ -1219,6 +1304,7 @@ function route() {
   else if ((m = /^#\/course\/([\w-]+)$/.exec(h))) { screen = 'course'; document.body.dataset.screen = screen; renderCourse(m[1]); }
   else if (h === '#/review') { screen = 'review'; document.body.dataset.screen = screen; renderReviewScreen(); }
   else if ((m = /^#\/review\/lesson\/([\w-]+)$/.exec(h))) { screen = 'review'; document.body.dataset.screen = screen; renderReviewScreen(m[1]); }
+  else if ((m = /^#\/review\/course\/([\w-]+)$/.exec(h))) { screen = 'review'; document.body.dataset.screen = screen; renderCourseReview(screenCtx(), m[1]); }
   else if ((m = /^#\/teacher(?:\/([\w-]+))?$/.exec(h))) { screen = 'teacher'; document.body.dataset.screen = screen; renderTeacher(screenCtx(), m[1] || null); }
   else if (h === '#/library') { screen = 'library'; document.body.dataset.screen = screen; renderLibrary(screenCtx()); }
   else if (h === '#/you' || h === '#/memory' || h === '#/mastery') { screen = 'you'; document.body.dataset.screen = screen; renderYou(screenCtx()); }
@@ -1239,4 +1325,10 @@ refreshChrome();
 loadStatus().then(() => {
   route();
   if (needsOnboarding(store.data)) showOnboarding({ store, onDone: () => { refreshChrome(); if (!location.hash || location.hash === '#/') route(); } });
+  // account sync: changes from other devices redraw Today / Library when that cannot disturb reading
+  onSyncStatus((s) => {
+    if (s.state === 'synced' && s.applied && ['home', 'library'].includes(document.body.dataset.screen) && window.scrollY < 40 && !document.querySelector('.onboard, dialog[open]')) route();
+    else refreshChrome();
+  });
+  startAccount({ store, toast }).catch((e) => console.warn('[wonder] account sync could not start', e));
 });
