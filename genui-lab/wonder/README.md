@@ -60,6 +60,7 @@ Five sections, in a sidebar on desktop and a bottom tab bar on phones, plus a ‚å
 - **Teacher (`#/teacher`).** The agent chat with tool cards (below).
 - **You (`#/you`).** Name, totals, a 22-week activity heatmap, settings (daily goal, theme, lesson text size), learner memory, and data export or erase.
 - **Onboarding.** On first run: a name, interests and a daily goal, all skippable.
+- **Landing page (`/welcome`).** A scroll page that replays a recorded lesson, ending in a **Start a lesson** box that opens `#/learn/<topic>` in the app. A first-time visitor opening `/` is sent there once: the pre-paint script in `app/layout.js` redirects when this browser has no Wonder data (`wonder.v1`, `wonder.account`), isn't signed in to Clerk and hasn't seen the page (`wonder.welcomed`). Deep links such as `#/lesson/<id>` never redirect. The page is static files in `public/welcome/`, copied from the ScrollCraft build in `scrollcraft/builds/wonder`; `next.config.mjs` rewrites `/welcome` to its `index.html`.
 
 **Design.** A neutral design system in light and dark (Vercel-style grays: white and near-black), with one blue accent for focus, links and the current state. Geist for text and Geist Mono for numbers and keys (both self-hosted by `next/font`); soft corners, filled controls with focus rings, pill segmented controls and cards with a hairline border and a light shadow. Each section has its own layout: **Today** is a dashboard (a command bar, the "Up next" queue, suggestion tiles and recent reading, and a rail with today's XP, the streak, the deck and the study plan); **Library** is a pair of sortable tables; **Review** puts the card beside a live session panel (position, accuracy, the queue, the deck, the keys); **Teacher** adds a column showing what it sees (your progress, memory and plan); **You** is a settings page with a section nav. Lessons are a clean article with numbered pages; finishing one turns its ideas into cards. Reading time is estimated from the prose plus about half a minute per interactive widget.
 
@@ -347,6 +348,7 @@ server/videos.js          Video validation, YouTube lookup, segment picking, dem
 server/media-resolver.js  per-stream Video lookups (componentResults); combines them with Figure's
 public/catalog-media.js   Diagram + Figure + Video (in-sandbox components)
 public/figure-hosts.js, video-hosts.js   what the renderer may load / embed
+public/welcome/           landing page (static; served at /welcome, first-time visitors land there)
 test/*.test.js, test/index.js, test/helpers.js
 ```
 
