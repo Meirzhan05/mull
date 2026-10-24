@@ -6,5 +6,10 @@
   { "topic": "Supply and demand", "level": "beginner" },
   { "topic": "Derivatives as rates of change", "level": "intermediate" },
   { "topic": "How the greenhouse effect works", "level": "beginner" },
-  { "topic": "Big-O notation and why it matters", "level": "advanced" }
+  { "topic": "Big-O notation and why it matters", "level": "advanced" },
+  { "topic": "How the heart pumps blood", "level": "beginner", "tags": ["media"] },
+  { "topic": "How a camera lens forms an image", "level": "intermediate", "tags": ["media"] },
+  { "topic": "Plate tectonics and earthquakes", "level": "beginner", "tags": ["media"] },
+  { "topic": "The water cycle", "level": "beginner", "tags": ["media"] },
+  { "topic": "Why the Moon has phases", "level": "beginner", "tags": ["media"] }
 ]

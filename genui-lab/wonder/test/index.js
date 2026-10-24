@@ -1,7 +1,9 @@
 // `node --test test/index.js`: Node 25 resolves a directory argument to its index module, so
 // this entry imports every *.test.js file into the run (same pattern as chatgpt-dil).
-// <Figure/> lookups never touch the network in tests (tests that need one inject figureLookup).
+// <Figure/> lookups never touch the network in tests (tests that need one inject figureLookup),
 process.env.WONDER_FIGURES ??= 'off';
+// ...and the figure vision check is off (tests that need it pass figureCheck)
+process.env.WONDER_FIGURE_CHECK ??= 'off';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';

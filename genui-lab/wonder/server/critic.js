@@ -20,6 +20,7 @@ import { stripGroundingTags } from './grounding.js';
 // Figure is not here: it renders nothing when no image is found, so it cannot be a page's only visual.
 const VISUALS = new Set(['LessonStepper', 'Reveal', 'CompareToggle', 'InputOutputSlider', 'Flowchart', 'Timeline', 'BarChart', 'ConceptMap', 'Cycle', 'Quiz', 'Flashcards', 'FunctionGraph', 'ExplainBack', 'Diagram']);
 const LAYOUT_RE = /<(box|col|row|grid)\b/;
+const FINISHED = { partial: false }; // the critic reads whole lessons: a tag that never closed is broken, not streaming
 const CHECK_PAGE_RE = /check your understanding/i;
 const words = (s) => (String(s).match(/[\p{L}\p{N}][\p{L}\p{N}'’-]*/gu) || []).length;
 
@@ -38,7 +39,7 @@ export function lessonParts(markdown) {
 function proseOf(body) {
   let out = '';
   let pos = 0;
-  for (const t of scanComponentTags(body)) {
+  for (const t of scanComponentTags(body, FINISHED)) {
     out += body.slice(pos, t.start);
     const term = t.kind === 'open' && t.name === 'KeyTerm' ? t.attrs.find(([k]) => k === 'term')?.[1] : null;
     if (term?.kind === 'string') out += term.value; // an inline KeyTerm reads as its word
@@ -57,14 +58,15 @@ export function lintLesson(markdown) {
   const { title, hook, pages } = lessonParts(md);
   const check = pages.length && CHECK_PAGE_RE.test(pages[pages.length - 1].heading) ? pages[pages.length - 1] : null;
   const content = check ? pages.slice(0, -1) : pages;
-  const comps = preprocess(md).components;
+  const comps = preprocess(md, FINISHED).components;
   const valid = comps.filter((c) => c.status === 'valid');
   const quizzes = valid.filter((c) => c.name === 'Quiz');
   const terms = new Set(valid.filter((c) => c.name === 'KeyTerm').map((c) => String(c.props.term).toLowerCase()));
+  // a tag that never closed (unbalanced braces in its props) is invalid too: BROKEN_TAG_ERROR
   const invalid = comps.filter((c) => c.status === 'invalid');
-  const visualsPerPage = content.map((p) => scanComponentTags(p.body).filter((t) => t.kind === 'open' && VISUALS.has(t.name)).length + (LAYOUT_RE.test(p.body) ? 1 : 0));
+  const visualsPerPage = content.map((p) => scanComponentTags(p.body, FINISHED).filter((t) => t.kind === 'open' && VISUALS.has(t.name)).length + (LAYOUT_RE.test(p.body) ? 1 : 0));
   const pageWords = content.map((p) => words(proseOf(p.body)));
-  const quizOnCheck = check ? scanComponentTags(check.body).filter((t) => t.kind === 'open' && t.name === 'Quiz').length : 0;
+  const quizOnCheck = check ? scanComponentTags(check.body, FINISHED).filter((t) => t.kind === 'open' && t.name === 'Quiz').length : 0;
   const questions = quizzes.flatMap((q) => q.props.questions || []);
   const checks = [
     { id: 'title', ok: !!title, detail: title ? `"${title}"` : 'no "# " title' },
@@ -78,7 +80,7 @@ export function lintLesson(markdown) {
     { id: 'key_terms', ok: terms.size >= 2 && terms.size <= 5, detail: `${terms.size} distinct KeyTerms (want 2-5)` },
     { id: 'explain_back', ok: valid.filter((c) => c.name === 'ExplainBack').length === 1, detail: `${valid.filter((c) => c.name === 'ExplainBack').length} ExplainBack (want 1, on the last content page)` },
     { id: 'worked_example', ok: valid.some((c) => c.name === 'LessonStepper'), detail: valid.some((c) => c.name === 'LessonStepper') ? 'has a LessonStepper' : 'no LessonStepper worked example' },
-    { id: 'valid_components', ok: invalid.length === 0, detail: invalid.length ? `${invalid.length} invalid component(s) replaced by text: ${invalid.map((c) => c.name).join(', ')}` : 'all components valid' },
+    { id: 'valid_components', ok: invalid.length === 0, detail: invalid.length ? `${invalid.length} invalid component(s) replaced by text: ${invalid.map(invalidLabel).join('; ')}` : 'all components valid' },
   ];
   const passed = checks.filter((c) => c.ok).length;
   return {
@@ -86,8 +88,39 @@ export function lintLesson(markdown) {
     passed,
     total: checks.length,
     checks,
-    stats: { title, pages: content.length, visualsPerPage, pageWords, quizzes: quizzes.length, questions: questions.length, keyTerms: terms.size, components: valid.length },
+    stats: { title, pages: content.length, visualsPerPage, pageWords, quizzes: quizzes.length, questions: questions.length, keyTerms: terms.size, components: valid.length, media: mediaCounts(comps) },
   };
+}
+
+const invalidLabel = (c) => `${c.name} (${clip(c.error, 120)})`;
+const MEDIA = ['Diagram', 'Figure'];
+/** {Diagram: {valid, invalid}, Figure: {valid, invalid}} from compileWonder(...).components. */
+function mediaCounts(comps) {
+  const out = {};
+  for (const name of MEDIA) {
+    const mine = comps.filter((c) => c.name === name);
+    out[name] = { valid: mine.filter((c) => c.status === 'valid').length, invalid: mine.filter((c) => c.status !== 'valid').length };
+  }
+  return out;
+}
+
+/**
+ * Per-component media details of a finished lesson, in document order: every <Diagram> and
+ * <Figure> with its status ('valid' | 'invalid'), the validator's error, and a short
+ * summary of its props. The eval harness joins Figures with the server's image lookup results.
+ */
+export function lessonMedia(markdown) {
+  const comps = preprocess(stripGroundingTags(String(markdown || '')), FINISHED).components;
+  const out = { diagrams: [], figures: [] };
+  for (const c of comps) {
+    if (!MEDIA.includes(c.name)) continue;
+    const { status } = c;
+    const base = { status, ...(c.error ? { error: clip(c.error, 200) } : {}) };
+    const p = c.props || {};
+    if (c.name === 'Diagram') out.diagrams.push({ ...base, ...(status === 'valid' ? { title: p.title || '', shapes: p.shapes.length, parts: p.parts?.length || 0, steps: p.steps?.length || 0 } : {}) });
+    else out.figures.push({ ...base, ...(status === 'valid' ? { query: p.query || '', ...(p.file ? { file: p.file } : {}), caption: p.caption || '', question: !!p.question } : {}) });
+  }
+  return out;
 }
 
 // ---------------------------------------------------------------- critic (Claude)
@@ -101,6 +134,9 @@ Check, in this order:
 3. Citations. A cited claim must be supported by the cited source text shown to you. Flag claims that go beyond it.
 4. Level fit: jargon without explanation for a beginner, or oversimplification for an advanced learner.
 5. Widgets that do not make sense (a flowchart out of order, a timeline with wrong dates, a slider whose outputs do not follow from its inputs).
+6. Diagrams and figures. Their text is listed again after the lesson, under "Diagram and figure text". Check it like the prose:
+   - <Diagram>: the title, caption and labels, every part's text, and every step's label and text. A false or misleading claim is "factual". A label on the wrong part, steps in the wrong order, or a step that describes something its shapes do not show is "widget".
+   - <Figure>: a real image found by a search for its query; you cannot see it, so judge only the text. A false claim in the caption or alt text, or a wrong answer to its question, is "factual". A question its answer does not answer, or text that does not fit the query's subject, is "widget".
 
 Report only real problems that would mislead or confuse a learner; do not nitpick style. Most good lessons have zero or one issue. Pages are numbered from 1 in order of their "## " headings. Use page 0 for the hook or the whole lesson.
 `.trim();
@@ -142,9 +178,44 @@ export const CRITIC_SCHEMA = {
 const ISSUE_KINDS = CRITIC_SCHEMA.properties.issues.items.properties.kind.enum;
 const clip = (s, n) => String(s ?? '').replace(/\s+/g, ' ').trim().slice(0, n);
 
-/** The critic's user message: level, lesson, and the cited sources' text. */
+/**
+ * The text a learner reads in each valid <Diagram> and <Figure>, by page, for the critic:
+ * the props are long JSON (a Diagram's shapes are mostly coordinates), so the words are listed
+ * on their own. '' when the lesson has none.
+ */
+export function mediaDigest(markdown) {
+  const { hook, pages } = lessonParts(String(markdown || ''));
+  const lines = [];
+  [hook, ...pages.map((p) => p.body)].forEach((body, page) => {
+    for (const c of preprocess(body, FINISHED).components) {
+      if (c.status !== 'valid' || !MEDIA.includes(c.name)) continue;
+      const p = c.props;
+      const out = [];
+      const add = (label, v) => { if (v) out.push(`  ${label}: ${clip(v, 420)}`); };
+      if (c.name === 'Diagram') {
+        add('title', p.title);
+        add('labels', p.shapes.filter((x) => x.type === 'text').map((x) => x.text).join(' · '));
+        for (const part of p.parts || []) add(`part "${part.label}"`, part.text);
+        (p.steps || []).forEach((st, i) => add(`step ${i + 1}${st.label ? ` "${st.label}"` : ''}`, st.text || '(no text)'));
+        add('caption', p.caption);
+      } else {
+        add('query', p.query);
+        add('caption', p.caption);
+        add('alt', p.alt !== p.caption ? p.alt : '');
+        add('question', p.question);
+        add('answer', p.answer);
+      }
+      lines.push(`- Page ${page}, ${c.name}:`, ...out);
+    }
+  });
+  return lines.join('\n');
+}
+
+/** The critic's user message: level, lesson, its diagram and figure text, and the cited sources' text. */
 export function criticUserMessage({ markdown, topic, level, sources = [] }) {
   const parts = [`Topic: ${clip(topic, 300) || '(not given)'}`, `Learner level: ${level || 'beginner'}`, '', '<lesson>', String(markdown || '').slice(0, 60000), '</lesson>'];
+  const media = mediaDigest(markdown);
+  if (media) parts.push('', 'Diagram and figure text (page: component):', media);
   if (sources.length) {
     parts.push('', 'Cited sources (ref: title, url, cited text):');
     for (const s of sources.slice(0, 30)) parts.push(`- ${s.ref}: ${clip(s.title, 160)} (${s.url})${s.snippet ? `\n  "${clip(s.snippet, 300)}"` : ''}`);

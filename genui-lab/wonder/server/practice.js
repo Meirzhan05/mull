@@ -50,7 +50,7 @@ export function lessonTitle(markdown) {
 
 /** Valid component props in document order, e.g. componentsOf(md, 'KeyTerm'). */
 export function componentsOf(markdown, name) {
-  return preprocess(String(markdown || '')).components.filter((c) => c.status === 'valid' && c.name === name).map((c) => c.props);
+  return preprocess(String(markdown || ''), { partial: false }).components.filter((c) => c.status === 'valid' && c.name === name).map((c) => c.props);
 }
 
 function lowerFirst(s) {

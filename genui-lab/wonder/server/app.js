@@ -48,7 +48,7 @@ import { lintLesson, critiqueLesson, applyQuizFixes, qualityReport } from './cri
 import { createGrader } from './grader.js'; // Phase 8
 import { SOCRATIC_TUTOR_MODE } from './prompts-extra.js'; // Phase 8
 import { pageCount } from '../public/steering-core.js';
-import { createCommonsLookup, createFigureResolver, withFigures, FIGURE_SETTLE_MS } from './figures.js'; // media: <Figure/> images
+import { createCommonsLookup, createFigureResolver, createFigureCheck, withFigures, FIGURE_SETTLE_MS, FIGURE_CHECK_MODEL } from './figures.js'; // media: <Figure/> images
 import { createInflight, createTurnLedger, cleanKey, retryNote } from './retry.js'; // recoverable streams
 // account sync + Web Push
 import { createSyncFromEnv } from './sync/index.js';
@@ -236,6 +236,15 @@ export function createWonderCore(opts = {}) {
   const figureLookup = opts.figureLookup !== undefined ? opts.figureLookup : env.WONDER_FIGURES === 'off' ? null : createCommonsLookup();
   const figureSettleMs = opts.figureSettleMs ?? FIGURE_SETTLE_MS;
   const figureCache = new Map(); // shared by this core's streams (server/figures.js)
+  // The figure vision check: Claude looks at each found image and drops one that does not fit its
+  // caption. On by default in claude mode (it needs the client); figureCheck: false or
+  // WONDER_FIGURE_CHECK=off turns it off, and a function replaces the check (tests).
+  const figureCheckOpt = opts.figureCheck !== undefined ? opts.figureCheck : env.WONDER_FIGURE_CHECK === 'off' ? false : true;
+  const figureCheckModel = opts.figureCheckModel || env.WONDER_FIGURE_CHECK_MODEL || FIGURE_CHECK_MODEL;
+  const figureVerify = typeof figureCheckOpt === 'function' ? figureCheckOpt : createFigureCheck({ client: () => state.client, model: figureCheckModel });
+  const figureVerifyFor = () => (figureCheckOpt && state.mode === 'claude' && state.client ? figureVerify : null);
+  // which check runs now (the eval report records it): the model id, 'custom', or null when off
+  Object.defineProperty(state, 'figureCheck', { get: () => (figureVerifyFor() ? (typeof figureCheckOpt === 'function' ? 'custom' : figureCheckModel) : null) });
 
   function switchToDemo(reason) {
     state.mode = 'demo';
@@ -265,7 +274,7 @@ export function createWonderCore(opts = {}) {
     if (recordDir && record) {
       try { fs.mkdirSync(recordDir, { recursive: true }); tee = fs.createWriteStream(path.join(recordDir, `${record}-${new Date().toISOString().replace(/[:.]/g, '-')}.ndjson`)); io.onClose(() => tee.end()); } catch { tee = null; }
     }
-    const figures = createFigureResolver({ lookup: figureLookup, logger, cache: figureCache, signal });
+    const figures = createFigureResolver({ lookup: figureLookup, verify: figureVerifyFor(), logger, cache: figureCache, signal });
     writer = createTurnWriter({ write: (s) => { io.write(s); tee?.write(s); }, ...writerOpts, appDataFor: withFigures(appDataFor || (() => appData), figures) });
     let queued = false;
     figures.onUpdate(() => {
