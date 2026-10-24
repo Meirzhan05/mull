@@ -2,6 +2,8 @@
 // script. The page body is the Wonder app shell (app/wonder-app.js).
 import { Geist, Geist_Mono } from 'next/font/google';
 import { ClerkProvider } from '@clerk/nextjs';
+import { syncConfig } from '../server/sync/index.js';
+import { landingScript } from './landing-script.js';
 import '../../chatgpt-dil/src/dil.css';
 import 'katex/dist/katex.min.css';
 import './styles/styles.css';
@@ -37,15 +39,12 @@ export const viewport = {
 // apply the saved theme before first paint (no flash); the shell manages it afterwards
 const THEME_SCRIPT = "try{var t=localStorage.getItem('wonder.theme');if(t==='light'||t==='dark')document.documentElement.setAttribute('data-theme',t)}catch(e){}";
 
-// A first-time visitor opening the home page sees the landing page (public/welcome, served at
-// /welcome) instead, once: it marks wonder.welcomed. Anyone with Wonder data in this browser
-// (wonder.v1, wonder.account) or signed in to Clerk (__client_uat > 0) goes straight to the app,
-// and so do deep links (#/lesson/…, #/learn/…).
-const LANDING_SCRIPT = "try{var s=localStorage,h=location.hash;if(location.pathname==='/'&&(!h||h==='#/')&&!s.getItem('wonder.welcomed')&&!s.getItem('wonder.v1')&&!s.getItem('wonder.account')&&!/(^|; )__client_uat=[1-9]/.test(document.cookie))location.replace('/welcome')}catch(e){}";
-
 // Accounts (sync across devices) only when Clerk is configured; the vanilla client reaches it as
 // window.Clerk (public/account.js). Without the keys the page is exactly as before.
 const ACCOUNTS = !!(process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY && process.env.CLERK_SECRET_KEY);
+
+// signed out (account sync on) or a first visit: the home page opens on the landing page
+const LANDING_SCRIPT = landingScript({ accounts: syncConfig().enabled });
 
 export default function RootLayout({ children }) {
   return (

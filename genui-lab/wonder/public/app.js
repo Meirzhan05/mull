@@ -65,6 +65,22 @@ function startLesson(topic, level = 'beginner', extra = {}) {
   location.hash = `#/lesson/${id}`;
 }
 
+// A lesson refused for being signed out starts again once the visitor has signed in. Sign-in
+// reloads the page (account.js), sometimes after an OAuth round trip, so the topic waits in this
+// tab's sessionStorage for a page load that has an account (for half an hour at most).
+const AFTER_SIGN_IN = 'wonder.afterSignIn';
+function startAfterSignIn(topic) {
+  try { sessionStorage.setItem(AFTER_SIGN_IN, JSON.stringify({ topic, at: Date.now() })); } catch {}
+}
+function takeAfterSignIn() {
+  if (!localCache.account) return null;
+  try {
+    const p = JSON.parse(sessionStorage.getItem(AFTER_SIGN_IN) || 'null');
+    sessionStorage.removeItem(AFTER_SIGN_IN);
+    return p?.topic && Date.now() - p.at < 30 * 60_000 ? p.topic : null;
+  } catch { return null; }
+}
+
 /** Phase 10: a lesson taught from the learner's own material (a stored material id). */
 function startMaterialLesson(material, level = 'beginner') {
   startLesson(material.title, level, { materialId: material.id, materialTitle: material.title });
@@ -885,21 +901,26 @@ function renderLesson(lessonId) {
         showInterrupted(failNote, { lost: true, instruction });
         return;
       }
-      saveLesson(lessonId, { status: 'failed', streamOwner: null });
+      // accounts on (server/usage.js): signed out -> sign in, then try again; today's cap used -> no retry
+      const signedOut = e.code === 'signed_out';
+      const limited = e.code === 'daily_limit';
+      // refused only for being signed out, before a word was written: not kept (no "Failed" lesson
+      // in Recent); signing in from the panel below starts the topic again (startAfterSignIn)
+      const dropped = signedOut && gated && !lesson.courseId;
+      if (dropped) store.update((d) => { delete d.lessons[lessonId]; return d; });
+      else saveLesson(lessonId, { status: 'failed', streamOwner: null });
       steerBar.hide();
       skeleton.remove();
       drawEnd();
       updatePages(); // the bar stops saying "Writing…"
       if (!hasText) card.hidden = true; // nothing was written: no empty lesson card above the message
+      if (dropped) endPanel.hidden = true;
       errorBox.hidden = false;
-      // accounts on (server/usage.js): signed out -> sign in, then try again; today's cap used -> no retry
-      const signedOut = e.code === 'signed_out';
-      const limited = e.code === 'daily_limit';
       errorBox.replaceChildren(
         el('h2', { class: 'h-md' }, signedOut ? 'Sign in to start this lesson' : limited ? 'Today\u2019s lesson limit is reached' : 'The lesson could not be generated'),
         el('p', { class: 'muted' }, e.message || 'Something went wrong.'),
         signedOut
-          ? el('button', { class: 'btn btn-primary', type: 'button', onclick: () => signIn().catch((err) => toast(err.message || 'Sign-in is not available right now')) }, 'Sign in')
+          ? el('button', { class: 'btn btn-primary', type: 'button', onclick: () => { if (dropped) startAfterSignIn(lesson.topic); signIn().catch((err) => toast(err.message || 'Sign-in is not available right now')); } }, 'Sign in')
           : limited ? el('button', { class: 'btn', type: 'button', onclick: () => { location.hash = '#/'; } }, 'Back to Today')
             : el('button', { class: 'btn', type: 'button', onclick: () => { card.hidden = false; surface.host.clear(); runStream(); } }, icon('refresh'), 'Try again'));
     } finally {
@@ -1334,7 +1355,9 @@ applyFontScale();
 observeMath(document.body);
 refreshChrome();
 loadStatus().then(() => {
-  route();
+  const afterSignIn = takeAfterSignIn();
+  if (afterSignIn) startLesson(afterSignIn); // its hashchange routes
+  else route();
   if (needsOnboarding(store.data)) showOnboarding({ store, startLesson, onDone: () => { refreshChrome(); if (!location.hash || location.hash === '#/') route(); } });
   // account sync: changes from other devices redraw Today / Library when that cannot disturb reading
   onSyncStatus((s) => {
