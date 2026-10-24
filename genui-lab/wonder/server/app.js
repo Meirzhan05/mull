@@ -12,9 +12,15 @@
 //   POST /api/teacher/stream    -> conversation-source NDJSON (Teacher turn: tool loop, cards in componentResults)
 //   GET/POST/DELETE /api/memory -> learner memory items
 //   POST /api/memory/extract    -> 0-3 new memory facts from a finished lesson
+//   GET  /api/account           -> {sync, signedIn, push} (account sync: server/sync/)
+//   POST /api/sync              -> push changed records, pull newer ones (signed in)
+//   POST/DELETE /api/push/subscribe -> this browser's Web Push subscription (signed in)
+//   GET  /api/cron/reminders    -> daily reminders over Web Push (Vercel Cron, CRON_SECRET)
 //   GET  /                      -> public/ ; /chatgpt-dil/src/* and /wondering-genui/src/* (read-only modules)
 
 import http from 'node:http';
+import { AsyncLocalStorage } from 'node:async_hooks';
+import { timingSafeEqual } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { WONDER_ROOT, LAB_ROOT } from './paths.js';
@@ -43,6 +49,12 @@ import { createGrader } from './grader.js'; // Phase 8
 import { SOCRATIC_TUTOR_MODE } from './prompts-extra.js'; // Phase 8
 import { pageCount } from '../public/steering-core.js';
 import { createCommonsLookup, createFigureResolver, withFigures, FIGURE_SETTLE_MS } from './figures.js'; // media: <Figure/> images
+import { createInflight, createTurnLedger, cleanKey, retryNote } from './retry.js'; // recoverable streams
+// account sync + Web Push
+import { createSyncFromEnv } from './sync/index.js';
+import { SYNC_BODY_LIMIT } from './sync/service.js';
+import { loadUserMemory, signedOutMemory, userMaterials, signedOutMaterials } from './sync/user-stores.js';
+import { pushConfig, webPushSender, sendDueReminders } from './push.js';
 
 export const STATIC_ROOTS = [
   { prefix: '/chatgpt-dil/src/', dir: path.join(LAB_ROOT, 'chatgpt-dil', 'src'), exts: new Set(['.js', '.css']) },
@@ -55,6 +67,9 @@ export const MIME = { '.js': 'text/javascript; charset=utf-8', '.css': 'text/css
 export const MAX_BODY = 2 * 1024 * 1024;
 const DEFAULT_TUTOR_FOLLOWUPS = ['Quiz me on this lesson', 'Give me a real-world example', 'What should I learn next?'];
 const DEFAULT_TEACHER_FOLLOWUPS = ['What should I study today?', 'Make me a study plan', 'Quiz me'];
+// with account sync on: routes that need a signed-in user, and routes that read learner memory
+const SIGNED_IN_ONLY = new Set(['POST /api/sync', 'POST /api/push/subscribe', 'DELETE /api/push/subscribe', 'POST /api/memory', 'DELETE /api/memory', 'POST /api/materials', 'DELETE /api/materials', 'GET /api/materials/file']);
+const MEMORY_PATHS = /^\/api\/(lesson|tutor|teacher|memory|widget_action)(\/|$)/;
 const MEMORY_OFF_CONTEXT = 'The learner turned memory off for this conversation: do not save or forget memory items, and do not assume anything about them beyond this conversation.';
 
 /** History from the client: user/assistant strings, starting with a user turn. */
@@ -91,6 +106,7 @@ function sendJson(res, status, body) {
 
 /** Largest JSON body a path accepts: material uploads (Phase 10) carry a PDF as base64. */
 export function bodyLimit(pathname) {
+  if (pathname === '/api/sync') return SYNC_BODY_LIMIT;
   return pathname === '/api/materials' ? MATERIAL_BODY_LIMIT : MAX_BODY;
 }
 
@@ -172,7 +188,23 @@ export function createWonderCore(opts = {}) {
   if (state.mode === 'claude' && !state.client) state.client = createClaudeClient();
   if (state.mode === 'claude' && !state.client) { state.mode = 'demo'; state.demoReason = 'no-credentials'; }
   if (state.mode === 'demo' && !state.demoReason) state.demoReason = 'no-credentials';
-  const memory = opts.memory ?? createMemoryStore({ file: opts.memoryFile === undefined ? (env.WONDER_MEMORY_FILE || DEFAULT_MEMORY_FILE) : opts.memoryFile, logger });
+  const localMemory = opts.memory ?? createMemoryStore({ file: opts.memoryFile === undefined ? (env.WONDER_MEMORY_FILE || DEFAULT_MEMORY_FILE) : opts.memoryFile, logger });
+  // Account sync (server/sync/): with it on, memory and material belong to the signed-in user.
+  // Each request runs in a scope that holds that user's stores; `memory` and `materials` below
+  // follow the current scope, so every route and the Teacher's tools use the right user's data.
+  // Without sync (or outside a request) they are the local file-backed stores, as before.
+  const syncReady = opts.sync !== undefined ? Promise.resolve(opts.sync) : createSyncFromEnv(env, { logger }).catch((e) => { logger.error?.(`[wonder] account sync unavailable: ${e.message}`); return null; });
+  const push = opts.push !== undefined ? opts.push : pushConfig(env);
+  const scopes = new AsyncLocalStorage();
+  const scoped = (name, local) => new Proxy({}, {
+    get(_, k) {
+      const target = scopes.getStore()?.[name] ?? local();
+      const v = Reflect.get(target, k, target);
+      return typeof v === 'function' ? v.bind(target) : v;
+    },
+  });
+  const memory = scoped('memory', () => localMemory);
+  const materials = scoped('materials', () => localMaterials);
   const teacherCards = createCardStore();
   const grade = createGrader({ getClient: () => state.client, getMode: () => state.mode, logger }); // Phase 8
   const widgetAction = createWidgetActionHandler({ cards: teacherCards, memory, grade });
@@ -182,14 +214,21 @@ export function createWonderCore(opts = {}) {
   // Phase 6: the client's mastery summary (personalization, so it follows the memory switch)
   const learnerKnows = (body, surface) => (body?.memoryEnabled === false ? '' : masteryContext(body?.mastery, surface));
   const steering = createSteeringRegistry(); // Phase 4: in-flight lesson operations
+  // recoverable streams (server/retry.js): one live request per streamKey; Teacher tool calls per turnId
+  const inflight = createInflight();
+  const teacherTurns = createTurnLedger();
+  const heartbeatMs = opts.heartbeatMs ?? 15_000;
+  // with accounts on, retry keys belong to the signed-in user: one user's streamKey or turnId
+  // can never abort another user's stream or replay their Teacher tool calls
+  const ownKey = (key) => { const u = scopes.getStore()?.userId; return key && u ? `${u}|${key}` : key; };
   // Phase 10: the learner's own material. Tests that keep memory in-process (memoryFile: null)
   // keep materials in-process too unless they pass materialsDir.
-  const materials = opts.materials ?? createMaterialStore({ dir: 'materialsDir' in opts ? opts.materialsDir : opts.memoryFile === null ? null : (env.WONDER_MATERIALS_DIR || DEFAULT_MATERIALS_DIR) });
+  const localMaterials = opts.materials ?? createMaterialStore({ dir: 'materialsDir' in opts ? opts.materialsDir : opts.memoryFile === null ? null : (env.WONDER_MATERIALS_DIR || DEFAULT_MATERIALS_DIR) });
   /** {meta, data} for a client-sent material id, or null. */
-  const loadMaterial = (id) => {
+  const loadMaterial = async (id) => {
     if (id == null || id === '') return null;
-    const meta = materials.meta(id);
-    const data = meta ? materials.read(id) : null;
+    const meta = await materials.meta(id);
+    const data = meta ? await materials.read(id) : null;
     return meta && data != null ? { meta, data } : { missing: true };
   };
 
@@ -204,28 +243,41 @@ export function createWonderCore(opts = {}) {
     logger.warn?.(`[wonder] switching to demo mode (${reason})`);
   }
 
-  // Every DIL stream (lesson, tutor, Teacher) resolves its <Figure/>s: a lookup that lands
-  // mid-stream re-sends the program (writer.refresh), and settleFigures runs before complete.
-  function startNdjson(t, { record, appData, appDataFor, ...writerOpts } = {}) {
+  /**
+   * Open an NDJSON response. `retryKey` (scope + the client's streamKey) supersedes an older
+   * request with the same key: it is aborted before this one starts. A blank line every
+   * `heartbeatMs` keeps the connection visibly alive (parsers skip blank lines), so the
+   * client's idle watchdog only fires on a dead connection.
+   *
+   * Every DIL stream (lesson, tutor, Teacher) resolves its <Figure/>s: a lookup that lands
+   * mid-stream re-sends the program (writer.refresh), and settleFigures runs before complete.
+   */
+  function startNdjson(t, { record, retryKey, appData, appDataFor, ...writerOpts } = {}) {
+    const claim = retryKey ? inflight.claim(ownKey(retryKey)) : null;
     const io = t.openStream({ 'Content-Type': CONTENT_TYPE, 'Cache-Control': 'no-store', 'X-Accel-Buffering': 'no' });
+    const signal = claim ? AbortSignal.any([io.signal, claim.signal]) : io.signal;
+    let writer = null;
+    const beat = heartbeatMs > 0 ? setInterval(() => { if (!writer?.finished && !signal.aborted) io.write('\n'); }, heartbeatMs) : null;
+    beat?.unref?.();
+    io.onClose(() => { clearInterval(beat); claim?.release(); });
     // WONDER_RECORD_DIR: tee the NDJSON of each stream to a file (fixture capture; records hold no credentials)
     let tee = null;
     if (recordDir && record) {
       try { fs.mkdirSync(recordDir, { recursive: true }); tee = fs.createWriteStream(path.join(recordDir, `${record}-${new Date().toISOString().replace(/[:.]/g, '-')}.ndjson`)); io.onClose(() => tee.end()); } catch { tee = null; }
     }
-    const figures = createFigureResolver({ lookup: figureLookup, logger, cache: figureCache, signal: io.signal });
-    const writer = createTurnWriter({ write: (s) => { io.write(s); tee?.write(s); }, ...writerOpts, appDataFor: withFigures(appDataFor || (() => appData), figures) });
+    const figures = createFigureResolver({ lookup: figureLookup, logger, cache: figureCache, signal });
+    writer = createTurnWriter({ write: (s) => { io.write(s); tee?.write(s); }, ...writerOpts, appDataFor: withFigures(appDataFor || (() => appData), figures) });
     let queued = false;
     figures.onUpdate(() => {
       if (queued) return;
       queued = true;
       queueMicrotask(() => {
         queued = false;
-        if (writer.finished || io.signal.aborted) return;
+        if (writer.finished || signal.aborted) return;
         try { writer.refresh(); } catch (err) { logger.warn?.(`[wonder] figure refresh failed: ${err?.message || err}`); }
       });
     });
-    return { writer, signal: io.signal, figures };
+    return { writer, signal, figures };
   }
   /** Before the final record: wait briefly for image lookups, then report the rest as not found. */
   async function settleFigures(writer, figures, signal) {
@@ -256,7 +308,7 @@ export function createWonderCore(opts = {}) {
       // The API error body (type + message) never contains credentials; log it for diagnosis.
       const detail = err?.status ? ` (HTTP ${err.status}: ${err?.error?.error?.message || err.message})` : '';
       logger.error?.(`[wonder] Claude request failed: ${f.code}${detail}`);
-      writer.fail(f.message, f.code);
+      writer.fail(f.message, f.code, f);
       return { status: 'failed' };
     }
   }
@@ -298,7 +350,7 @@ export function createWonderCore(opts = {}) {
     const cont = normalizeContinueFrom(body.continueFrom);
     if (cont?.error) return t.json(cont.status, { ok: false, error: cont.error });
     const level = ['beginner', 'intermediate', 'advanced'].includes(body.level) ? body.level : 'beginner';
-    const material = loadMaterial(body.materialId); // Phase 10
+    const material = await loadMaterial(body.materialId); // Phase 10
     if (material?.missing) return t.json(404, { ok: false, error: 'That material is no longer stored on this server. Add it again from Today.' });
     // Phase 3: web search on by default for lessons; a lesson taught from the learner's own
     // material stays faithful to it unless search is asked for explicitly
@@ -306,7 +358,8 @@ export function createWonderCore(opts = {}) {
     const userTurn = (text) => (material ? [documentBlock(material.meta, material.data), { type: 'text', text }] : text);
     // a continuation seeds the kept pages' sources and numbers new refs after theirs
     const sources = cont ? createContinuationSources({ turnIndex: 0, kept: cont.kept, seed: cont.sources }) : createSourceRegistry({ turnIndex: 0 });
-    const { writer, signal, figures } = startNdjson(t, { record: 'lesson', appDataFor: citationAppData(sources), ...(cont?.messageId ? { messageId: cont.messageId } : {}) });
+    const streamKey = cleanKey(body.streamKey);
+    const { writer, signal, figures } = startNdjson(t, { record: 'lesson', retryKey: streamKey && `lesson:${streamKey}`, appDataFor: citationAppData(sources), ...(cont?.messageId ? { messageId: cont.messageId } : {}) });
     writer.start();
     if (cont) applyContinue(writer, cont);
     else writer.reasoning('Planning the lesson…');
@@ -434,7 +487,8 @@ export function createWonderCore(opts = {}) {
     while (history.length && history[0].role !== 'user') history.shift();
     const useWebSearch = body.useWebSearch === true; // Phase 3: off for the tutor unless asked
     const sources = createSourceRegistry({ turnIndex: Math.floor(history.length / 2) + 1 });
-    const { writer, signal, figures } = startNdjson(t, { record: 'tutor', appDataFor: citationAppData(sources) });
+    const streamKey = cleanKey(body.streamKey);
+    const { writer, signal, figures } = startNdjson(t, { record: 'tutor', retryKey: streamKey && `tutor:${streamKey}`, appDataFor: citationAppData(sources) });
     writer.start();
     writer.reasoning('Thinking about your question…');
     const onText = (t) => writer.append(t);
@@ -463,7 +517,7 @@ export function createWonderCore(opts = {}) {
     const topic = clean(body.topic, 300);
     if (!topic) return t.json(400, { ok: false, error: 'topic is required' });
     const level = ['beginner', 'intermediate', 'advanced'].includes(body.level) ? body.level : 'beginner';
-    const material = loadMaterial(body.materialId); // Phase 10: a course that follows the learner's material
+    const material = await loadMaterial(body.materialId); // Phase 10: a course that follows the learner's material
     if (material?.missing) return t.json(404, { ok: false, error: 'That material is no longer stored on this server.' });
     if (state.mode === 'claude') {
       try {
@@ -512,12 +566,15 @@ export function createWonderCore(opts = {}) {
     const threadId = typeof body.threadId === 'string' && /^[\w-]{1,80}$/.test(body.threadId) ? body.threadId : undefined;
     const history = cleanHistory(body.history, { map: stripCardMarkup });
     const appData = { opGenui: { componentResults: {}, modelDataBindings: {} } };
-    const { writer, signal, figures } = startNdjson(t, { appData, record: 'teacher' });
+    // a retried turn (same turnId) supersedes the attempt it replaces and replays its tool calls
+    const turnId = cleanKey(body.turnId);
+    const { writer, signal, figures } = startNdjson(t, { appData, record: 'teacher', retryKey: turnId && `teacher:${turnId}` });
+    const turn = turnId ? teacherTurns.open(ownKey(turnId)) : null;
     writer.start({ conversationId: threadId });
     writer.reasoning('Thinking…');
     const params = buildStreamParams({
       system: TEACHER_SYSTEM_PROMPT,
-      context: joinContext(memoryEnabled ? memory.promptBlock({ withIds: true }) || 'The learner\'s memory is empty so far.' : MEMORY_OFF_CONTEXT, learnerKnows(body, 'teacher')),
+      context: joinContext(memoryEnabled ? memory.promptBlock({ withIds: true }) || 'The learner\'s memory is empty so far.' : MEMORY_OFF_CONTEXT, learnerKnows(body, 'teacher'), turn ? retryNote(turn.recorded) : ''),
       messages: [],
       effort: 'medium',
       maxTokens: 32000,
@@ -529,10 +586,12 @@ export function createWonderCore(opts = {}) {
       messages: withMessage(history, message),
       writer,
       signal,
-      execute: createTeacherToolkit({ memory, progress: body.progress, mastery: body.mastery, memoryEnabled }),
-      onCard: (cardState) => {
-        const rid = newResolutionId();
-        appData.opGenui.componentResults[rid] = resolved(teacherCards.set(rid, cardState));
+      execute: (() => { const ex = createTeacherToolkit({ memory, progress: body.progress, mastery: body.mastery, memoryEnabled }); return turn ? turn.wrap(ex) : ex; })(),
+      onCard: (cardState, card) => {
+        const rid = card?.rid || newResolutionId();
+        // a replayed card keeps its id and whatever state it has reached since
+        const known = card?.replayed ? teacherCards.get(rid) : null;
+        appData.opGenui.componentResults[rid] = resolved(known || teacherCards.set(rid, cardState));
         return rid;
       },
       logger,
@@ -551,7 +610,7 @@ export function createWonderCore(opts = {}) {
         const f = friendlyError(err);
         const detail = err?.status ? ` (HTTP ${err.status}: ${err?.error?.error?.message || err.message})` : '';
         logger.error?.(`[wonder] Teacher request failed: ${f.code}${detail}`);
-        writer.fail(f.message, f.code);
+        writer.fail(f.message, f.code, f);
         return t.end();
       }
     }
@@ -620,27 +679,33 @@ export function createWonderCore(opts = {}) {
     'POST /api/memory/extract': memoryExtract,
     'POST /api/widget_action': async (t, body) => { const r = await widgetAction(body); t.json(r.status, r.body); }, // Phase 8: free-response grading is async
     // Phase 10: the learner's own material
-    'GET /api/materials': async (t) => t.json(200, { ok: true, items: materials.list() }),
+    'GET /api/materials': async (t) => t.json(200, { ok: true, items: await materials.list() }),
     'POST /api/materials': async (t, body) => {
-      const r = materials.add({ title: body.title, kind: body.kind, text: body.text, base64: body.base64, filename: body.filename });
+      const r = await materials.add({ title: body.title, kind: body.kind, text: body.text, base64: body.base64, filename: body.filename });
       if (!r.ok) return t.json(400, r);
       logger.info?.(`[wonder] material added: ${r.item.kind}, ${r.item.chars ?? r.item.bytes} ${r.item.kind === 'pdf' ? 'bytes' : 'chars'}`);
-      t.json(200, { ok: true, item: r.item, items: materials.list() });
+      t.json(200, { ok: true, item: r.item, items: await materials.list() });
     },
     'DELETE /api/materials': async (t, body) => {
       const id = new URL(t.url, 'http://localhost').searchParams.get('id') || body.id;
-      const meta = materials.remove(id);
+      const meta = await materials.remove(id);
       if (!meta) return t.json(404, { ok: false, error: 'No such material' });
-      t.json(200, { ok: true, removed: meta, items: materials.list() });
+      t.json(200, { ok: true, removed: meta, items: await materials.list() });
     },
     'GET /api/materials/file': async (t) => {
       const id = new URL(t.url, 'http://localhost').searchParams.get('id');
-      const meta = materials.meta(id);
-      const data = meta ? materials.read(id) : null;
+      const meta = await materials.meta(id);
+      const data = meta ? await materials.read(id) : null;
       if (data == null) return t.json(404, { ok: false, error: 'No such material' });
       const buf = Buffer.isBuffer(data) ? data : Buffer.from(data, 'utf8');
       t.send(200, { 'Content-Type': meta.kind === 'pdf' ? 'application/pdf' : 'text/plain; charset=utf-8', 'Content-Length': String(buf.length), 'Content-Disposition': 'inline', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' }, buf);
     },
+    // account sync + Web Push
+    'GET /api/account': account,
+    'POST /api/sync': syncRoute,
+    'POST /api/push/subscribe': pushSubscribe,
+    'DELETE /api/push/subscribe': pushUnsubscribe,
+    'GET /api/cron/reminders': cronReminders,
   };
 
   const status = () => ({ mode: state.mode, model: MODEL, ...(state.mode === 'demo' ? { demoReason: state.demoReason } : {}) });
@@ -649,8 +714,82 @@ export function createWonderCore(opts = {}) {
   async function handle(method, pathname, body, t) {
     if (pathname === '/api/status' && method === 'GET') return t.json(200, status());
     const route = routes[`${method} ${pathname}`];
-    if (route) return route(t, body);
-    return t.json(404, { ok: false, error: 'Not found' });
+    if (!route) return t.json(404, { ok: false, error: 'Not found' });
+    const sync = await syncReady;
+    if (!sync) return route(t, body);
+    // account sync on: memory and material are the signed-in user's, and nobody else's
+    const userId = typeof t.userId === 'string' && t.userId ? t.userId : null;
+    if (!userId && SIGNED_IN_ONLY.has(`${method} ${pathname}`)) return t.json(401, { ok: false, error: 'Sign in first', signedOut: true });
+    const scope = { userId, sync, memory: signedOutMemory(), materials: signedOutMaterials() };
+    if (userId) {
+      scope.materials = userMaterials(sync, userId);
+      if (MEMORY_PATHS.test(pathname)) scope.memory = await loadUserMemory(sync, userId, { logger });
+    }
+    // memory saves finish before the response does: a serverless function may be frozen once
+    // its response has ended
+    const flush = () => scope.memory.flush?.();
+    const tt = {
+      ...t,
+      json: (status, data) => { Promise.resolve(flush()).then(() => t.json(status, data)); },
+      send: (status, headers, bytes) => { Promise.resolve(flush()).then(() => t.send(status, headers, bytes)); },
+      end: () => { Promise.resolve(flush()).then(() => t.end()); },
+    };
+    try {
+      return await scopes.run(scope, () => route(tt, body));
+    } finally {
+      await flush();
+    }
+  }
+
+  // ---------------------------------------------------------------- account sync + Web Push
+
+  async function account(t) {
+    const sync = await syncReady;
+    const userId = sync && typeof t.userId === 'string' && t.userId ? t.userId : null;
+    t.json(200, {
+      ok: true,
+      sync: !!sync,
+      signedIn: !!userId,
+      ...(userId ? { userId, records: await sync.count(userId) } : {}),
+      push: sync && push ? { publicKey: push.publicKey } : null,
+    });
+  }
+
+  async function syncRoute(t, body) {
+    const { userId, sync } = scopes.getStore() || {};
+    if (!sync) return t.json(404, { ok: false, error: 'Account sync is not configured on this server' });
+    // a browser syncing an account's cache must still be signed in to that account
+    if (body.userId && body.userId !== userId) return t.json(409, { ok: false, error: 'Signed in as someone else', signedInAs: userId });
+    t.json(200, await sync.sync(userId, { since: body.since, changes: body.changes }));
+  }
+
+  async function pushSubscribe(t, body) {
+    const { userId, sync } = scopes.getStore() || {};
+    if (!sync || !push) return t.json(404, { ok: false, error: 'Push is not configured on this server' });
+    const sub = body.subscription;
+    const endpoint = typeof sub?.endpoint === 'string' ? sub.endpoint : '';
+    if (!/^https:\/\/[^\s]{8,2000}$/.test(endpoint) || typeof sub?.keys?.p256dh !== 'string' || typeof sub?.keys?.auth !== 'string') return t.json(400, { ok: false, error: 'Invalid push subscription' });
+    const tz = typeof body.timeZone === 'string' && body.timeZone.length < 64 ? body.timeZone : null;
+    await sync.db.addSubscription(userId, { endpoint, keys: { p256dh: sub.keys.p256dh, auth: sub.keys.auth }, timeZone: tz });
+    t.json(200, { ok: true });
+  }
+
+  async function pushUnsubscribe(t, body) {
+    const { userId, sync } = scopes.getStore() || {};
+    if (!sync) return t.json(404, { ok: false, error: 'Push is not configured on this server' });
+    t.json(200, { ok: true, removed: await sync.db.removeSubscription(userId, String(body.endpoint || '')) });
+  }
+
+  async function cronReminders(t) {
+    const sync = await syncReady;
+    const secret = env.CRON_SECRET;
+    const given = Buffer.from(String(t.authorization || ''));
+    const want = Buffer.from(`Bearer ${secret}`);
+    if (!secret || given.length !== want.length || !timingSafeEqual(given, want)) return t.json(401, { ok: false, error: 'Unauthorized' });
+    if (!sync || !push) return t.json(200, { ok: true, skipped: 'push not configured' });
+    const r = await sendDueReminders({ sync, send: opts.pushSender ?? webPushSender(push), logger });
+    logger.info?.(`[wonder] reminders: ${r.sent} sent to ${r.checked} subscribed learners`);
+    t.json(200, { ok: true, ...r });
   }
   /** Does this method + path have a handler (and therefore a body to read)? */
   const hasRoute = (method, pathname) => (pathname === '/api/status' && method === 'GET') || !!routes[`${method} ${pathname}`];
@@ -659,9 +798,11 @@ export function createWonderCore(opts = {}) {
 }
 
 /** Node transport: the core over node:http req/res. */
-function nodeTransport(req, res) {
+function nodeTransport(req, res, userId = null) {
   return {
     url: req.url,
+    userId,
+    authorization: req.headers.authorization || '',
     json: (status, body) => sendJson(res, status, body),
     send: (status, headers, bytes) => { res.writeHead(status, headers); res.end(bytes); },
     openStream(headers) {
@@ -669,7 +810,7 @@ function nodeTransport(req, res) {
       res.flushHeaders?.();
       const ac = new AbortController();
       res.on('close', () => { if (!res.writableFinished) ac.abort(); });
-      return { write: (s) => { if (!res.destroyed) res.write(s); }, signal: ac.signal, onClose: (fn) => res.on('close', fn) };
+      return { write: (s) => { if (!res.destroyed && !res.writableEnded) res.write(s); }, signal: ac.signal, onClose: (fn) => res.on('close', fn) };
     },
     end: () => res.end(),
   };
@@ -681,14 +822,15 @@ function nodeTransport(req, res) {
  * @param {Parameters<typeof createWonderCore>[0]} [opts]
  */
 export function createWonderServer(opts = {}) {
-  const core = createWonderCore(opts);
+  // account sync only when a test (or caller) passes it, with getUserId(req) as its auth
+  const core = createWonderCore({ ...opts, sync: opts.sync ?? null });
   const logger = opts.logger ?? console;
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, 'http://localhost');
     try {
       if (core.hasRoute(req.method, url.pathname)) {
         const body = req.method === 'GET' ? {} : await readJson(req, bodyLimit(url.pathname));
-        return await core.handle(req.method, url.pathname, body, nodeTransport(req, res));
+        return await core.handle(req.method, url.pathname, body, nodeTransport(req, res, (await opts.getUserId?.(req)) || null));
       }
       if (url.pathname.startsWith('/api/')) return sendJson(res, 404, { ok: false, error: 'Not found' });
       if ((req.method === 'GET' || req.method === 'HEAD') && serveStatic(req, res, url.pathname)) return;

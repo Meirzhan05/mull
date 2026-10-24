@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- The Wonder server runs on your Mac (http://localhost:8750 from the Simulator, or the
+	     Mac's address on your network from a device). Plain http is allowed for local
+	     networking only; any other server needs https. -->
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>app.wonder.ios</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>wonder</string>
+			</array>
+		</dict>
+	</array>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Wonder connects to the Wonder server running on your computer to write lessons.</string>
+</dict>
+</plist>

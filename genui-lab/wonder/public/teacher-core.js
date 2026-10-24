@@ -4,6 +4,7 @@
 
 import { deckStats, currentStreak, dateKey } from './deck.js';
 import { allOutcomes, outcomeSnapshot, RECALL_MIN } from './outcomes-core.js'; // Phase 9
+import { courseMemory, courseIsFading } from './course-review-core.js';
 
 function courseProgress(data, course) {
   let done = 0;
@@ -36,7 +37,10 @@ export function progressSnapshot(data, now = new Date()) {
         when: l.updatedAt || '',
       };
     }),
-    courses: (data.courses || []).slice(0, 5).map((c) => ({ title: c.title, ...courseProgress(data, c) })),
+    courses: (data.courses || []).slice(0, 5).map((c) => {
+      const m = courseMemory(data, c, now); // course review: due cards and fading memory across its lessons
+      return { title: c.title, ...courseProgress(data, c), cardsDue: m.due, ...(m.memory != null ? { memory: Math.round(m.memory * 100) } : {}), ...(courseIsFading(m) ? { reviewSuggested: true } : {}) };
+    }),
     plans,
     outcomes: outcomeSnapshot(data, now), // Phase 9: what faded, what works
   };

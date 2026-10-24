@@ -267,3 +267,13 @@ export function tutorLessonContext(lessonContext) {
 export function joinContext(...blocks) {
   return blocks.filter((b) => typeof b === 'string' && b.trim()).join('\n\n') || undefined;
 }
+
+// Visual practice items (number_line / chart_select / order_steps), appended to
+// EXTRACT_SYSTEM_PROMPT by server/practice.js together with their schema fields.
+export const EXTRACT_VISUAL_GUIDANCE = `
+Visual items: when a fact is a position, a comparison or a sequence, a visual item tests it better than a flashcard. Use at most 2 per lesson and only for material the lesson actually shows.
+- "number_line" when the answer is a quantity on a scale (a year, a rate, a fraction, a threshold): min, max and step make a grid of 2-40 steps, target is the correct value on that grid, tolerance is how far off still counts (0 for exact; never more than a quarter of the range), unit is short.
+- "chart_select" when the lesson compares a few quantities: 2-8 points with short unique labels (bar, or line for a trend over 3+ ordered points), chart_title and unit as in the lesson, correct_index picks the bar or point that answers the question. Ask what the data means ("which year did the balance pass $5,000?"), not what you can read off a label; set show_values false when the shape alone should answer it.
+- "order_steps" for a process whose order matters: 3-7 short steps listed in the correct order (they are shuffled for the learner). Not for lists whose order is arbitrary.
+Fill the visual fields of every other item with 0, "", [] or true (show_values).
+`.trim();

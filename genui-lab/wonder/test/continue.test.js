@@ -358,11 +358,14 @@ test('persistence states: streaming / interrupted / complete detection after a r
   assert.equal(lessonPhase({ status: 'new', markdown: '' }), 'new');
   // control failed codes from the stream: stalled / network are resumable interruptions
   assert.ok(isResumableFailure('stalled') && isResumableFailure('network'));
-  assert.ok(!isResumableFailure('rate_limited') && !isResumableFailure(undefined));
+  assert.ok(isResumableFailure('rate_limited') && isResumableFailure('overloaded') && isResumableFailure('api_error'), 'try-again-later failures keep the pages too');
+  assert.ok(!isResumableFailure('bad_request') && !isResumableFailure('auth_failed') && !isResumableFailure(undefined));
   assert.equal(statusAfterStop({ markdown: PARTIAL, failureCode: 'stalled' }), 'interrupted');
   assert.equal(statusAfterStop({ markdown: PARTIAL, failureCode: 'network' }), 'interrupted');
   assert.equal(statusAfterStop({ markdown: PARTIAL }), 'interrupted', 'client-side drop (fetch threw)');
-  assert.equal(statusAfterStop({ markdown: PARTIAL, failureCode: 'rate_limited' }), 'failed', 'other errors keep the error display');
+  assert.equal(statusAfterStop({ markdown: PARTIAL, failureCode: 'rate_limited' }), 'interrupted', 'a 429 keeps the pages: retry from there');
+  assert.equal(statusAfterStop({ markdown: PARTIAL, failureCode: 'bad_request' }), 'failed', 'a bad request keeps the error display');
+  assert.equal(statusAfterStop({ markdown: PARTIAL, failureCode: 'http', retryable: true }), 'interrupted');
   assert.equal(statusAfterStop({ markdown: '', failureCode: 'stalled' }), 'failed', 'nothing to resume');
   assert.equal(statusAfterStop({ markdown: PARTIAL, aborted: true }), 'interrupted');
 });

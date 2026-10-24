@@ -34,6 +34,34 @@ export function materialTitle({ title, text, filename } = {}) {
   return clean(title, 120) || clean(first, 80) || clean(String(filename || '').replace(/\.[a-z0-9]+$/i, ''), 120) || 'My material';
 }
 
+/**
+ * Validate one upload: {title?, kind:'text', text} or {title?, kind:'pdf', base64, filename?}.
+ * Returns {ok, meta, data} (data: string for text, Buffer for a PDF) or {ok:false, error}.
+ */
+export function prepareMaterial(input) {
+  const kind = input?.kind === 'pdf' ? 'pdf' : 'text';
+  let data;
+  let meta;
+  const id = `mat-${randomUUID().replace(/-/g, '').slice(0, 12)}`;
+  if (kind === 'text') {
+    const text = cleanMaterialText(input?.text);
+    if (text.length < 40) return { ok: false, error: 'Paste at least a paragraph of material (40+ characters).' };
+    if (text.length > MAX_TEXT_CHARS) return { ok: false, error: `That is too long (${text.length.toLocaleString('en-US')} characters). The limit is ${MAX_TEXT_CHARS.toLocaleString('en-US')}; paste one chapter at a time.` };
+    data = text;
+    meta = { id, kind, title: materialTitle({ title: input?.title, text, filename: input?.filename }), chars: text.length };
+  } else {
+    const b64 = String(input?.base64 || '').replace(/^data:[^,]*,/, '');
+    if (!/^[A-Za-z0-9+/]+=*$/.test(b64)) return { ok: false, error: 'The PDF could not be read.' };
+    const buf = Buffer.from(b64, 'base64');
+    if (buf.length > MAX_PDF_BYTES) return { ok: false, error: `That PDF is ${(buf.length / 1048576).toFixed(1)} MB; the limit is ${MAX_PDF_BYTES / 1048576} MB.` };
+    if (buf.subarray(0, 5).toString('latin1') !== '%PDF-') return { ok: false, error: 'That file is not a PDF.' };
+    data = buf;
+    meta = { id, kind, title: materialTitle({ title: input?.title, filename: input?.filename }), bytes: buf.length };
+  }
+  meta.createdAt = new Date().toISOString();
+  return { ok: true, meta, data };
+}
+
 export function createMaterialStore({ dir = DEFAULT_MATERIALS_DIR } = {}) {
   const mem = new Map(); // id -> {meta, data: string | Buffer}
   let index = [];
@@ -60,26 +88,10 @@ export function createMaterialStore({ dir = DEFAULT_MATERIALS_DIR } = {}) {
      * Returns {ok, item} or {ok:false, error}.
      */
     add(input) {
-      const kind = input?.kind === 'pdf' ? 'pdf' : 'text';
-      let data;
-      let meta;
-      const id = `mat-${randomUUID().replace(/-/g, '').slice(0, 12)}`;
-      if (kind === 'text') {
-        const text = cleanMaterialText(input?.text);
-        if (text.length < 40) return { ok: false, error: 'Paste at least a paragraph of material (40+ characters).' };
-        if (text.length > MAX_TEXT_CHARS) return { ok: false, error: `That is too long (${text.length.toLocaleString('en-US')} characters). The limit is ${MAX_TEXT_CHARS.toLocaleString('en-US')}; paste one chapter at a time.` };
-        data = text;
-        meta = { id, kind, title: materialTitle({ title: input?.title, text, filename: input?.filename }), chars: text.length };
-      } else {
-        const b64 = String(input?.base64 || '').replace(/^data:[^,]*,/, '');
-        if (!/^[A-Za-z0-9+/]+=*$/.test(b64)) return { ok: false, error: 'The PDF could not be read.' };
-        const buf = Buffer.from(b64, 'base64');
-        if (buf.length > MAX_PDF_BYTES) return { ok: false, error: `That PDF is ${(buf.length / 1048576).toFixed(1)} MB; the limit is ${MAX_PDF_BYTES / 1048576} MB.` };
-        if (buf.subarray(0, 5).toString('latin1') !== '%PDF-') return { ok: false, error: 'That file is not a PDF.' };
-        data = buf;
-        meta = { id, kind, title: materialTitle({ title: input?.title, filename: input?.filename }), bytes: buf.length };
-      }
-      meta.createdAt = new Date().toISOString();
+      const prepared = prepareMaterial(input);
+      if (!prepared.ok) return prepared;
+      const { meta, data } = prepared;
+      const id = meta.id;
       if (dir) { fs.mkdirSync(/* turbopackIgnore: true */ dir, { recursive: true }); fs.writeFileSync(/* turbopackIgnore: true */ fileOf(meta), data); } else mem.set(id, data);
       index = [meta, ...index];
       while (index.length > MAX_MATERIALS) store.remove(index[index.length - 1].id);

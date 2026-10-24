@@ -17,6 +17,14 @@ function relearnVariant(stats, current) {
   return (measured[0] || others[0]).id;
 }
 
+/** Phase 9 Relearn: a new lesson on the same topic in another teaching style, opened now. */
+export function relearnLesson(ctx, lesson, variants = whatWorks(ctx.store.data).variants) {
+  const variant = relearnVariant(variants, lesson?.variant || 'standard');
+  const id = ctx.createLesson({ topic: lesson.topic || lesson.title, title: lesson.title || lesson.topic, level: lesson.level || 'beginner', variant, relearnOf: lesson.id, ...(lesson.materialId ? { materialId: lesson.materialId, materialTitle: lesson.materialTitle } : {}) });
+  toast(`Relearning in the “${STYLE_VARIANTS[variant].label.toLowerCase()}” style`);
+  location.hash = `#/lesson/${id}`;
+}
+
 /** One measured row: label + note, a bar, the percentage (or a dash below the threshold). */
 function meterRow(label, note, rate, n) {
   const known = rate != null && n >= RECALL_MIN;
@@ -71,12 +79,7 @@ export function insightsPanel(ctx) {
   const fadingList = fading.length ? el('ul', { class: 'works-lessons' }, ...fading.map((o) => {
     const lesson = store.data.lessons[o.lessonId];
     const measured = o.recall.n >= RECALL_MIN;
-    const relearn = el('button', { class: 'btn btn-ghost btn-sm', type: 'button', disabled: !lesson, onclick: () => {
-      const variant = relearnVariant(w.variants, lesson?.variant || 'standard');
-      const id = ctx.createLesson({ topic: lesson.topic || lesson.title, title: lesson.title || lesson.topic, level: lesson.level || 'beginner', variant, relearnOf: lesson.id, ...(lesson.materialId ? { materialId: lesson.materialId, materialTitle: lesson.materialTitle } : {}) });
-      toast(`Relearning in the “${STYLE_VARIANTS[variant].label.toLowerCase()}” style`);
-      location.hash = `#/lesson/${id}`;
-    } }, 'Relearn');
+    const relearn = el('button', { class: 'btn btn-ghost btn-sm', type: 'button', disabled: !lesson, onclick: () => relearnLesson(ctx, lesson, w.variants) }, 'Relearn');
     return el('li', { class: 'works-lesson' },
       el('div', { class: 'mastery-text' },
         el('strong', null, o.title || 'Untitled lesson'),
