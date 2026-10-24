@@ -3,7 +3,7 @@
 // and You (stats, settings, learner memory).
 
 import { createStore, uid } from './store.js';
-import { openLocalCache, startAccount, pushActive, onSyncStatus } from './account.js'; // account sync
+import { openLocalCache, startAccount, pushActive, onSyncStatus, signIn } from './account.js'; // account sync
 import { DilSurface, mergeComponentResults } from './dil-surface.js';
 import { streamTurn, postJson, failureError, retryDelay } from './stream-client.js';
 import { retryControl } from './retry-ui.js'; // recoverable streams
@@ -758,6 +758,7 @@ function renderLesson(lessonId) {
   async function streamLesson(continueFrom, lock) {
     streaming = true;
     errorBox.hidden = true;
+    card.hidden = false;
     retryTail.hide();
     finishBtn.disabled = true;
     const l = store.data.lessons[lessonId];
@@ -864,7 +865,9 @@ function renderLesson(lessonId) {
         if (go) retryNext = { continueFrom: retryFrom };
         return;
       }
-      if (!began) {
+      // signed out / today's cap used up on a brand-new lesson: the end panel says so (below)
+      const gated = (e.code === 'signed_out' || e.code === 'daily_limit') && !continueFrom && !hasText;
+      if (!began && !gated) {
         // the continuation never started: the persisted lesson is unchanged
         toast(e.message || 'Could not continue the lesson');
         if (prevPhase === 'complete') { markComplete(); steerBar.setMode('revise'); } else showInterrupted();
@@ -886,11 +889,19 @@ function renderLesson(lessonId) {
       steerBar.hide();
       skeleton.remove();
       drawEnd();
+      updatePages(); // the bar stops saying "Writing…"
+      if (!hasText) card.hidden = true; // nothing was written: no empty lesson card above the message
       errorBox.hidden = false;
+      // accounts on (server/usage.js): signed out -> sign in, then try again; today's cap used -> no retry
+      const signedOut = e.code === 'signed_out';
+      const limited = e.code === 'daily_limit';
       errorBox.replaceChildren(
-        el('h2', { class: 'h-md' }, 'The lesson could not be generated'),
+        el('h2', { class: 'h-md' }, signedOut ? 'Sign in to start this lesson' : limited ? 'Today\u2019s lesson limit is reached' : 'The lesson could not be generated'),
         el('p', { class: 'muted' }, e.message || 'Something went wrong.'),
-        el('button', { class: 'btn', type: 'button', onclick: () => { surface.host.clear(); runStream(); } }, icon('refresh'), 'Try again'));
+        signedOut
+          ? el('button', { class: 'btn btn-primary', type: 'button', onclick: () => signIn().catch((err) => toast(err.message || 'Sign-in is not available right now')) }, 'Sign in')
+          : limited ? el('button', { class: 'btn', type: 'button', onclick: () => { location.hash = '#/'; } }, 'Back to Today')
+            : el('button', { class: 'btn', type: 'button', onclick: () => { card.hidden = false; surface.host.clear(); runStream(); } }, icon('refresh'), 'Try again'));
     } finally {
       window.removeEventListener('pagehide', onHide);
       window.removeEventListener('beforeunload', onHide);

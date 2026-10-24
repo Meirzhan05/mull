@@ -37,6 +37,13 @@ CREATE TABLE IF NOT EXISTS wonder_reminders_sent (
   sent_at timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY (user_id, day)
 );
+CREATE TABLE IF NOT EXISTS wonder_usage (
+  user_id text NOT NULL,
+  day text NOT NULL,
+  kind text NOT NULL,
+  count integer NOT NULL DEFAULT 0,
+  PRIMARY KEY (user_id, day, kind)
+);
 CREATE TABLE IF NOT EXISTS wonder_files (
   user_id text NOT NULL,
   id text NOT NULL,
@@ -163,6 +170,19 @@ export function createPgDb({ pool, blob = null }) {
     async claimReminder(userId, day) {
       const r = await q('INSERT INTO wonder_reminders_sent (user_id, day) VALUES ($1, $2) ON CONFLICT DO NOTHING', [userId, day]);
       return r.rowCount === 1;
+    },
+    // -- daily usage caps (server/usage.js)
+    /** Count one use of `kind` today unless `max` is reached: one atomic upsert. */
+    async useQuota(userId, day, kind, max) {
+      const { rows } = await q(
+        'INSERT INTO wonder_usage (user_id, day, kind, count) VALUES ($1, $2, $3, 1) ON CONFLICT (user_id, day, kind) DO UPDATE SET count = wonder_usage.count + 1 WHERE wonder_usage.count < $4 RETURNING count',
+        [userId, day, kind, max],
+      );
+      return rows.length ? { ok: true, used: Number(rows[0].count) } : { ok: false, used: max };
+    },
+    async quotaUsed(userId, day) {
+      const { rows } = await q('SELECT kind, count FROM wonder_usage WHERE user_id = $1 AND day = $2', [userId, day]);
+      return Object.fromEntries(rows.map((r) => [r.kind, Number(r.count)]));
     },
     async putFile(userId, id, { bytes, contentType }) {
       let blobPath = null;

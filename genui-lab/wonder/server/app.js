@@ -57,6 +57,7 @@ import { createSyncFromEnv } from './sync/index.js';
 import { SYNC_BODY_LIMIT } from './sync/service.js';
 import { loadUserMemory, signedOutMemory, userMaterials, signedOutMaterials } from './sync/user-stores.js';
 import { pushConfig, webPushSender, sendDueReminders } from './push.js';
+import { usageKind, usageLimits, createUsageGate } from './usage.js'; // sign-in + daily caps for Claude routes
 
 export const STATIC_ROOTS = [
   { prefix: '/chatgpt-dil/src/', dir: path.join(LAB_ROOT, 'chatgpt-dil', 'src'), exts: new Set(['.js', '.css']) },
@@ -198,6 +199,7 @@ export function createWonderCore(opts = {}) {
   const syncReady = opts.sync !== undefined ? Promise.resolve(opts.sync) : createSyncFromEnv(env, { logger }).catch((e) => { logger.error?.(`[wonder] account sync unavailable: ${e.message}`); return null; });
   const push = opts.push !== undefined ? opts.push : pushConfig(env);
   const scopes = new AsyncLocalStorage();
+  let usage = opts.usage ?? null; // per-user daily caps on Claude routes (server/usage.js), made on first use
   const scoped = (name, local) => new Proxy({}, {
     get(_, k) {
       const target = scopes.getStore()?.[name] ?? local();
@@ -742,6 +744,16 @@ export function createWonderCore(opts = {}) {
     // account sync on: memory and material are the signed-in user's, and nobody else's
     const userId = typeof t.userId === 'string' && t.userId ? t.userId : null;
     if (!userId && SIGNED_IN_ONLY.has(`${method} ${pathname}`)) return t.json(401, { ok: false, error: 'Sign in first', signedOut: true });
+    // routes that call Claude: signed in only, and within the user's daily caps (server/usage.js)
+    const spend = usageKind(method, pathname, body);
+    if (spend) {
+      if (!userId) return t.json(401, { ok: false, error: 'Sign in to use Wonder: lessons, the tutor and the Teacher need an account.', signedOut: true });
+      if (state.mode === 'claude') {
+        usage ??= createUsageGate({ db: sync.db, limits: usageLimits(env), logger });
+        const r = await usage.charge(userId, spend, { retryKey: cleanKey(body?.streamKey) || cleanKey(body?.turnId) });
+        if (!r.ok) return t.json(429, r.body);
+      }
+    }
     const scope = { userId, sync, memory: signedOutMemory(), materials: signedOutMaterials() };
     if (userId) {
       scope.materials = userMaterials(sync, userId);
@@ -773,6 +785,7 @@ export function createWonderCore(opts = {}) {
       sync: !!sync,
       signedIn: !!userId,
       ...(userId ? { userId, records: await sync.count(userId) } : {}),
+      ...(userId && state.mode === 'claude' ? { usage: await (usage ??= createUsageGate({ db: sync.db, limits: usageLimits(env), logger })).today(userId) } : {}),
       push: sync && push ? { publicKey: push.publicKey } : null,
     });
   }

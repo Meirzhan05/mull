@@ -156,8 +156,12 @@ export async function streamTurn(url, body, { onContent, onReasoning, onControl,
       });
     }
     if (!res.ok) {
-      let msg = '';
-      try { msg = (await res.json()).error || ''; } catch {}
+      let data = null;
+      try { data = await res.json(); } catch {}
+      const msg = data?.error || '';
+      // accounts on: signed out, or today's cap used up (server/usage.js). Neither is retried.
+      if (data?.signedOut) fail(classifyFailure({ code: 'signed_out', message: msg || 'Sign in to continue.' }));
+      if (data?.limited) fail(classifyFailure({ code: 'daily_limit', message: msg || 'Today\'s limit is reached.' }));
       fail(classifyFailure({ status: res.status, retryAfter: res.headers.get('retry-after'), message: msg || undefined }));
     }
     if (!(res.headers.get('content-type') || '').startsWith(CONTENT_TYPE)) fail(classifyFailure({ protocol: true, message: 'Unexpected response type' }));
@@ -220,6 +224,6 @@ export async function postJson(url, body, { signal } = {}) {
   const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal });
   let data = null;
   try { data = await res.json(); } catch {}
-  if (!res.ok || !data || data.ok === false) throw new Error(data?.error || `Request failed (${res.status})`);
+  if (!res.ok || !data || data.ok === false) throw Object.assign(new Error(data?.error || `Request failed (${res.status})`), { status: res.status, ...(data?.signedOut ? { code: 'signed_out' } : data?.limited ? { code: 'daily_limit' } : {}) });
   return data;
 }
