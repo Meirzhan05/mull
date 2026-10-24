@@ -53,10 +53,15 @@ export function queryTokens(query) {
 // ---------------------------------------------------------------- markdown to plain text
 
 // attribute values that are styling or code, not words worth finding
-const SKIP_ATTRS = new Set(['id', 'variant', 'color', 'background', 'size', 'radius', 'gap', 'padding', 'columns', 'fn', 'fns', 'icon', 'unit', 'tone', 'kind', 'href', 'src', 'xrange', 'yrange', 'params', 'query']);
+const SKIP_ATTRS = new Set(['id', 'variant', 'color', 'background', 'size', 'radius', 'gap', 'padding', 'columns', 'fn', 'fns', 'icon', 'unit', 'tone', 'kind', 'href', 'src', 'xrange', 'yrange', 'params', 'query',
+  'shows']); // <Video/>: query and shows are hidden search hints for the server, not lesson text
 const SKIP_KEYS = new Set(['id', 'value', 'fn', 'icon', 'color', 'x', 'y', 'min', 'max', 'step', 'highlighted', 'correct', 'is_correct', 'iscorrect', 'correct_values', 'correct_index',
   // <Diagram/> geometry and wiring: shape kinds, path data, colors, part/step ids
-  'type', 'd', 'fill', 'stroke', 'anchor', 'part', 'show', 'highlight']);
+  'type', 'd', 'fill', 'stroke', 'anchor', 'part', 'show', 'highlight',
+  // question format codes (Quiz, Video)
+  'question_type']);
+// <Video/> question timing ("when":"before"); a Timeline's "when" date stays a word
+const VIDEO_WHEN = /^(?:before|after|predict|start|first|end|pause)$/i;
 
 /** The readable strings inside a component's props: `title="A" steps={[{"text":"B"}]}` -> "A B". */
 function propText(attrs) {
@@ -90,7 +95,7 @@ function propText(attrs) {
     while ((s = sre.exec(inner))) {
       const v = s[1].replace(/\\(.)/g, '$1');
       if (s[2]) { key = v.toLowerCase(); continue; }
-      if (!SKIP_KEYS.has(key) && /\p{L}/u.test(v)) out.push(v);
+      if (!SKIP_KEYS.has(key) && /\p{L}/u.test(v) && !(key === 'when' && VIDEO_WHEN.test(v))) out.push(v);
       key = '';
     }
   }

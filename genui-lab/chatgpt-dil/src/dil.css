@@ -161,6 +161,11 @@
 .d-image-placeholder svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
 .d-image-placeholder span { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
 
+/* youtube (embedded player; the frame exists only for ids the embedder allows) */
+.dil-root [data-d-component="youtube"] { position: relative; overflow: hidden; width: 100%; aspect-ratio: 16 / 9; background: #000; }
+.dil-root [data-d-component="youtube"][data-d-video-placeholder] { background: var(--d-surface-tertiary); }
+.dil-root [data-d-component="youtube"] iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; display: block; }
+
 /* divider / spacer */
 .dil-root [data-d-component="divider"] { flex: 0 0 auto; border: 0; }
 

@@ -8,6 +8,7 @@
 
 import { createHost } from '../../chatgpt-dil/src/host.js';
 import { figureImageSrcs } from './figure-hosts.js';
+import { videoIdsOf } from './video-hosts.js';
 
 // A remote image loads only when the server resolved that exact URL for a <Figure/> (a credited
 // Wikimedia Commons image in this surface's componentResults). Any other remote src, including
@@ -17,6 +18,15 @@ export function createFigureImagePolicy() {
   const allowed = new Set();
   const policy = (src) => allowed.has(src);
   policy.update = (appData) => { for (const s of figureImageSrcs(appData)) allowed.add(s); };
+  return policy;
+}
+
+// Likewise a YouTube player is embedded only for a video id the server resolved for a <Video/>;
+// a raw <youtube videoId> the model wrote keeps the host's placeholder.
+export function createVideoEmbedPolicy() {
+  const allowed = new Set();
+  const policy = (videoId) => allowed.has(videoId);
+  policy.update = (appData) => { for (const id of videoIdsOf(appData)) allowed.add(id); };
   return policy;
 }
 
@@ -30,10 +40,12 @@ export class DilSurface {
     this.last = null;
     this.worker = new Worker(new URL('./wonder-worker.js', import.meta.url), { type: 'module' });
     this.imagePolicy = createFigureImagePolicy();
+    this.embedPolicy = createVideoEmbedPolicy();
     this.host = createHost(mount, {
       invoke: (fnId, args) => this.worker.postMessage({ type: 'invokeFunction', fnId, args }),
       onAction: (a) => this.onAction(a),
       allowRemoteImages: this.imagePolicy,
+      allowEmbeds: this.embedPolicy,
     });
     this.worker.onmessage = (e) => {
       const m = e.data;
@@ -57,6 +69,7 @@ export class DilSurface {
   render({ code, constants, appData }, { animated = false } = {}) {
     this.last = { code, constants, appData };
     this.imagePolicy.update(appData); // before the worker's ops arrive
+    this.embedPolicy.update(appData);
     this.worker.postMessage({ type: 'render', source: code, constants, appData: appData || {}, animated, sourceGeneration: ++this.generation });
   }
 

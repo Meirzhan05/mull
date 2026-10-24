@@ -38,6 +38,8 @@ The demo page has three tabs:
 
 Remote images (`images.openai.com` thumbnails in the capture) are **off by default** and render as placeholders. The "Load remote images" checkbox opts in.
 
+The `youtube` element (prop `videoId`, §3.3) renders as a placeholder unless the embedder passes `allowEmbeds` (a boolean, or a predicate given the id). When allowed, the host builds the player URL itself from a validated 11-character id on `https://www.youtube-nocookie.com` only, in a sandboxed iframe (scripts, same-origin, presentation and popups only). Wonder extensions: `start`/`end` seconds, and `cues` (times) with `onCue(index)`: the host reads the playback time from that frame's own `postMessage` events and pauses the player at each cue. The standalone viewer leaves embeds off.
+
 ## How each part maps to the evidence
 
 | Part | Evidence (findings §) | What is reproduced |

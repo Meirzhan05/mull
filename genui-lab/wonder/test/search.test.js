@@ -85,6 +85,13 @@ test('search: Diagram labels and Figure captions are words; geometry and image q
   assert.doesNotMatch(text, /\bpath\b|M0 150|\bsky\b|\bair\b(?! *\.)|\bstart\b|cumulus/);
 });
 
+test('search: a Video\'s caption and questions are words; its search hints and question codes are not', () => {
+  const md = '<Video query="sunset in a glass milk flashlight" shows="beam turning orange" caption="Milk droplets scatter light." questions={[{"when":"before","prompt":"What color is the beam?","question_type":"single_select","options":[{"value":"a","label":"Bluish"},{"value":"b","label":"Orange-red"}],"correct_values":["b"],"explanation":"Blue is scattered out."}]}/>\n\n<Timeline events={[{"when":"July 1969","label":"Moon landing"}]}/>';
+  const { text } = markdownToText(md);
+  for (const w of ['Milk droplets scatter light.', 'What color is the beam?', 'Bluish', 'Orange-red', 'Blue is scattered out.', 'July 1969', 'Moon landing']) assert.ok(text.includes(w), w);
+  assert.doesNotMatch(text, /flashlight|turning orange|\bbefore\b|single_select/);
+});
+
 test('search: lesson pages map body offsets to "## " pages', () => {
   const { text, pages } = lessonText(BAYES);
   assert.equal(pages.length, 2);

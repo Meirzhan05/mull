@@ -366,12 +366,74 @@ export function isRemoteSrc(src, base) {
   }
 }
 
+// ---------------------------------------------------------------- youtube (embedded player)
+// The `youtube` primitive (prop videoId, findings §3.3) plays in an iframe on exactly one
+// origin. The host builds the URL itself from a validated id, so a program can never point the
+// frame anywhere else, and only an id the embedder allows (opts.allowEmbeds) gets a frame at
+// all. Wonder extensions: start/end (seconds) and cues: times at which the host pauses the
+// player and calls onCue(index), read from the player's own postMessage events.
+
+export const YOUTUBE_EMBED_ORIGIN = 'https://www.youtube-nocookie.com';
+export const YOUTUBE_SANDBOX = 'allow-scripts allow-same-origin allow-presentation allow-popups allow-popups-to-escape-sandbox';
+export const isYouTubeId = (id) => typeof id === 'string' && /^[A-Za-z0-9_-]{11}$/.test(id);
+const wholeSeconds = (v) => (typeof v === 'number' && Number.isFinite(v) && v >= 0 ? Math.floor(v) : null);
+
+/** The embed URL for a youtube element's props, or null when its id is not a YouTube id. */
+export function youtubeEmbedUrl(props, pageOrigin) {
+  const p = props || {};
+  if (!isYouTubeId(p.videoId)) return null;
+  const u = new URL(`/embed/${p.videoId}`, YOUTUBE_EMBED_ORIGIN);
+  const start = wholeSeconds(p.start);
+  const end = wholeSeconds(p.end);
+  if (start) u.searchParams.set('start', String(start));
+  if (end && end > (start || 0)) u.searchParams.set('end', String(end));
+  u.searchParams.set('rel', '0');
+  u.searchParams.set('playsinline', '1');
+  u.searchParams.set('iv_load_policy', '3');
+  u.searchParams.set('enablejsapi', '1'); // the player then reports its time and state by postMessage
+  if (/^https?:\/\/[^/]+$/.test(pageOrigin || '')) u.searchParams.set('origin', pageOrigin);
+  return u.href;
+}
+
+/** The time/state in one message from the player ({time?, state?}), or null. */
+export function parsePlayerMessage(data) {
+  let m = data;
+  if (typeof m === 'string') { if (m.length > 20000) return null; try { m = JSON.parse(m); } catch { return null; } }
+  if (!m || typeof m !== 'object') return null;
+  const out = {};
+  if (m.event === 'onStateChange' && typeof m.info === 'number') out.state = m.info;
+  else if ((m.event === 'infoDelivery' || m.event === 'initialDelivery') && m.info && typeof m.info === 'object') {
+    if (typeof m.info.currentTime === 'number' && Number.isFinite(m.info.currentTime)) out.time = m.info.currentTime;
+    if (typeof m.info.playerState === 'number') out.state = m.info.playerState;
+  } else if (m.event === 'onReady') out.ready = true;
+  else return null;
+  return out;
+}
+
+const PLAYING = 1;
+const ENDED = 0;
+/**
+ * Advance a player's cues by one message: `fired` (a Set of cue times, mutated) remembers the
+ * cues already reached; rewinding well before a cue arms it again. Returns the indices to fire
+ * and whether to pause (a cue reached while playing).
+ */
+export function advanceCues(fired, cues, { time, state }) {
+  const fire = [];
+  (cues || []).forEach((c, i) => {
+    if (typeof c !== 'number' || !Number.isFinite(c)) return;
+    if (fired.has(c)) { if (typeof time === 'number' && time < c - 1.5) fired.delete(c); return; }
+    if ((typeof time === 'number' && time >= c - 0.35) || state === ENDED) { fired.add(c); fire.push(i); }
+  });
+  return { fire, pause: fire.length > 0 && state !== ENDED };
+}
+
 // ---------------------------------------------------------------- host
 
 /**
  * @param {HTMLElement} mount
- * @param {{invoke:(fnId:number,args:any[])=>void, onAction?:(a:object)=>void, allowRemoteImages?:boolean|((src:string, props:object)=>boolean), raf?:(cb:Function)=>void}} opts
+ * @param {{invoke:(fnId:number,args:any[])=>void, onAction?:(a:object)=>void, allowRemoteImages?:boolean|((src:string, props:object)=>boolean), allowEmbeds?:boolean|((videoId:string, props:object)=>boolean), raf?:(cb:Function)=>void}} opts
  *   allowRemoteImages may be a predicate (Wonder extension) given the src and the image's props.
+ *   allowEmbeds (Wonder extension, default false) decides which youtube ids get a player.
  */
 export function createHost(mount, opts) {
   const doc = mount.ownerDocument;
@@ -379,6 +441,10 @@ export function createHost(mount, opts) {
   const imagePolicy = (v) => (typeof v === 'function' ? v : !!v);
   let allowRemoteImages = imagePolicy(opts.allowRemoteImages);
   const remoteAllowed = (src, props) => (typeof allowRemoteImages === 'function' ? !!allowRemoteImages(src, props) : allowRemoteImages);
+  let allowEmbeds = imagePolicy(opts.allowEmbeds);
+  const embedAllowed = (id, props) => (typeof allowEmbeds === 'function' ? !!allowEmbeds(id, props) : allowEmbeds);
+  const players = new Set(); // youtube records with a live frame
+  let playerIds = 0;
   const recs = new Map();
   const root = { id: 0, type: '#root', props: {}, el: mount, childHost: mount, kids: [], parent: null };
   recs.set(0, root);
@@ -457,6 +523,7 @@ export function createHost(mount, opts) {
     if (!isSvgEl) bindEvents(rec);
     if (type === 'link') el.setAttribute('href', p.href || '#');
     if (type === 'image' || type === 'search-image') renderImage(rec);
+    if (type === 'youtube') renderYouTube(rec);
     if (type === 'button') renderButtonLabel(rec);
     if (type === 'text-input') renderTextInput(rec);
     if (type === 'celebration') maybeCelebrate(rec);
@@ -536,6 +603,85 @@ export function createHost(mount, opts) {
     img.onerror = () => { el.removeAttribute('data-d-image-loading'); el.setAttribute('data-d-image-fallback', ''); if (p.hideOnFailure) el.style.display = 'none'; };
     img.src = src;
     el.appendChild(img);
+  }
+
+  // ---- youtube: one sandboxed frame per element, rebuilt only when its id or segment changes
+  const win = doc.defaultView;
+  const post = (yt, msg) => { try { yt.frame.contentWindow?.postMessage(JSON.stringify({ ...msg, id: yt.id, channel: 'widget' }), YOUTUBE_EMBED_ORIGIN); } catch {} };
+
+  function onPlayerMessage(e) {
+    if (e.origin !== YOUTUBE_EMBED_ORIGIN) return;
+    for (const rec of players) {
+      const yt = rec.yt;
+      if (e.source !== yt.frame.contentWindow) continue;
+      const info = parsePlayerMessage(e.data);
+      if (!info) return;
+      yt.heard = true;
+      const { fire, pause } = advanceCues(yt.fired, yt.cues, info);
+      if (pause) post(yt, { event: 'command', func: 'pauseVideo', args: [] });
+      if (yt.onCue != null) for (const i of fire) opts.invoke(yt.onCue, [i]);
+      return;
+    }
+  }
+
+  function stopPlayer(rec) {
+    const yt = rec.yt;
+    if (!yt) return;
+    clearInterval(yt.timer);
+    if (players.delete(rec) && !players.size) win?.removeEventListener('message', onPlayerMessage);
+    rec.yt = null;
+  }
+
+  function renderYouTube(rec) {
+    const el = rec.el;
+    const p = rec.props;
+    const id = isYouTubeId(p.videoId) ? p.videoId : '';
+    const url = id && embedAllowed(id, p) ? youtubeEmbedUrl(p, doc.location?.origin) : null;
+    const title = p.title ? String(p.title) : 'YouTube video';
+    const key = url || `placeholder\u0000${title}`;
+    if (!rec.yt || rec.yt.key !== key) {
+      stopPlayer(rec);
+      el.textContent = '';
+      const yt = { key, id: ++playerIds, frame: null, fired: new Set(), cues: [], onCue: null, heard: false, timer: null };
+      if (url) {
+        const f = doc.createElement('iframe');
+        f.setAttribute('sandbox', YOUTUBE_SANDBOX);
+        f.setAttribute('allow', 'encrypted-media; picture-in-picture; fullscreen');
+        f.allowFullscreen = true;
+        f.referrerPolicy = 'strict-origin-when-cross-origin'; // the player refuses to start without a referrer
+        f.title = title;
+        f.loading = 'lazy';
+        // ask the player to report its time and state (what the IFrame API's widget does), until it answers
+        f.onload = () => {
+          let tries = 0;
+          clearInterval(yt.timer);
+          post(yt, { event: 'listening' });
+          yt.timer = setInterval(() => { if (yt.heard || ++tries > 40) clearInterval(yt.timer); else post(yt, { event: 'listening' }); }, 250);
+        };
+        f.src = url;
+        yt.frame = f;
+        el.appendChild(f);
+        if (!players.size) win?.addEventListener('message', onPlayerMessage);
+        players.add(rec);
+      } else {
+        el.setAttribute('data-d-video-placeholder', '');
+        const ph = doc.createElement('div');
+        ph.className = 'd-image-placeholder';
+        const icon = doc.createElementNS(SVG_NS, 'svg');
+        icon.setAttribute('viewBox', '0 0 24 24');
+        icon.setAttribute('aria-hidden', 'true');
+        for (const d of ICONS.play) { const path = doc.createElementNS(SVG_NS, 'path'); path.setAttribute('d', d); icon.appendChild(path); }
+        ph.appendChild(icon);
+        const cap = doc.createElement('span');
+        cap.textContent = title;
+        ph.appendChild(cap);
+        el.appendChild(ph);
+      }
+      if (url) el.removeAttribute('data-d-video-placeholder');
+      rec.yt = yt;
+    }
+    rec.yt.cues = Array.isArray(p.cues) ? p.cues.filter((c) => typeof c === 'number' && Number.isFinite(c)) : [];
+    rec.yt.onCue = p.onCue && p.onCue.__fn != null && p.onCue.__fn !== false ? p.onCue.__fn : null;
   }
 
   function applyIconProps(rec) {
@@ -691,6 +837,7 @@ export function createHost(mount, opts) {
   // ---- op application
   function drop(rec) {
     recs.delete(rec.id);
+    if (rec.yt) stopPlayer(rec);
     for (const k of rec.kids || []) { const c = recs.get(k); if (c) drop(c); }
   }
 
@@ -725,7 +872,9 @@ export function createHost(mount, opts) {
         parent.kids.splice(Math.min(o.index, parent.kids.length), 0, o.id);
         const nextId = parent.kids[o.index + 1];
         const nextEl = nextId != null ? recs.get(nextId)?.el : null;
-        parent.childHost.insertBefore(rec.el, nextEl && nextEl.parentNode === parent.childHost ? nextEl : null);
+        const before = nextEl && nextEl.parentNode === parent.childHost ? nextEl : null;
+        // already in place: re-inserting would reload an embedded player (youtube iframe)
+        if (rec.el.parentNode !== parent.childHost || rec.el.nextSibling !== before) parent.childHost.insertBefore(rec.el, before);
         if (rec.type === '#text' && (firstPlacement || MARKDOWNISH.has(parent.type))) renderText(rec, null, rec.pendingAnimated && firstPlacement);
         if (rec.type !== '#text') dirty.add(rec);
         break;
@@ -795,6 +944,10 @@ export function createHost(mount, opts) {
     setAllowRemoteImages(v) {
       allowRemoteImages = imagePolicy(v);
       for (const rec of recs.values()) if ((rec.type === 'image' || rec.type === 'search-image') && rec.el) renderImage(rec);
+    },
+    setAllowEmbeds(v) {
+      allowEmbeds = imagePolicy(v);
+      for (const rec of recs.values()) if (rec.type === 'youtube' && rec.el) renderYouTube(rec);
     },
     stats,
     nodeCount: () => recs.size - 1,

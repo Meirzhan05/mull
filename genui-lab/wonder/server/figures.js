@@ -342,6 +342,7 @@ export function createFigureResolver({ lookup, verify = null, tries = FIGURE_CHE
       return out;
     },
     /** Wait (at most `ms`) for the lookups (and their checks) in flight. */
+    label: 'Finding images…', // what the stream says while waiting (media-resolver.js combineResolvers)
     async settle(ms = FIGURE_SETTLE_MS) {
       if (!inflight.size) return;
       let timer;

@@ -241,7 +241,9 @@ async function lessonRecords(figureLookup, topic = 'why is the sky blue?', extra
     await new Promise((r) => server.close(r));
   }
 }
-const figureResults = (rec) => Object.values(rec?.dil?.appData?.opGenui?.componentResults || {}).filter((r) => r.status === 'pending' || 'found' in (r.state || {}));
+// the Figures' entries only (the sky-blue demo also has a Video, see video.test.js)
+const figureRids = (dil) => [...String(dil?.code || '').matchAll(/__dil\.jsx\(Figure,\{[^{}]*"__resolutionId":__dilConstants\["(\d+)"\]/g)].map((m) => dil.constants[m[1]]);
+const figureResults = (rec) => figureRids(rec?.dil).map((rid) => rec.dil.appData?.opGenui?.componentResults?.[rid]).filter(Boolean);
 
 test('lesson stream: the sky-blue Figure resolves through the stream and the final record carries the image', async () => {
   let resolveLookup;

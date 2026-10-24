@@ -223,7 +223,9 @@ test('lesson stream (claude mode): the vision check runs on the found image and 
   assert.equal(client.calls.create.length, 1, 'one check (the critic is off for this request)');
   assert.equal(client.calls.create[0].model, FIGURE_CHECK_MODEL);
   assert.deepEqual(client.calls.create[0].messages[0].content[0].source, { type: 'url', url: HEART.src });
-  const states = Object.values(final.dil.appData.opGenui.componentResults).map((r) => r.state).filter((s) => s && 'found' in s);
+  // the Figure's result only (the sky-blue demo also has a Video, left out here)
+  const rid = [...final.dil.code.matchAll(/__dil\.jsx\(Figure,\{[^{}]*"__resolutionId":__dilConstants\["(\d+)"\]/g)].map((m) => final.dil.constants[m[1]]);
+  const states = rid.map((r) => final.dil.appData.opGenui.componentResults[r]?.state).filter((s) => s && 'found' in s);
   assert.equal(states.length, 1);
   assert.equal(states[0].found, false);
   assert.match(states[0].rejected.problem, /camera/);

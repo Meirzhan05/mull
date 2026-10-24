@@ -33,7 +33,7 @@ cp .env.example .env        # then put your key after ANTHROPIC_API_KEY=
 npm run dev                 # next dev → http://localhost:8750
 ```
 
-For production, `npm run build && npm start` (`next start -p 8750`). `ANTHROPIC_API_KEY=... npm run dev` also works, as does an `ant auth login` profile. The server never reads, prints or logs the key. `GET /api/status` returns only `{mode: "claude"|"demo", model}`. Pass `-p <port>` to `next` to change the port. `WONDER_MODE=demo` forces demo mode even when credentials exist. `WONDER_MEMORY_FILE` moves the learner memory file. `WONDER_FIGURES=off` stops `<Figure/>` from looking images up on Wikimedia Commons, and `WONDER_FIGURE_CHECK=off` skips the Figure vision check. `WONDER_RECORD_DIR=<dir>` writes each lesson, tutor and Teacher stream's NDJSON to a file there; that is how the fixtures were captured, and the records contain no credentials.
+For production, `npm run build && npm start` (`next start -p 8750`). `ANTHROPIC_API_KEY=... npm run dev` also works, as does an `ant auth login` profile. The server never reads, prints or logs the key. `GET /api/status` returns only `{mode: "claude"|"demo", model, videos: "youtube"|"demo"|"off"}`. Pass `-p <port>` to `next` to change the port. `WONDER_MODE=demo` forces demo mode even when credentials exist. `WONDER_MEMORY_FILE` moves the learner memory file. `WONDER_FIGURES=off` stops `<Figure/>` from looking images up on Wikimedia Commons, and `WONDER_FIGURE_CHECK=off` skips the Figure vision check. `YOUTUBE_API_KEY` lets `<Video/>` search YouTube, and `WONDER_VIDEOS=off` turns videos off (see [Credentials](#credentials)). `WONDER_RECORD_DIR=<dir>` writes each lesson, tutor and Teacher stream's NDJSON to a file there; that is how the fixtures were captured, and the records contain no credentials.
 
 ### Demo mode
 
@@ -150,6 +150,7 @@ Next serves `public/` and, through read-only route handlers, `genui-lab/chatgpt-
 | `ExplainBack` | Free-response answer graded against a rubric on the server (Phase 8) |
 | `Diagram` | A drawing Claude composes from simple SVG shapes and labels. Tap a part (on the drawing or its chip) to read about it; step through with Back/Next while shapes fade in and the rest dims. See [Diagrams and real images](#diagrams-and-real-images) |
 | `Figure` | A real, freely licensed image from Wikimedia Commons. Claude writes a search phrase; the server finds the image, its license and author. Tap to enlarge, optional "Look closer" question, credit line with a Source link |
+| `Video` | A short real YouTube clip in a sandboxed `youtube-nocookie.com` player. Claude writes a search phrase and what the clip should show; the server picks the video and the segment. Optional "predict first" question before it plays, and up to two questions that open when the clip ends (the player pauses there) |
 | `TeacherCard` | **Server-only**: spliced in by `/api/teacher/stream`, never written by the model. Props are just `kind` and the server-assigned `__resolutionId`; the data is `componentResults[__resolutionId].state`. `approval` (Start lesson / Not now / Undo), `plan` (per-item open buttons, Save plan / Unsave), `memory` (Remembered/Forgot chip with Undo/Redo). Shows a skeleton until resolved |
 
 Claude can also use the DIL layout primitives (`box/row/col/grid/text/title/icon/badge/divider/math/…`), with icon names taken from `chatgpt-dil/src/icons.js`.
@@ -271,7 +272,7 @@ npm run eval -- --tag media
 ## Tests
 
 ```sh
-node --test genui-lab/wonder/test/index.js      # no network (Figure lookups are stubbed)
+node --test genui-lab/wonder/test/index.js      # no network (Figure and Video lookups are stubbed)
 ```
 
 - **`mastery.test.js`, `critic.test.js`, `freeresponse.test.js`** cover phases 6–8: the estimator and decay, evidence, prompt injection, the lint, quiz fixes and the `replace` record, the eval harness end to end (demo and fake Claude), the grader, the ExplainBack widget in the sandbox, explain practice items and Guide me.
@@ -342,7 +343,10 @@ public/teacher-screen.js, teacher-core.js (progress snapshot, history), memory-s
 public/learning-catalog.js (in-sandbox components), learning-runtime.js, wonder-worker.js, dil-surface.js, stream-client.js
 public/view-state.js      widget state snapshots (store, useSaved, caps)   public/lesson-menu.js  lesson overflow menu
 server/diagram.js         Diagram validation/fallback    server/figures.js   Figure validation, Commons lookup, resolver
-public/catalog-media.js   Diagram + Figure (in-sandbox components)
+server/videos.js          Video validation, YouTube lookup, segment picking, demo clips
+server/media-resolver.js  per-stream Video lookups (componentResults); combines them with Figure's
+public/catalog-media.js   Diagram + Figure + Video (in-sandbox components)
+public/figure-hosts.js, video-hosts.js   what the renderer may load / embed
 test/*.test.js, test/index.js, test/helpers.js
 ```
 
@@ -355,6 +359,7 @@ Interactive widgets keep their state across reloads and when a lesson is reopene
 | `FunctionGraph` | parameter values | |
 | `Diagram` | current step, selected part | |
 | `Figure` | "Look closer" answer shown | enlarged view |
+| `Video` | prediction, answers, clip watched | playback position |
 | `LessonStepper` | current step | |
 | `Reveal` | which items are open | |
 | `CompareToggle` | left / right / side by side (side by side shows the left view on phones) | |
@@ -387,10 +392,11 @@ Interactive widgets keep their state across reloads and when a lesson is reopene
 - **Memory is one file for one local learner.** There are no accounts. It is not encrypted; "Forget everything" deletes it.
 - **Inherited from chatgpt-dil:** a best-effort sandbox lockdown and no SVG `<text>` in the captured client. Flowchart and ConceptMap are therefore laid out with boxes rather than drawn edges. Wonder's host adds an `svg-text` primitive for `Diagram` labels.
 - **Figure needs the network and Wikimedia.** The server queries Wikimedia Commons, and the learner's browser loads the image from `upload.wikimedia.org` / `thumb.wikimedia.org` (no referrer). Offline, or with `WONDER_FIGURES=off`, Figures are left out and the lesson reads without them. Claude never sees the picture when it writes, so captions are written to be true of any good image of the subject; the vision check then drops an image that does not fit.
+- **Video needs a YouTube key, the network and YouTube.** Without `YOUTUBE_API_KEY`, Claude-mode lessons leave Videos out; demo mode plays only the demo lesson's fixture clip. Each new lookup costs 101 of the key's 10,000 free daily quota units (about 100 new clips a day; repeats are cached). Segments come from a video's chapters, not its captions (the Data API lets only a video's owner download captions), so a video without matching chapters plays from its start, capped at 3 minutes. Pausing at the clip's end uses the player's `postMessage` events (the protocol YouTube's IFrame API uses, not separately documented); if they never arrive, "I watched it" opens the questions. Saved lessons keep the clip's title and channel; YouTube's API policies limit how long such data may be stored, which a production deployment would need to handle.
 
 ## Credentials
 
-Next.js reads `ANTHROPIC_API_KEY` from `genui-lab/wonder/.env` (or `.env.local`). If that isn't set, it falls back to `~/.config/wonder/.env`, which lives outside the repo. Set `ANTHROPIC_WORKSPACE_ID` as well when your key is not scoped to a workspace (for example `sk-ant-usr-…` keys). Wonder then sends it as the `anthropic-workspace-id` header.
+Next.js reads `ANTHROPIC_API_KEY` from `genui-lab/wonder/.env` (or `.env.local`). If that isn't set, it falls back to `~/.config/wonder/.env`, which lives outside the repo. `YOUTUBE_API_KEY` (a YouTube Data API v3 key, for `<Video/>`) is read from the same places; values already in the environment win. The key goes to `www.googleapis.com` in the `X-Goog-Api-Key` header, never in a URL or a log line. Set `ANTHROPIC_WORKSPACE_ID` as well when your key is not scoped to a workspace (for example `sk-ant-usr-…` keys). Wonder then sends it as the `anthropic-workspace-id` header.
 
 Verified against the live API (`claude-opus-5-5`), using an `sk-ant-usr-…` key with a workspace ID:
 - **Lesson:** a full lesson streamed in about 36 s across 543 content revisions. Every component validated: Quiz, LessonStepper, ConceptMap, BarChart, Reveal, Callout and KeyTerm.
@@ -663,9 +669,9 @@ A lesson's quiz says what the learner knew a minute after reading it. Wonder als
   - **Teacher check-in.** On seeded review history it proposed relearning the worst-recalled lesson "starting from concrete examples", the best-measured style.
   - **Lesson from lecture notes.** It used the class's own coffee-shop example and carried 11 Cite pills. "Sources" opened the original notes.
 
-## Diagrams and real images
+## Diagrams, real images and video clips
 
-Two catalog components put pictures next to the explanation.
+Three catalog components put pictures or video next to the explanation.
 
 ### `Diagram`: drawings Claude composes
 
@@ -730,6 +736,28 @@ Two catalog components put pictures next to the explanation.
 - **Settings.** `WONDER_FIGURES=off`, or `figureLookup: null` in `createWonderCore`, skips the network. The tests stub the lookup. `figureSettleMs` changes the end-of-stream wait.
 - **Demo.** The sky-blue sample shows a photo of white clouds in a blue sky on its Mie-scattering page.
 
+### `Video`: short YouTube clips with pause-and-answer questions
+
+```
+<Video query="sunset in a glass milk water flashlight experiment" shows="a flashlight beam through milky water turning orange"
+  caption="…" questions={[{"when":"before",…Quiz question…},{"when":"after",…}]}/>
+```
+
+- **No ids or URLs from the model.** Claude writes a `query` (3-8 words that would find a good video) and `shows` (what the clip must show). A `videoId`, `url`, `src` or a URL in `query` is rejected, so the component falls back to its caption.
+- **Questions** use the Quiz question format (single choice or true/false, with an explanation). At most one `"when":"before"` question asks the learner to predict the outcome before the player appears. Up to two `"after"` questions open when the clip ends. They are about what any good clip on the point shows, since Claude never sees the video.
+- **Server lookup** (`server/videos.js`, YouTube Data API v3):
+  - **Search.** `search.list` with `type=video`, `videoEmbeddable`, `videoSyndicated` (playable outside youtube.com), `safeSearch=strict` and `relevanceLanguage=en`, 10 results. Then `videos.list` for their duration, embeddability, privacy, age and region restrictions, captions and descriptions.
+  - **Filtering.** Public, embeddable, processed, not live, not age- or region-restricted, not a `#shorts`, 30 s to 20 min long.
+  - **Segment.** If the description has chapters by YouTube's rules (an ascending run of timestamped lines from 0:00, at least three, each at least 10 s), the chapter whose title best matches `shows` plays, capped at 4 minutes. Intro, outro and sponsor chapters never match. Otherwise a video up to 4 minutes plays whole and a longer one plays its first 3 minutes.
+  - **Ranking.** Search rank, plus a matching chapter, a whole short video, captions, English audio and title words matching `shows`. A long video that would only play its start ranks lower.
+  - **Output.** `{found, videoId, start, end, duration, title, channel, chapter?, pageUrl}`, with the title and channel as plain text.
+- **Delivery.** A per-stream resolver like Figure's (`server/media-resolver.js`), combined with it in `startNdjson` so every stream has both: pending, re-sent mid-stream, settled before the final record ("Finding a video…", or "Finding images and videos…"), cached per server with misses expiring, cancelled with the stream, and saved with the lesson.
+- **Renderer.** The host's `youtube` primitive: `youtube` with a `videoId` prop is in ChatGPT's DIL element list (findings §3.3). The chatgpt-dil host renders it as an iframe whose URL the host builds itself from a validated 11-character id, always on `https://www.youtube-nocookie.com/embed/…`. The frame has `sandbox="allow-scripts allow-same-origin allow-presentation allow-popups allow-popups-to-escape-sandbox"`, no top navigation or forms, and a `strict-origin-when-cross-origin` referrer (the player will not start without one). A frame exists only when the embedder's `allowEmbeds` policy allows that id. In Wonder, `dil-surface.js` allows only ids the server resolved for a Video on this surface (`public/video-hosts.js`). Anything else, including a raw `<youtube videoId>` the model wrote, keeps a placeholder. The host also no longer re-inserts an element that is already in place, which would reload a playing frame.
+- **Pause and answer.** The host asks the player to report its state (`enablejsapi=1`, the IFrame API's `listening` handshake). It accepts messages only from `https://www.youtube-nocookie.com` and only from that frame's window. When playback reaches a cue (the clip's end, 0.35 s early, before YouTube's end screen), the host pauses the player and calls the component's `onCue` in the sandbox. The worker gets no per-tick time updates.
+- **Sandbox component** (`public/catalog-media.js`): a "Finding a video…" frame while pending; the "Predict first" card (or Skip) before the player; the caption; `Video: title · channel · YouTube · chapter, 1:05–3:10` with a YouTube button; then "Your prediction: … Watch to find out" with an "I watched it" button, which also covers the player's events never arriving. When the clip ends: the prediction's verdict and the after questions one by one, each with its explanation, then a score. The prediction, answers and "watched" persist with `useSaved`, so a reloaded lesson does not pause again. Not found renders nothing.
+- **Settings.** `YOUTUBE_API_KEY` enables live search. Without it, demo mode uses `createDemoVideoLookup()` (the demo lesson's clip, picked by hand from a YouTube search for the demo query and kept in `DEMO_VIDEOS`), and Claude mode leaves Videos out. `WONDER_VIDEOS=off`, or `videoLookup: null` in `createWonderCore`, turns videos off; the tests stub the lookup. `/api/status` reports `videos`.
+- **Demo.** The sky-blue sample's sunset page has a "sunset in a glass" demonstration (a flashlight through milky water), with a "predict the beam's color" question before it and "where did the blue go?" after it.
+
 ### Tests and live verification
 
 - **`test/diagram.test.js`:**
@@ -740,7 +768,7 @@ Two catalog components put pictures next to the explanation.
   - larger labels on phones;
   - the demo diagram;
   - every streamed prefix of the demo.
-- **`chatgpt-dil/test/host.test.js`:** SVG attributes for the host extensions (sized children, `svg-text`, keyboard vs pointer-only shapes) and `isRemoteSrc`.
+- **`chatgpt-dil/test/host.test.js`:** SVG attributes for the host extensions (sized children, `svg-text`, keyboard vs pointer-only shapes), `isRemoteSrc`, and the youtube player's pure pieces (the embed URL only on youtube-nocookie.com, rejected ids, the sandbox flags, player messages, cues firing once, pausing and re-arming on rewind).
 - **`test/figure.test.js`:**
   - validation, and picking Commons results (license, size, host, localized SVGs, HTML authors);
   - the lookup's requests, through a fake `fetch`;
@@ -750,10 +778,20 @@ Two catalog components put pictures next to the explanation.
   - misses expiring, lookups cancelled with the stream, and a Figure resolving in a Teacher reply;
   - a Figure never counting as a page's only visual, and counting in outcomes only when shown;
   - two lesson streams through the real server: a late lookup arrives mid-stream and is in the final record, and with no network the Figure is left out.
+- **`test/video.test.js`:**
+  - validation (ids and URLs refused, question limits and formats) and fallback markdown;
+  - chapters by YouTube's rules, segment picking, candidate filtering and ranking;
+  - the lookup's requests through a fake `fetch` (the key only in a header, never in a URL or an error);
+  - the resolver, and Figure + Video combined in one stream;
+  - the sandbox component: predict, player, the end cue, answers, Skip and "I watched it", and state restored after a reload;
+  - the embed policy (only server-resolved ids get a player);
+  - lesson streams through the real server: a late clip in the final record, the demo fixture without a key, and `WONDER_VIDEOS=off`;
+  - the demo lesson linting clean, a Video never counting as a page's only visual, and counting in outcomes only when shown.
 - **Live (demo mode, browser).**
   - **Diagram.** The sky-blue diagram stepped Noon → Sunset → Compare. Tapping the orange arrow opened "Sunset light", and the step and selection survived a reload. Checked in light and dark, at desktop and 375 px widths.
   - **Claude.** A live lesson on "How the human heart pumps blood" came back with a valid `Diagram` on the first try: four chambers, the septum and the valves as 6 tappable parts, and "Tap each chamber below" in the prose. It surfaced two fixes. Rects need `width`/`height` passed through by the host. Free labels inside a shape now join that shape's part, so tapping a chamber's name selects the chamber and its label doesn't dim. Claude chose no `Figure` for that topic.
   - **Figure.** The live Commons lookup found "Clouds in the sky in August 2014" (Jakec, CC BY-SA 4.0) in about 0.5 s. It rendered with its caption, Look closer and credit, and reloaded from the saved lesson.
+  - **Video.** The sky-blue lesson showed "Predict first" with no player. Picking "Orange-red" mounted the sandboxed `youtube-nocookie.com` frame (the sandbox, `allow` and referrer attributes as above) with "Your prediction: Orange-red. Watch to find out, then answer." below it. The player answered the host's `listening` handshake and streamed `infoDelivery` messages with `currentTime` and `playerState`. Actual playback could not be checked: in the automated browser YouTube shows its "Sign in to confirm you're not a bot" wall. The end cue was checked by replaying the player's own `infoDelivery` message from the frame's window: a message from another origin was ignored, 120 s did nothing, and 195.8 s opened "Pause and answer" without reloading the frame. The answers and "watched" came back after a reload (no predict card, no pausing again). No console errors; checked at 375 px in light mode.
 - **`test/media-checks.test.js`** (fake client, no network):
   - the vision check's request (an image block by URL, the figure's text, the schema);
   - a matching figure is kept, a mismatched one dropped as not found, and both verdicts are cached;

@@ -99,13 +99,16 @@ export function staticResponse(pathname, { head = false } = {}) {
 }
 
 /**
- * Credentials for Claude: Next.js already loads .env / .env.local from the app folder. Like
- * `npm start` used to, also accept ~/.config/wonder/.env (or $WONDER_ENV_FILE) so the key never
- * has to sit next to the code. Values are never read or logged here, only handed to the SDK.
+ * Credentials for Claude (and YOUTUBE_API_KEY for <Video/>): Next.js already loads .env /
+ * .env.local from the app folder. Like `npm start` used to, also accept ~/.config/wonder/.env (or
+ * $WONDER_ENV_FILE) so the keys never have to sit next to the code. Values already in the
+ * environment win (process.loadEnvFile does not overwrite them). Values are never read or logged
+ * here, only handed to the SDK and the YouTube lookup.
  */
 export function loadUserEnv(env = process.env) {
   const file = env.WONDER_ENV_FILE || path.join(os.homedir(), '.config', 'wonder', '.env');
-  if (env.ANTHROPIC_API_KEY || !fs.existsSync(/* turbopackIgnore: true */ file)) return;
+  // the file may still add YOUTUBE_API_KEY (<Video/>) when the shell already has a Claude key
+  if ((env.ANTHROPIC_API_KEY && env.YOUTUBE_API_KEY) || !fs.existsSync(/* turbopackIgnore: true */ file)) return;
   try {
     process.loadEnvFile(file);
     if (env.ANTHROPIC_API_KEY === 'YOUR_KEY') delete env.ANTHROPIC_API_KEY; // unedited placeholder
@@ -120,8 +123,8 @@ export function getWonderCore() {
   if (!g.__wonderCore) {
     loadUserEnv();
     g.__wonderCore = createWonderCore();
-    const { mode } = g.__wonderCore.state;
-    console.log(`[wonder] API ready (${mode === 'claude' ? 'Claude mode' : 'demo mode: set ANTHROPIC_API_KEY to use Claude'})`);
+    const { mode, videos } = g.__wonderCore.status();
+    console.log(`[wonder] API ready (${mode === 'claude' ? 'Claude mode' : 'demo mode: set ANTHROPIC_API_KEY to use Claude'}; videos: ${videos === 'youtube' ? 'YouTube' : videos === 'demo' ? 'demo clips (set YOUTUBE_API_KEY for live search)' : 'off'})`);
   }
   return g.__wonderCore;
 }

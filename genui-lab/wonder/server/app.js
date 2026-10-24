@@ -48,7 +48,9 @@ import { lintLesson, critiqueLesson, applyQuizFixes, qualityReport } from './cri
 import { createGrader } from './grader.js'; // Phase 8
 import { SOCRATIC_TUTOR_MODE } from './prompts-extra.js'; // Phase 8
 import { pageCount } from '../public/steering-core.js';
-import { createCommonsLookup, createFigureResolver, createFigureCheck, withFigures, FIGURE_SETTLE_MS, FIGURE_CHECK_MODEL } from './figures.js'; // media: <Figure/> images
+import { createCommonsLookup, createFigureResolver, createFigureCheck, FIGURE_SETTLE_MS, FIGURE_CHECK_MODEL } from './figures.js'; // media: <Figure/> images
+import { createYouTubeLookup, createDemoVideoLookup, createVideoResolver } from './videos.js'; // media: <Video/> clips
+import { combineResolvers, withResolved } from './media-resolver.js';
 import { createInflight, createTurnLedger, cleanKey, retryNote } from './retry.js'; // recoverable streams
 // account sync + Web Push
 import { createSyncFromEnv } from './sync/index.js';
@@ -245,6 +247,14 @@ export function createWonderCore(opts = {}) {
   const figureVerifyFor = () => (figureCheckOpt && state.mode === 'claude' && state.client ? figureVerify : null);
   // which check runs now (the eval report records it): the model id, 'custom', or null when off
   Object.defineProperty(state, 'figureCheck', { get: () => (figureVerifyFor() ? (typeof figureCheckOpt === 'function' ? 'custom' : figureCheckModel) : null) });
+  // <Video/> clips come from the YouTube Data API (YOUTUBE_API_KEY). Without a key, demo mode
+  // plays the demo lessons' fixture clips and Claude mode leaves Videos out; WONDER_VIDEOS=off
+  // (or videoLookup: null) skips the network.
+  const liveVideoLookup = opts.videoLookup !== undefined ? opts.videoLookup : env.WONDER_VIDEOS === 'off' ? null : createYouTubeLookup({ apiKey: env.YOUTUBE_API_KEY });
+  const demoVideoLookup = opts.videoLookup !== undefined || env.WONDER_VIDEOS === 'off' ? null : createDemoVideoLookup();
+  const videoLookup = () => liveVideoLookup || (state.mode === 'demo' ? demoVideoLookup : null);
+  const videoSource = () => (liveVideoLookup ? 'youtube' : videoLookup() ? 'demo' : 'off');
+  const videoCache = new Map();
 
   function switchToDemo(reason) {
     state.mode = 'demo';
@@ -258,8 +268,8 @@ export function createWonderCore(opts = {}) {
    * `heartbeatMs` keeps the connection visibly alive (parsers skip blank lines), so the
    * client's idle watchdog only fires on a dead connection.
    *
-   * Every DIL stream (lesson, tutor, Teacher) resolves its <Figure/>s: a lookup that lands
-   * mid-stream re-sends the program (writer.refresh), and settleFigures runs before complete.
+   * Every DIL stream (lesson, tutor, Teacher) resolves its <Figure/>s and <Video/>s: a lookup
+   * that lands mid-stream re-sends the program (writer.refresh), and settleMedia runs before complete.
    */
   function startNdjson(t, { record, retryKey, appData, appDataFor, ...writerOpts } = {}) {
     const claim = retryKey ? inflight.claim(ownKey(retryKey)) : null;
@@ -274,27 +284,30 @@ export function createWonderCore(opts = {}) {
     if (recordDir && record) {
       try { fs.mkdirSync(recordDir, { recursive: true }); tee = fs.createWriteStream(path.join(recordDir, `${record}-${new Date().toISOString().replace(/[:.]/g, '-')}.ndjson`)); io.onClose(() => tee.end()); } catch { tee = null; }
     }
-    const figures = createFigureResolver({ lookup: figureLookup, verify: figureVerifyFor(), logger, cache: figureCache, signal });
-    writer = createTurnWriter({ write: (s) => { io.write(s); tee?.write(s); }, ...writerOpts, appDataFor: withFigures(appDataFor || (() => appData), figures) });
+    const media = combineResolvers([
+      createFigureResolver({ lookup: figureLookup, verify: figureVerifyFor(), logger, cache: figureCache, signal }),
+      createVideoResolver({ lookup: videoLookup(), logger, cache: videoCache, signal }),
+    ]);
+    writer = createTurnWriter({ write: (s) => { io.write(s); tee?.write(s); }, ...writerOpts, appDataFor: withResolved(appDataFor || (() => appData), media) });
     let queued = false;
-    figures.onUpdate(() => {
+    media.onUpdate(() => {
       if (queued) return;
       queued = true;
       queueMicrotask(() => {
         queued = false;
         if (writer.finished || signal.aborted) return;
-        try { writer.refresh(); } catch (err) { logger.warn?.(`[wonder] figure refresh failed: ${err?.message || err}`); }
+        try { writer.refresh(); } catch (err) { logger.warn?.(`[wonder] media refresh failed: ${err?.message || err}`); }
       });
     });
-    return { writer, signal, figures };
+    return { writer, signal, media };
   }
-  /** Before the final record: wait briefly for image lookups, then report the rest as not found. */
-  async function settleFigures(writer, figures, signal) {
-    if (figures.pending && !signal.aborted) {
-      writer.reasoning('Finding images…', { icon: 'image' });
-      await figures.settle(figureSettleMs);
+  /** Before the final record: wait briefly for image and video lookups, then report the rest as not found. */
+  async function settleMedia(writer, media, signal) {
+    if (media.pending && !signal.aborted) {
+      writer.reasoning(media.label, { icon: 'image' });
+      await media.settle(figureSettleMs);
     }
-    figures.finalize();
+    media.finalize();
   }
 
   /** Run Claude, falling back to demo on missing credentials. Returns 'done' | 'demo' | 'failed'. */
@@ -368,7 +381,7 @@ export function createWonderCore(opts = {}) {
     // a continuation seeds the kept pages' sources and numbers new refs after theirs
     const sources = cont ? createContinuationSources({ turnIndex: 0, kept: cont.kept, seed: cont.sources }) : createSourceRegistry({ turnIndex: 0 });
     const streamKey = cleanKey(body.streamKey);
-    const { writer, signal, figures } = startNdjson(t, { record: 'lesson', retryKey: streamKey && `lesson:${streamKey}`, appDataFor: citationAppData(sources), ...(cont?.messageId ? { messageId: cont.messageId } : {}) });
+    const { writer, signal, media } = startNdjson(t, { record: 'lesson', retryKey: streamKey && `lesson:${streamKey}`, appDataFor: citationAppData(sources), ...(cont?.messageId ? { messageId: cont.messageId } : {}) });
     writer.start();
     if (cont) applyContinue(writer, cont);
     else writer.reasoning('Planning the lesson…');
@@ -443,7 +456,7 @@ export function createWonderCore(opts = {}) {
       if (body.verify !== false && !signal.aborted) {
         await verifyLesson(writer, { topic, level, sources, signal, useClaude: state.mode === 'claude' && !result.refused && !result.truncated });
       }
-      await settleFigures(writer, figures, signal);
+      await settleMedia(writer, media, signal);
       if (!signal.aborted) writer.complete({ truncated: result.truncated });
     }
     t.end();
@@ -497,7 +510,7 @@ export function createWonderCore(opts = {}) {
     const useWebSearch = body.useWebSearch === true; // Phase 3: off for the tutor unless asked
     const sources = createSourceRegistry({ turnIndex: Math.floor(history.length / 2) + 1 });
     const streamKey = cleanKey(body.streamKey);
-    const { writer, signal, figures } = startNdjson(t, { record: 'tutor', retryKey: streamKey && `tutor:${streamKey}`, appDataFor: citationAppData(sources) });
+    const { writer, signal, media } = startNdjson(t, { record: 'tutor', retryKey: streamKey && `tutor:${streamKey}`, appDataFor: citationAppData(sources) });
     writer.start();
     writer.reasoning('Thinking about your question…');
     const onText = (t) => writer.append(t);
@@ -517,7 +530,7 @@ export function createWonderCore(opts = {}) {
       result = { status: r.aborted ? 'aborted' : 'done', truncated: false };
     }
     if (result.status === 'done') finishGrounded(writer, sources);
-    if (result.status === 'done') await settleFigures(writer, figures, signal);
+    if (result.status === 'done') await settleMedia(writer, media, signal);
     if (result.status === 'done') writer.complete({ truncated: result.truncated, defaultFollowups: result.refused ? [] : DEFAULT_TUTOR_FOLLOWUPS });
     t.end();
   }
@@ -577,7 +590,7 @@ export function createWonderCore(opts = {}) {
     const appData = { opGenui: { componentResults: {}, modelDataBindings: {} } };
     // a retried turn (same turnId) supersedes the attempt it replaces and replays its tool calls
     const turnId = cleanKey(body.turnId);
-    const { writer, signal, figures } = startNdjson(t, { appData, record: 'teacher', retryKey: turnId && `teacher:${turnId}` });
+    const { writer, signal, media } = startNdjson(t, { appData, record: 'teacher', retryKey: turnId && `teacher:${turnId}` });
     const turn = turnId ? teacherTurns.open(ownKey(turnId)) : null;
     writer.start({ conversationId: threadId });
     writer.reasoning('Thinking…');
@@ -624,7 +637,7 @@ export function createWonderCore(opts = {}) {
       }
     }
     if (result.refused) writer.append(REFUSAL_MESSAGE);
-    await settleFigures(writer, figures, signal);
+    await settleMedia(writer, media, signal);
     if (signal.aborted) return t.end();
     writer.complete({ truncated: result.truncated, defaultFollowups: result.refused ? [] : DEFAULT_TEACHER_FOLLOWUPS });
     t.end();
@@ -717,7 +730,7 @@ export function createWonderCore(opts = {}) {
     'GET /api/cron/reminders': cronReminders,
   };
 
-  const status = () => ({ mode: state.mode, model: MODEL, ...(state.mode === 'demo' ? { demoReason: state.demoReason } : {}) });
+  const status = () => ({ mode: state.mode, model: MODEL, videos: videoSource(), ...(state.mode === 'demo' ? { demoReason: state.demoReason } : {}) });
 
   /** Run one API request. Resolves when the response has ended; a 404 for unknown API paths. */
   async function handle(method, pathname, body, t) {
