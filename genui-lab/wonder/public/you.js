@@ -83,9 +83,11 @@ function accountPanel(ctx) {
           : st.state === 'error' ? `Could not sync (${st.error || 'error'}). Retrying.`
             : st.state === 'unavailable' ? 'Sync is unavailable on this server right now; this browser keeps your changes.'
               : st.at ? `Synced ${ago(st.at)}${pending ? ` · ${pending} waiting` : ''}.` : 'Connecting…';
+      const usageLine = el('p', { class: 'muted small', style: { margin: '4px 0 0' } });
       body.replaceChildren(row(accountLabel() ? `Signed in as ${accountLabel()}` : 'Signed in', `${line} Lessons, cards, progress, memory and material are kept in your account.`,
         btn('Sync now', 'btn-secondary', async () => { await syncEngine()?.syncNow(); toast('Synced'); }),
-        btn('Sign out', 'btn-secondary', async () => { if (await signOut()) toast('Signed out'); })));
+        btn('Sign out', 'btn-secondary', async () => { if (await signOut()) toast('Signed out'); })), usageLine);
+      showUsage(usageLine);
     }
   };
   draw();
@@ -93,6 +95,17 @@ function accountPanel(ctx) {
   const timer = setInterval(draw, 30_000);
   ctx.teardown?.push(() => { off(); clearInterval(timer); });
   return sec;
+}
+
+/** Today's use of the daily caps (server/usage.js), from /api/account; empty when there are none. */
+async function showUsage(line) {
+  let u = null;
+  try { u = (await (await fetch('/api/account', { headers: { Accept: 'application/json' } })).json()).usage; } catch {}
+  const kinds = u?.kinds || {};
+  const part = (k, noun) => (kinds[k]?.max != null ? `${kinds[k].used} of ${kinds[k].max} ${noun}` : null);
+  const parts = [part('lesson', 'lessons'), part('tutor', 'tutor messages'), part('teacher', 'Teacher messages')].filter(Boolean);
+  line.textContent = parts.length ? `Today: ${parts.join(' · ')}. Resets at midnight UTC.` : '';
+  line.hidden = !parts.length;
 }
 
 /** A row with a switch. */

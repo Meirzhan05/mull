@@ -383,13 +383,13 @@ Interactive widgets keep their state across reloads and when a lesson is reopene
 - **Server-side widget state is in memory** (quiz answers per resolution id). The client persists `componentResults` with each lesson, so reloads still restore it, but a server restart forgets its copy.
 - **One sandbox worker per surface**: the lesson plus each tutor reply. Very long tutor threads therefore start many workers. They are terminated when you leave the lesson.
 - **Tutor replies are not lesson-specific in demo mode.** They are templates that use the lesson's KeyTerms and Quiz. Any other topic streams one of the three sample lessons.
-- **No accounts or sync.** Courses, lessons, the deck and XP live in this browser's localStorage, and the app falls back to in-memory storage when localStorage is blocked.
+- **Accounts are optional.** Without Clerk and a database, courses, lessons, the deck and XP live in this browser's localStorage, and the app falls back to in-memory storage when localStorage is blocked. With them, see [Accounts, sync and daily limits](#accounts-sync-and-daily-limits).
 - **Multi-tab is safe.**
   - The cross-tab lock keeps two tabs from streaming the same lesson.
   - `store.js` writes with a three-way merge per lesson, thread, course and plan, and idle tabs pick up other tabs' saves. So one tab no longer wipes another tab's changes.
   - Without Web Locks, the lease fallback is still exclusive. Acquiring broadcasts a claim, writes the lease, waits a 120 ms settle window and re-checks, and the lowest claim ticket wins ties. `test/lock-race.test.js` races two tabs 100 times; exactly one wins every time.
 - **Teacher history is text.** Earlier turns go back to Claude as markdown with `[Card: …]` notes, not as the original tool_use/tool_result blocks. Card state on the server is in memory, but cards carry their state, so they survive restarts.
-- **Memory is one file for one local learner.** There are no accounts. It is not encrypted; "Forget everything" deletes it.
+- **Without accounts, memory is one file for one local learner.** It is not encrypted; "Forget everything" deletes it. With accounts, each user's memory and material live in their own rows of the database.
 - **Inherited from chatgpt-dil:** a best-effort sandbox lockdown and no SVG `<text>` in the captured client. Flowchart and ConceptMap are therefore laid out with boxes rather than drawn edges. Wonder's host adds an `svg-text` primitive for `Diagram` labels.
 - **Figure needs the network and Wikimedia.** The server queries Wikimedia Commons, and the learner's browser loads the image from `upload.wikimedia.org` / `thumb.wikimedia.org` (no referrer). Offline, or with `WONDER_FIGURES=off`, Figures are left out and the lesson reads without them. Claude never sees the picture when it writes, so captions are written to be true of any good image of the subject; the vision check then drops an image that does not fit.
 - **Video needs a YouTube key, the network and YouTube.** Without `YOUTUBE_API_KEY`, Claude-mode lessons leave Videos out; demo mode plays only the demo lesson's fixture clip. Each new lookup costs 101 of the key's 10,000 free daily quota units (about 100 new clips a day; repeats are cached). Segments come from a video's chapters, not its captions (the Data API lets only a video's owner download captions), so a video without matching chapters plays from its start, capped at 3 minutes. Pausing at the clip's end uses the player's `postMessage` events (the protocol YouTube's IFrame API uses, not separately documented); if they never arrive, "I watched it" opens the questions. Saved lessons keep the clip's title and channel; YouTube's API policies limit how long such data may be stored, which a production deployment would need to handle.
@@ -833,4 +833,49 @@ Three catalog components put pictures or video next to the explanation.
   - **The page-visual rule.** The second run had one page whose only visual was a Figure (the lint's `visual_per_page` failed). The added rule fixed it in the third run.
   - **Critic.** In these runs it flagged Diagram problems the lint cannot see: "to lungs/to body" arrows leaving the bottom of the ventricles, an earthquake epicenter drawn off to the side of its focus, and a Diagram step's arithmetic (a 44 mm image does not fit a 36 mm sensor "sideways").
   - **Remaining format misses.** Mostly `key_terms`: lessons use 6-7 distinct KeyTerms where the lint wants 2-5.
+
+## Accounts, sync and daily limits
+
+Accounts are off unless **both** Clerk keys and a database are set. Without them Wonder runs exactly as before: browser-only, one local learner.
+
+**Settings.** These go in `.env`, `.env.local` or `~/.config/wonder/.env`:
+- `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` and `CLERK_SECRET_KEY`, from the Clerk dashboard's **API keys** page. Copy the secret with the copy button: the shortened `sk_test_…` text the dashboard displays is not the key.
+- `DATABASE_URL`, a Postgres connection string such as Neon via the Vercel Marketplace. Or set `WONDER_SYNC_DB=memory` to try accounts with data that lasts until the server stops.
+
+`next.config.mjs` loads `~/.config/wonder/.env` at startup, because the Clerk keys must be set before `proxy.js` and `app/layout.js` decide whether accounts are on. Restart the dev server after changing them.
+
+**Sign-in.**
+- Clerk's prebuilt dialog handles sign-in. Turn on Google (or other providers) in the Clerk dashboard.
+- Only `ClerkProvider` may load Clerk in the browser, because it attaches the dialog's UI. `public/account.js` waits for it rather than calling `Clerk.load()` itself.
+
+**Sync.**
+- Each signed-in browser keeps a cache in IndexedDB and syncs it through `POST /api/sync`. The server keeps a revision counter per user and merges conflicting edits.
+- Memory and material belong to the signed-in user.
+- The database tables are created on first use.
+
+**Who may use Claude** (`server/usage.js`). With accounts on:
+- **Sign-in required.** Every route that calls Claude needs a signed-in user: lessons, tutor, Teacher, course plans, card and memory extraction, and free-response grading. A signed-out request gets `401 {signedOut: true}`, and the lesson page shows **Sign in to start this lesson** with a Sign in button.
+- **Daily caps.** In Claude mode, each user has these caps per UTC day:
+
+| Kind | Default | Override |
+|---|---|---|
+| Lessons (new, steer, resume, revise) | 20 | `WONDER_LIMIT_LESSON` |
+| Tutor messages | 100 | `WONDER_LIMIT_TUTOR` |
+| Teacher messages | 60 | `WONDER_LIMIT_TEACHER` |
+| Course plans | 10 | `WONDER_LIMIT_COURSE` |
+| Card and memory extractions | 60 | `WONDER_LIMIT_EXTRACT` |
+| Graded free-response answers | 150 | `WONDER_LIMIT_GRADE` |
+
+  `off` or a negative number removes a cap, and `0` turns that kind off.
+- **Counting.** Counts live in the database (`wonder_usage`, one atomic upsert per request), so they hold across serverless instances.
+- **Over the cap.** A request over its cap gets `429` with `{limited: {kind, max, resetsAt}}`. The browser does not retry it (a plain 429, Claude being busy, still is) and says when the cap resets.
+- **Retries.** A dropped stream's automatic retries (same `streamKey`/`turnId`) are free twice within 10 minutes; reusing a key beyond that is charged.
+- **Database errors** fail open and are logged, so a hiccup never locks everyone out.
+- **Where caps don't apply.** Demo mode has no caps, since it costs nothing. Without accounts there is neither sign-in nor caps.
+- **You page.** The signed-in account card shows today's use.
+
+**Tests.**
+- `test/usage.test.js`: caps per user, kind and day; free retries and their bounds; failing open; 401 and 429 over HTTP; demo mode and accounts off; non-retryable errors in the browser.
+- `test/sync*.test.js`: sync, authorization and statement scoping.
+- **Live checks.** Sign-in with Google, sync of a generated lesson to Neon, and the Postgres cap under 4 concurrent requests (exactly the cap got through).
 

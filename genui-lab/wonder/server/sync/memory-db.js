@@ -8,7 +8,7 @@ export function createMemoryDb() {
   const users = new Map(); // userId -> {rev, records: Map, subs: Map, reminders: Set, files: Map}
   const locks = new Map(); // userId -> tail of the transaction queue
   const user = (id) => {
-    if (!users.has(id)) users.set(id, { rev: 0, records: new Map(), subs: new Map(), reminders: new Set(), files: new Map() });
+    if (!users.has(id)) users.set(id, { rev: 0, records: new Map(), subs: new Map(), reminders: new Set(), files: new Map(), usage: new Map() });
     return users.get(id);
   };
   const copy = (r) => ({ ...r });
@@ -82,6 +82,20 @@ export function createMemoryDb() {
       if (u.reminders.has(day)) return false;
       u.reminders.add(day);
       return true;
+    },
+    // -- daily usage caps (server/usage.js)
+    async useQuota(userId, day, kind, max) {
+      const u = user(userId);
+      const k = `${day}|${kind}`;
+      const n = u.usage.get(k) || 0;
+      if (n >= max) return { ok: false, used: n };
+      u.usage.set(k, n + 1);
+      return { ok: true, used: n + 1 };
+    },
+    async quotaUsed(userId, day) {
+      const out = {};
+      for (const [k, n] of users.get(userId)?.usage || []) if (k.startsWith(`${day}|`)) out[k.slice(day.length + 1)] = n;
+      return out;
     },
     // -- material files
     async putFile(userId, id, { bytes, contentType }) { user(userId).files.set(id, { bytes: Buffer.from(bytes), contentType }); },
