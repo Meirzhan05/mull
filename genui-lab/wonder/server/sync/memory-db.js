@@ -8,7 +8,7 @@ export function createMemoryDb() {
   const users = new Map(); // userId -> {rev, records: Map, subs: Map, reminders: Set, files: Map}
   const locks = new Map(); // userId -> tail of the transaction queue
   const user = (id) => {
-    if (!users.has(id)) users.set(id, { rev: 0, records: new Map(), subs: new Map(), reminders: new Set(), files: new Map(), usage: new Map() });
+    if (!users.has(id)) users.set(id, { rev: 0, records: new Map(), subs: new Map(), reminders: new Set(), files: new Map(), usage: new Map(), plan: null });
     return users.get(id);
   };
   const copy = (r) => ({ ...r });
@@ -97,6 +97,9 @@ export function createMemoryDb() {
       for (const [k, n] of users.get(userId)?.usage || []) if (k.startsWith(`${day}|`)) out[k.slice(day.length + 1)] = n;
       return out;
     },
+    // -- Free/Pro plans (server/plans.js)
+    async getPlan(userId) { const p = users.get(userId)?.plan; return p ? { ...p } : null; },
+    async setPlan(userId, p) { user(userId).plan = { ...p }; },
     // -- material files
     async putFile(userId, id, { bytes, contentType }) { user(userId).files.set(id, { bytes: Buffer.from(bytes), contentType }); },
     async getFile(userId, id) { const f = users.get(userId)?.files.get(id); return f ? { bytes: Buffer.from(f.bytes), contentType: f.contentType } : null; },

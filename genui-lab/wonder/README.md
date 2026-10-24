@@ -390,7 +390,7 @@ Interactive widgets keep their state across reloads and when a lesson is reopene
 - **Server-side widget state is in memory** (quiz answers per resolution id). The client persists `componentResults` with each lesson, so reloads still restore it, but a server restart forgets its copy.
 - **One sandbox worker per surface**: the lesson plus each tutor reply. Very long tutor threads therefore start many workers. They are terminated when you leave the lesson.
 - **Tutor replies are not lesson-specific in demo mode.** They are templates that use the lesson's KeyTerms and Quiz. Any other topic streams one of the three sample lessons.
-- **Accounts are optional.** Without Neon Auth and a database, courses, lessons, the deck and XP live in this browser's localStorage, and the app falls back to in-memory storage when localStorage is blocked. With them, see [Accounts, sync and daily limits](#accounts-sync-and-daily-limits).
+- **Accounts are optional.** Without Neon Auth and a database, courses, lessons, the deck and XP live in this browser's localStorage, and the app falls back to in-memory storage when localStorage is blocked. With them, see [Accounts, sync, daily limits and plans](#accounts-sync-daily-limits-and-plans).
 - **Multi-tab is safe.**
   - The cross-tab lock keeps two tabs from streaming the same lesson.
   - `store.js` writes with a three-way merge per lesson, thread, course and plan, and idle tabs pick up other tabs' saves. So one tab no longer wipes another tab's changes.
@@ -841,7 +841,7 @@ Three catalog components put pictures or video next to the explanation.
   - **Critic.** In these runs it flagged Diagram problems the lint cannot see: "to lungs/to body" arrows leaving the bottom of the ventricles, an earthquake epicenter drawn off to the side of its focus, and a Diagram step's arithmetic (a 44 mm image does not fit a 36 mm sensor "sideways").
   - **Remaining format misses.** Mostly `key_terms`: lessons use 6-7 distinct KeyTerms where the lint wants 2-5.
 
-## Accounts, sync and daily limits
+## Accounts, sync, daily limits and plans
 
 Accounts are off unless **both** Neon Auth and a database are set. Without them Wonder runs exactly as before: browser-only, one local learner.
 
@@ -865,27 +865,34 @@ Accounts are off unless **both** Neon Auth and a database are set. Without them 
 
 **Who may use Claude** (`server/usage.js`). With accounts on:
 - **Sign-in required.** Every route that calls Claude needs a signed-in user: lessons, tutor, Teacher, course plans, card and memory extraction, and free-response grading. A signed-out request gets `401 {signedOut: true}`, and the lesson page shows **Sign in to start this lesson** with a Sign in button. A new lesson refused this way is not kept, so it never shows as Failed in Recent. Signing in from that button starts the same topic again on the account; the topic waits in the tab's `sessionStorage` (`wonder.afterSignIn`, up to 30 minutes) across the sign-in reload.
-- **Daily caps.** In Claude mode, each user has these caps per UTC day:
+- **Daily caps.** In Claude mode, each user has these caps per UTC day, by plan (see **Plans** below):
 
-| Kind | Default | Override |
-|---|---|---|
-| Lessons (new, steer, resume, revise) | 20 | `WONDER_LIMIT_LESSON` |
-| Tutor messages | 100 | `WONDER_LIMIT_TUTOR` |
-| Teacher messages | 60 | `WONDER_LIMIT_TEACHER` |
-| Course plans | 10 | `WONDER_LIMIT_COURSE` |
-| Card and memory extractions | 60 | `WONDER_LIMIT_EXTRACT` |
-| Graded free-response answers | 150 | `WONDER_LIMIT_GRADE` |
+| Kind | Free | Pro | Override (Free / Pro) |
+|---|---|---|---|
+| Lessons (new, steer, resume, revise) | 20 | 100 | `WONDER_LIMIT_LESSON` / `WONDER_PRO_LIMIT_LESSON` |
+| Tutor messages | 100 | 500 | `WONDER_LIMIT_TUTOR` / `WONDER_PRO_LIMIT_TUTOR` |
+| Teacher messages | 60 | 300 | `WONDER_LIMIT_TEACHER` / `WONDER_PRO_LIMIT_TEACHER` |
+| Course plans | 10 | 50 | `WONDER_LIMIT_COURSE` / `WONDER_PRO_LIMIT_COURSE` |
+| Card and memory extractions | 60 | 300 | `WONDER_LIMIT_EXTRACT` / `WONDER_PRO_LIMIT_EXTRACT` |
+| Graded free-response answers | 150 | 750 | `WONDER_LIMIT_GRADE` / `WONDER_PRO_LIMIT_GRADE` |
 
   `off` or a negative number removes a cap, and `0` turns that kind off.
 - **Counting.** Counts live in the database (`wonder_usage`, one atomic upsert per request), so they hold across serverless instances.
-- **Over the cap.** A request over its cap gets `429` with `{limited: {kind, max, resetsAt}}`. The browser does not retry it (a plain 429, Claude being busy, still is) and says when the cap resets.
+- **Over the cap.** A request over its cap gets `429` with `{limited: {kind, max, plan, resetsAt}}`. The browser does not retry it (a plain 429, Claude being busy, still is) and says when the cap resets.
 - **Retries.** A dropped stream's automatic retries (same `streamKey`/`turnId`) are free twice within 10 minutes; reusing a key beyond that is charged.
 - **Database errors** fail open and are logged, so a hiccup never locks everyone out.
 - **Where caps don't apply.** Demo mode has no caps, since it costs nothing. Without accounts there is neither sign-in nor caps.
-- **You page.** The signed-in account card shows today's use.
+- **You page.** The signed-in account card shows the plan and today's use.
+
+**Plans** (`server/plans.js`). Every signed-in user is on **Free** unless they are on **Pro**. The plan only decides which daily caps apply.
+- **Who is Pro.** A user whose plan record (`wonder_plans`, one row per user) says `pro` with status `active`, `trialing` or `past_due`, until 3 days after its period end (so a late renewal never drops a payer to Free). Or a user id listed in `WONDER_PRO_USERS`, which comps Pro without a record.
+- **Plan records** are provider-neutral: `{plan, status, provider, customerId, subscriptionId, periodEnd, cancelAtPeriodEnd}`. `createPlans().setPlan()` validates and stores one.
+- **Payments are not wired.** No payment provider is configured, so nobody can buy Pro, `/api/account` sends `billing: null` and the You page has no upgrade button. Adding a provider means a checkout route, a billing-portal route and a webhook that calls `setPlan()`.
+- **Failing safe.** A plan lookup that fails is logged and counts as Free.
 
 **Tests.**
 - `test/usage.test.js`: caps per user, kind and day; free retries and their bounds; failing open; 401 and 429 over HTTP; demo mode and accounts off; non-retryable errors in the browser.
+- `test/plans.test.js`: who is Pro (status, period and grace, comped users), record validation, Pro caps and their overrides, and Pro vs Free over HTTP with the plan on `/api/account`.
 - `test/landing.test.js`: who the home page sends to `/welcome`, with account sync on and off.
 - `test/sync*.test.js`: sync, authorization and statement scoping.
 - **Live checks.** Sign-in with Google, sync of a generated lesson to Neon, and the Postgres cap under 4 concurrent requests (exactly the cap got through).

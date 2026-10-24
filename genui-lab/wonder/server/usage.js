@@ -6,8 +6,10 @@
 // Limits apply only in Claude mode (demo mode costs nothing) and only with accounts on; a local
 // single-user Wonder without accounts is unchanged. Override a cap with WONDER_LIMIT_<KIND>
 // (e.g. WONDER_LIMIT_LESSON=50); "off" or a negative number removes it, 0 blocks the kind.
+// Pro users (server/plans.js) get the higher Pro caps instead, overridden with
+// WONDER_PRO_LIMIT_<KIND>.
 
-/** Default daily caps per user. */
+/** Default daily caps per Free user. */
 export const DEFAULT_LIMITS = Object.freeze({
   lesson: 20, // POST /api/lesson/stream: new lessons, steers, resumes and revisions
   tutor: 100, // POST /api/tutor/stream
@@ -16,6 +18,9 @@ export const DEFAULT_LIMITS = Object.freeze({
   extract: 60, // POST /api/practice/extract and /api/memory/extract (after each lesson)
   grade: 150, // free-response grading (widget action explain_grade)
 });
+
+/** Default daily caps per Pro user. */
+export const DEFAULT_PRO_LIMITS = Object.freeze({ lesson: 100, tutor: 500, teacher: 300, course: 50, extract: 300, grade: 750 });
 
 const NOUN = { lesson: 'lessons', tutor: 'tutor messages', teacher: 'Teacher messages', course: 'course plans', extract: 'card and memory extractions', grade: 'graded answers' };
 
@@ -36,11 +41,12 @@ export function usageKind(method, pathname, body) {
   return typeof k === 'function' ? k(body) : k || null;
 }
 
-/** Daily caps: defaults with WONDER_LIMIT_<KIND> overrides. Infinity means no cap. */
-export function usageLimits(env = process.env) {
+/** A plan's daily caps: defaults with WONDER_LIMIT_<KIND> (Free) or WONDER_PRO_LIMIT_<KIND> (Pro) overrides. Infinity means no cap. */
+export function usageLimits(env = process.env, plan = 'free') {
   const out = {};
-  for (const [kind, def] of Object.entries(DEFAULT_LIMITS)) {
-    const raw = env[`WONDER_LIMIT_${kind.toUpperCase()}`];
+  const pro = plan === 'pro';
+  for (const [kind, def] of Object.entries(pro ? DEFAULT_PRO_LIMITS : DEFAULT_LIMITS)) {
+    const raw = env[`WONDER_${pro ? 'PRO_' : ''}LIMIT_${kind.toUpperCase()}`];
     if (raw == null || String(raw).trim() === '') { out[kind] = def; continue; }
     const s = String(raw).trim().toLowerCase();
     const n = Number(s);
@@ -63,32 +69,34 @@ export const RETRY_WINDOW_MS = 10 * 60 * 1000;
 const hoursLeft = (ms) => { const h = Math.ceil(ms / 3_600_000); return h <= 1 ? 'within the hour' : `in about ${h} hours`; };
 
 /** The 429 body for a used-up cap. `limited` tells the browser not to retry. */
-export function limitBody(kind, max, now = Date.now()) {
+export function limitBody(kind, max, now = Date.now(), plan = 'free') {
   const { resetsAt } = usageDay(now);
   const what = NOUN[kind] || 'requests';
   const error = max === 0
     ? `${what[0].toUpperCase()}${what.slice(1)} are turned off on this server.`
     : `You've used today's ${max} ${what}. More ${hoursLeft(resetsAt - now)} (midnight UTC).`;
-  return { ok: false, error, limited: { kind, max, resetsAt: new Date(resetsAt).toISOString() } };
+  return { ok: false, error, limited: { kind, max, plan, resetsAt: new Date(resetsAt).toISOString() } };
 }
 
 /**
- * Per-user spending gate. `charge(userId, kind, {retryKey})` resolves {ok:true} or
- * {ok:false, body} (send it with HTTP 429). The browser retries a dropped stream with the same
+ * Per-user spending gate. `charge(userId, kind, {retryKey, plan})` resolves {ok:true} or
+ * {ok:false, body} (send it with HTTP 429). `plan` ('free' or 'pro') picks `limits` or `proLimits`. The browser retries a dropped stream with the same
  * retryKey, so up to RETRY_FREE retries within RETRY_WINDOW_MS of a charged request are free;
  * any reuse beyond that is charged like a new request (a reused key is not a free pass).
  */
-export function createUsageGate({ db, limits = usageLimits(), now = () => Date.now(), logger = console } = {}) {
+export function createUsageGate({ db, limits = usageLimits(), proLimits = limits, now = () => Date.now(), logger = console } = {}) {
+  const capsFor = (plan) => (plan === 'pro' ? proLimits : limits);
   const recent = new Map(); // `${userId}|${kind}|${retryKey}` -> {at, free}, best effort per instance
   const RECENT_MAX = 2000;
   return {
     limits,
-    async charge(userId, kind, { retryKey } = {}) {
-      const max = limits[kind];
+    proLimits,
+    async charge(userId, kind, { retryKey, plan = 'free' } = {}) {
+      const max = capsFor(plan)[kind];
       if (max === undefined || max === Infinity) return { ok: true };
       const t = now();
       const { day } = usageDay(t);
-      if (max <= 0) return { ok: false, body: limitBody(kind, 0, t) };
+      if (max <= 0) return { ok: false, body: limitBody(kind, 0, t, plan) };
       const rk = retryKey ? `${userId}|${kind}|${retryKey}` : null;
       const prev = rk ? recent.get(rk) : null;
       if (prev && t - prev.at < RETRY_WINDOW_MS && prev.free < RETRY_FREE) { prev.free++; return { ok: true, retried: true }; }
@@ -100,7 +108,7 @@ export function createUsageGate({ db, limits = usageLimits(), now = () => Date.n
         logger.warn?.(`[wonder] usage count failed (${kind}): ${e.message}`);
         return { ok: true };
       }
-      if (!r.ok) return { ok: false, body: limitBody(kind, max, t) };
+      if (!r.ok) return { ok: false, body: limitBody(kind, max, t, plan) };
       if (rk) {
         recent.delete(rk);
         recent.set(rk, { at: t, free: 0 });
@@ -108,11 +116,11 @@ export function createUsageGate({ db, limits = usageLimits(), now = () => Date.n
       }
       return { ok: true, used: r.used };
     },
-    /** Today's counts for one user (the You page). */
-    async today(userId) {
+    /** Today's counts for one user on their plan (the You page). */
+    async today(userId, plan = 'free') {
       const { day, resetsAt } = usageDay(now());
       const used = await db.quotaUsed(userId, day).catch(() => ({}));
-      return { day, resetsAt: new Date(resetsAt).toISOString(), kinds: Object.fromEntries(Object.entries(limits).map(([k, max]) => [k, { used: used[k] || 0, max: max === Infinity ? null : max }])) };
+      return { day, plan, resetsAt: new Date(resetsAt).toISOString(), kinds: Object.fromEntries(Object.entries(capsFor(plan)).map(([k, max]) => [k, { used: used[k] || 0, max: max === Infinity ? null : max }])) };
     },
   };
 }

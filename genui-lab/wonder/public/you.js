@@ -84,11 +84,11 @@ function accountPanel(ctx) {
           : st.state === 'error' ? `Could not sync (${st.error || 'error'}). Retrying.`
             : st.state === 'unavailable' ? 'Sync is unavailable on this server right now; this browser keeps your changes.'
               : st.at ? `Synced ${ago(st.at)}${pending ? ` · ${pending} waiting` : ''}.` : 'Connecting…';
-      const usageLine = el('p', { class: 'muted small', style: { margin: '4px 0 0' } });
+      const planRow = el('div', { class: 'setting', hidden: true });
       body.replaceChildren(row(accountLabel() ? `Signed in as ${accountLabel()}` : 'Signed in', `${line} Lessons, cards, progress, memory and material are kept in your account.`,
         btn('Sync now', 'btn-secondary', async () => { await syncEngine()?.syncNow(); toast('Synced'); }),
-        btn('Sign out', 'btn-secondary', async () => { if (await signOut()) toast('Signed out'); })), usageLine);
-      showUsage(usageLine);
+        btn('Sign out', 'btn-secondary', async () => { if (await signOut()) toast('Signed out'); })), planRow);
+      showPlan(planRow);
     }
   };
   draw();
@@ -98,15 +98,29 @@ function accountPanel(ctx) {
   return sec;
 }
 
-/** Today's use of the daily caps (server/usage.js), from /api/account; empty when there are none. */
-async function showUsage(line) {
-  let u = null;
-  try { u = (await (await fetch('/api/account', { headers: { Accept: 'application/json' } })).json()).usage; } catch {}
-  const kinds = u?.kinds || {};
+const shortDate = (iso) => new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+
+/**
+ * The account's plan (server/plans.js) and today's use of its daily caps (server/usage.js), from
+ * /api/account. Hidden when the server sends no plan. No upgrade button until payments are wired.
+ */
+async function showPlan(row) {
+  let a = null;
+  try { a = await (await fetch('/api/account', { headers: { Accept: 'application/json' } })).json(); } catch {}
+  if (!a?.plan) return;
+  const { plan, usage } = a;
+  const kinds = usage?.kinds || {};
   const part = (k, noun) => (kinds[k]?.max != null ? `${kinds[k].used} of ${kinds[k].max} ${noun}` : null);
   const parts = [part('lesson', 'lessons'), part('tutor', 'tutor messages'), part('teacher', 'Teacher messages')].filter(Boolean);
-  line.textContent = parts.length ? `Today: ${parts.join(' · ')}. Resets at midnight UTC.` : '';
-  line.hidden = !parts.length;
+  const standing = plan.source === 'comped' ? 'Given to you by this Wonder server.'
+    : plan.endsAt ? `Ends ${shortDate(plan.endsAt)}.`
+      : plan.renewsAt ? `Renews ${shortDate(plan.renewsAt)}.`
+        : plan.id === 'pro' ? '' : 'Every account starts here.';
+  const today = parts.length ? `Today: ${parts.join(' · ')}. Resets at midnight UTC.` : '';
+  row.replaceChildren(el('div', { class: 'setting-text' },
+    el('strong', null, `${plan.name} plan`),
+    el('p', { class: 'muted small' }, [standing, today].filter(Boolean).join(' '))));
+  row.hidden = false;
 }
 
 /** A row with a switch. */

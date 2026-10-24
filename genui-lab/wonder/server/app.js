@@ -12,7 +12,7 @@
 //   POST /api/teacher/stream    -> conversation-source NDJSON (Teacher turn: tool loop, cards in componentResults)
 //   GET/POST/DELETE /api/memory -> learner memory items
 //   POST /api/memory/extract    -> 0-3 new memory facts from a finished lesson
-//   GET  /api/account           -> {sync, signedIn, push} (account sync: server/sync/)
+//   GET  /api/account           -> {sync, signedIn, plan, billing, usage, push} (account sync: server/sync/)
 //   POST /api/sync              -> push changed records, pull newer ones (signed in)
 //   POST/DELETE /api/push/subscribe -> this browser's Web Push subscription (signed in)
 //   GET  /api/cron/reminders    -> daily reminders over Web Push (Vercel Cron, CRON_SECRET)
@@ -58,6 +58,7 @@ import { SYNC_BODY_LIMIT } from './sync/service.js';
 import { loadUserMemory, signedOutMemory, userMaterials, signedOutMaterials } from './sync/user-stores.js';
 import { pushConfig, webPushSender, sendDueReminders } from './push.js';
 import { usageKind, usageLimits, createUsageGate } from './usage.js'; // sign-in + daily caps for Claude routes
+import { createPlans } from './plans.js'; // Free/Pro: which daily caps apply
 
 export const STATIC_ROOTS = [
   { prefix: '/chatgpt-dil/src/', dir: path.join(LAB_ROOT, 'chatgpt-dil', 'src'), exts: new Set(['.js', '.css']) },
@@ -200,6 +201,9 @@ export function createWonderCore(opts = {}) {
   const push = opts.push !== undefined ? opts.push : pushConfig(env);
   const scopes = new AsyncLocalStorage();
   let usage = opts.usage ?? null; // per-user daily caps on Claude routes (server/usage.js), made on first use
+  let plans = opts.plans ?? null; // Free/Pro per user (server/plans.js), made on first use
+  const usageGate = (sync) => (usage ??= createUsageGate({ db: sync.db, limits: usageLimits(env), proLimits: usageLimits(env, 'pro'), logger }));
+  const userPlans = (sync) => (plans ??= createPlans({ db: sync.db, env, logger }));
   const scoped = (name, local) => new Proxy({}, {
     get(_, k) {
       const target = scopes.getStore()?.[name] ?? local();
@@ -749,8 +753,8 @@ export function createWonderCore(opts = {}) {
     if (spend) {
       if (!userId) return t.json(401, { ok: false, error: 'Sign in to use Wonder: lessons, the tutor and the Teacher need an account.', signedOut: true });
       if (state.mode === 'claude') {
-        usage ??= createUsageGate({ db: sync.db, limits: usageLimits(env), logger });
-        const r = await usage.charge(userId, spend, { retryKey: cleanKey(body?.streamKey) || cleanKey(body?.turnId) });
+        const plan = await userPlans(sync).planId(userId);
+        const r = await usageGate(sync).charge(userId, spend, { retryKey: cleanKey(body?.streamKey) || cleanKey(body?.turnId), plan });
         if (!r.ok) return t.json(429, r.body);
       }
     }
@@ -780,12 +784,14 @@ export function createWonderCore(opts = {}) {
   async function account(t) {
     const sync = await syncReady;
     const userId = sync && typeof t.userId === 'string' && t.userId ? t.userId : null;
+    const plan = userId ? await userPlans(sync).describe(userId) : null;
     t.json(200, {
       ok: true,
       sync: !!sync,
       signedIn: !!userId,
-      ...(userId ? { userId, records: await sync.count(userId) } : {}),
-      ...(userId && state.mode === 'claude' ? { usage: await (usage ??= createUsageGate({ db: sync.db, limits: usageLimits(env), logger })).today(userId) } : {}),
+      // billing: what the browser may offer; null while no payment provider is wired
+      ...(userId ? { userId, records: await sync.count(userId), plan, billing: userPlans(sync).billing } : {}),
+      ...(userId && state.mode === 'claude' ? { usage: await usageGate(sync).today(userId, plan.id) } : {}),
       push: sync && push ? { publicKey: push.publicKey } : null,
     });
   }

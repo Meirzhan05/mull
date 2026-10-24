@@ -44,6 +44,17 @@ CREATE TABLE IF NOT EXISTS wonder_usage (
   count integer NOT NULL DEFAULT 0,
   PRIMARY KEY (user_id, day, kind)
 );
+CREATE TABLE IF NOT EXISTS wonder_plans (
+  user_id text PRIMARY KEY,
+  plan text NOT NULL,
+  status text NOT NULL,
+  provider text,
+  customer_id text,
+  subscription_id text,
+  period_end timestamptz,
+  cancel_at_period_end boolean NOT NULL DEFAULT false,
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
 CREATE TABLE IF NOT EXISTS wonder_files (
   user_id text NOT NULL,
   id text NOT NULL,
@@ -183,6 +194,19 @@ export function createPgDb({ pool, blob = null }) {
     async quotaUsed(userId, day) {
       const { rows } = await q('SELECT kind, count FROM wonder_usage WHERE user_id = $1 AND day = $2', [userId, day]);
       return Object.fromEntries(rows.map((r) => [r.kind, Number(r.count)]));
+    },
+    // -- Free/Pro plans (server/plans.js)
+    async getPlan(userId) {
+      const { rows: [r] } = await q('SELECT plan, status, provider, customer_id, subscription_id, period_end, cancel_at_period_end FROM wonder_plans WHERE user_id = $1', [userId]);
+      return r ? { plan: r.plan, status: r.status, provider: r.provider, customerId: r.customer_id, subscriptionId: r.subscription_id, periodEnd: r.period_end ? new Date(r.period_end).getTime() : null, cancelAtPeriodEnd: r.cancel_at_period_end } : null;
+    },
+    async setPlan(userId, p) {
+      await q(
+        `INSERT INTO wonder_plans (user_id, plan, status, provider, customer_id, subscription_id, period_end, cancel_at_period_end, updated_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now())
+         ON CONFLICT (user_id) DO UPDATE SET plan = EXCLUDED.plan, status = EXCLUDED.status, provider = EXCLUDED.provider, customer_id = EXCLUDED.customer_id,
+           subscription_id = EXCLUDED.subscription_id, period_end = EXCLUDED.period_end, cancel_at_period_end = EXCLUDED.cancel_at_period_end, updated_at = now()`,
+        [userId, p.plan, p.status, p.provider, p.customerId, p.subscriptionId, p.periodEnd == null ? null : new Date(p.periodEnd), p.cancelAtPeriodEnd]);
     },
     async putFile(userId, id, { bytes, contentType }) {
       let blobPath = null;
