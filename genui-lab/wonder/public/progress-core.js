@@ -137,6 +137,14 @@ function courseNext(data, course, skipId = null) {
 }
 
 /** Course progress {done, total} (finished lessons). */
+/** The lessons opened most recently, newest first. */
+export function recentLessons(data, count) {
+  return Object.values(data.lessons).sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || '')).slice(0, count);
+}
+
+/** A lesson's state for lists: [css class, label]. */
+export const lessonState = (l) => (l.finished ? ['done', 'Finished'] : l.status === 'complete' ? ['ready', l.readPage > 1 ? `Page ${l.readPage}` : 'In progress'] : l.status === 'failed' ? ['warn', 'Failed'] : ['', l.status === 'new' ? 'Not started' : 'Unfinished']);
+
 export function courseProgress(data, course) {
   const { done, total } = courseNext(data, course);
   return { done, total };
