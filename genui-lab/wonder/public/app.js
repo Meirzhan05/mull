@@ -1332,6 +1332,13 @@ function route() {
     if (t.trim()) startLesson(t.slice(0, 200));
     return;
   }
+  // #/signin opens sign-in over Today (the landing page's "Sign in" link; a plain / would send a
+  // signed-out visitor back to the landing page).
+  if (h === '#/signin') {
+    location.replace('#/');
+    signIn().catch((err) => toast(err.message || 'Sign-in is not available right now'));
+    return;
+  }
   if ((m = /^#\/lesson\/([\w-]+)$/.exec(h))) { screen = 'lesson'; document.body.dataset.screen = screen; renderLesson(m[1]); }
   else if ((m = /^#\/course\/([\w-]+)$/.exec(h))) { screen = 'course'; document.body.dataset.screen = screen; renderCourse(m[1]); }
   else if (h === '#/review') { screen = 'review'; document.body.dataset.screen = screen; renderReviewScreen(); }

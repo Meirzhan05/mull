@@ -3,10 +3,10 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Wonder · Ask anything. Get a lesson you can touch.</title>
-<meta name="description" content="Wonder turns any question into a short interactive lesson written by Claude, a tutor that asks back, and cards that remember for you.">
+<title>Wonder · Name anything you want to understand</title>
+<meta name="description" content="Name anything you want to understand. Wonder writes you a short lesson as you read, with a tutor beside the text and reviews that help it stay.">
 <meta name="theme-color" content="#0A0A0A">
-<meta property="og:title" content="Wonder · Ask anything. Get a lesson you can touch.">
+<meta property="og:title" content="Wonder · Name anything you want to understand">
 <meta property="og:image" content="/welcome/assets/og.webp">
 <!-- Where "Start a lesson" goes: the app at /, which opens #/learn/<topic> as a new lesson. Served at /welcome (next.config.mjs), so paths here are absolute. -->
 <meta name="wonder-app" content="/">
@@ -33,13 +33,16 @@
     <span>Wonder</span>
   </a>
   <nav class="bar__pages" aria-label="Pages">
-    <a href="#p1" data-seg="p1"><span class="bar__fill"></span><span class="sr">Page 1: You forgot</span></a>
-    <a href="#p2" data-seg="p2"><span class="bar__fill"></span><span class="sr">Page 2: Watch it write</span></a>
-    <a href="#p3" data-seg="p3"><span class="bar__fill"></span><span class="sr">Page 3: It asks back</span></a>
-    <a href="#p4" data-seg="p4"><span class="bar__fill"></span><span class="sr">Page 4: It remembers</span></a>
-    <a href="#p5" data-seg="p5"><span class="bar__fill"></span><span class="sr">Page 5: A plan</span></a>
+    <a href="#p1" data-seg="p1"><span class="bar__fill"></span><span class="sr">Page 1: Anything</span></a>
+    <a href="#p2" data-seg="p2"><span class="bar__fill"></span><span class="sr">Page 2: Written as you read</span></a>
+    <a href="#p3" data-seg="p3"><span class="bar__fill"></span><span class="sr">Page 3: A tutor beside the text</span></a>
+    <a href="#p4" data-seg="p4"><span class="bar__fill"></span><span class="sr">Page 4: Keep it</span></a>
+    <a href="#p5" data-seg="p5"><span class="bar__fill"></span><span class="sr">Page 5: A little every day</span></a>
   </nav>
-  <p class="bar__where sc-nums" id="where" aria-live="off">5 pages · 4 min</p>
+  <div class="bar__end">
+    <p class="bar__where sc-nums" id="where" aria-live="off"></p>
+    <a class="bar__in" id="bar-in" href="/#/">Open Wonder</a>
+  </div>
 </header>
 
 <main id="top">
@@ -49,15 +52,16 @@
     <div data-sc-stage class="sc-stage hero__stage">
       <div class="hero__plane hero__plate" aria-hidden="true"><img src="/welcome/assets/plate.webp" alt="" width="1402" height="1122"></div>
       <div class="hero__copy" data-sc-cue="0 0.42 0 0.16">
-        <h1 id="hero-h" class="sc-display hero__h">Ask anything. Get a lesson you can touch.</h1>
-        <p class="hero__sub">Wonder turns any question into a short interactive lesson, a tutor that asks back, and cards that remember for you.</p>
+        <h1 id="hero-h" class="sc-display hero__h">Name anything you want to understand.</h1>
+        <p class="hero__sub">Wonder's AI writes you a short lesson as you read, with sources and a quiz, then brings it back so it sticks.</p>
         <form class="composer" data-composer>
           <label class="sr" for="topic-1">What do you want to learn?</label>
-          <input id="topic-1" name="topic" type="text" placeholder="What do you want to learn?" autocomplete="off" maxlength="200">
+          <input id="topic-1" name="topic" type="text" placeholder="What do you want to learn?" autocomplete="off" maxlength="200" data-examples>
           <button type="submit">Start a lesson</button>
         </form>
+        <p class="composer__note" data-next data-try hidden></p>
       </div>
-      <p class="hero__beat sc-display" data-sc-cue="0.5 1 0.14 0.05">One question in.<br>Every way to understand it, out.</p>
+      <p class="hero__beat sc-display" data-sc-cue="0.5 1 0.14 0.05">A chat answers once.<br>Wonder teaches it, then brings it back.</p>
       <div class="hero__plane hero__subject" aria-hidden="true">
         <picture>
           <source media="(max-width: 760px)" srcset="/welcome/assets/subject-tall.webp">
@@ -71,25 +75,25 @@
           <svg class="spill__rays" viewBox="0 0 100 100" preserveAspectRatio="none"></svg>
           <div class="frag" style="--hue:#E0452B">
             <p class="frag__k">Quiz</p>
-            <p class="frag__q">Why does Webb mostly use infrared?</p>
+            <p class="frag__q">What does "Rome fell in 476" really mean?</p>
             <span class="frag__opt"></span><span class="frag__opt is-on"></span><span class="frag__opt"></span>
           </div>
           <div class="frag" style="--hue:#F29A30">
-            <p class="frag__k">Bar chart</p>
-            <span class="frag__bar" style="--v:1"></span><span class="frag__bar" style="--v:0.72"></span><span class="frag__bar" style="--v:0.7"></span>
+            <p class="frag__k">Silver in Rome's coin</p>
+            <span class="frag__bar" style="--v:1"></span><span class="frag__bar" style="--v:0.52"></span><span class="frag__bar" style="--v:0.05"></span>
           </div>
           <div class="frag" style="--hue:#3DBB6A">
-            <p class="frag__k">Step 2 of 5</p>
-            <p class="frag__q">Starlight shines through the air</p>
-            <span class="frag__dots"><i class="is-on"></i><i class="is-on"></i><i></i><i></i><i></i></span>
+            <p class="frag__k">Step 2 of 6</p>
+            <p class="frag__q">The Goths cross the Danube (376)</p>
+            <span class="frag__dots"><i class="is-on"></i><i class="is-on"></i><i></i><i></i><i></i><i></i></span>
           </div>
           <div class="frag" style="--hue:#2F7BF5">
             <p class="frag__k">Key term</p>
-            <p class="frag__q"><b>redshift</b> Light stretched to longer, redder waves.</p>
+            <p class="frag__q"><b>debasement</b> Less silver in a coin that claims the same worth.</p>
           </div>
           <div class="frag" style="--hue:#7B5CD6">
             <p class="frag__k">Tutor</p>
-            <p class="frag__q">What happens to light that crosses an expanding universe?</p>
+            <p class="frag__q">If every coin holds less silver, what happens to prices?</p>
           </div>
         </div>
       </div>
@@ -98,80 +102,73 @@
     </div>
   </section>
 
-  <!-- PAGE 1: the chat answer you skimmed. Lines go dim as you pass them. -->
+  <!-- PAGE 1: anything. Rows of real topics (the app's onboarding subjects) drift as you scroll; each starts a lesson. -->
   <section id="p1" class="page p1 sc-section" data-sc-act="flow" data-sc-drift="#0A0A0A" data-page="1" aria-labelledby="p1-h">
-    <div class="sc-wrap p1__grid">
-      <div class="p1__copy sc-stack" data-sc-in data-sc-stagger="70">
-        <h2 id="p1-h" class="sc-display sc-display--md">You asked. It answered. You forgot.</h2>
-        <p class="sc-body">A chat window hands you twelve paragraphs and no reason to stay. You skim, you nod, and a week later the first sentence is all that's left.</p>
-      </div>
-      <figure class="chat" data-sc-in>
-        <p class="chat__q"><span class="sr">You asked: </span>What has the James Webb Space Telescope found?</p>
-        <div class="chat__a" id="wall">
-          <span>The James Webb Space Telescope (JWST), launched in December 2021, has made a number of significant discoveries across several areas of astronomy.</span>
-          <span>In early-universe observations, it has identified galaxies that existed only a few hundred million years after the Big Bang, including MoM-z14 and JADES-GS-z14-0,</span>
-          <span>which challenge existing models of galaxy formation because they appear brighter and more numerous than expected.</span>
-          <span>It has also detected a population of compact red sources, often called "little red dots," whose nature remains debated,</span>
-          <span>with interpretations ranging from rapidly growing black holes to other more exotic objects.</span>
-          <span>In exoplanet science, JWST has returned detailed atmospheric spectra, including the first clear detection of carbon dioxide in an exoplanet atmosphere, on WASP-39 b,</span>
-          <span>along with evidence of sulfur dioxide produced by photochemistry.</span>
-          <span>Its infrared capabilities have also enabled observations of dust-shrouded star-forming regions, protoplanetary disks, and the chemistry of interstellar ices,</span>
-          <span>while ongoing programs continue to refine our understanding of cosmic reionization, galaxy assembly, and the formation of the first stars.</span>
-        </div>
-        <figcaption>An illustrative chat answer.</figcaption>
-      </figure>
+    <div class="sc-wrap p1__head sc-stack" data-sc-in data-sc-stagger="70">
+      <h2 id="p1-h" class="sc-display sc-display--md">Science, money, music, history. Or your own question.</h2>
+      <p class="sc-body">Pick a subject or type anything. Wonder writes for your level and suggests what to read next from the subjects you like.</p>
     </div>
-    <p class="p1__turn sc-wrap sc-display" data-sc-in>So Wonder doesn't answer. It teaches.</p>
+    <nav class="topics" id="topics" aria-label="Topics to start a lesson on"></nav>
+    <p class="p1__turn sc-wrap sc-display" data-sc-in>Pick one, and the lesson writes itself while you read.</p>
   </section>
 
-  <!-- PAGE 2 (the peak): your scroll is the playhead of a real recorded lesson stream. -->
+  <!-- PAGE 2 (the peak): a real recorded lesson writes itself in the reader as you scroll.
+       Margin notes light up at the moments in the recording they describe. -->
   <section id="p2" class="page p2" data-sc-act="pin" data-sc-span="4.2" data-sc-drift="#0B0C0E" data-page="2" aria-labelledby="p2-h">
     <div data-sc-stage class="sc-stage p2__stage" id="stream" data-sc-verify-state="0">
-      <div class="p2__head">
-        <div>
-          <h2 id="p2-h" class="sc-display sc-display--md">Watch it write.</h2>
-          <p class="p2__cap">The same question, asked in Wonder. A real lesson Claude streamed on October 21, 2026, replayed revision by revision.</p>
-        </div>
-        <div class="p2__status">
-          <p class="status" id="status"><span class="status__dot" aria-hidden="true"></span><span id="status-text">Planning the lesson…</span></p>
-          <p class="p2__meta sc-nums"><span class="steer" id="steer" hidden>Simpler</span><span id="rev">revision 0 of 532</span></p>
-        </div>
+      <div class="p2__side">
+        <h2 id="p2-h" class="sc-display sc-display--md">Written for you, as you read.</h2>
+        <p class="sc-body">The next page arrives while you're reading this one. Every chart, stepper and quiz works the moment it lands. When it's done, a second pass rereads the lesson and fixes any wrong quiz answers.</p>
+        <ol class="notes" id="notes">
+          <li data-note="search">It looks things up first, and cites where each fact comes from.</li>
+          <li data-note="widget">Diagrams and checks you can use, not pictures of them.</li>
+          <li data-note="steer">Too dense? Tap <b>Simpler</b> and it rewrites from there.</li>
+          <li data-note="done">A short quiz at the end, then cards to keep. Try this one; it works.</li>
+        </ol>
+        <p class="p2__cap">A real Wonder lesson, recorded October 23, 2026, replayed as you scroll.</p>
       </div>
-      <div class="p2__panes">
-        <div class="wire" aria-label="The raw markup Claude is writing">
-          <p class="wire__label">What Claude writes</p>
-          <pre class="wire__code" id="wire" aria-hidden="true"></pre>
+      <div class="reader" aria-label="A Wonder lesson">
+        <div class="reader__bar">
+          <span class="reader__title" id="reader-title">New lesson</span>
+          <span class="reader__segs" id="reader-segs" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span>
+          <span class="steer" id="steer" hidden>Simpler</span>
         </div>
-        <div class="reader" aria-label="The lesson Wonder renders">
-          <p class="wire__label">What you get</p>
-          <div class="reader__view" id="reader-view">
-            <ol class="activity" id="activity" aria-hidden="true"></ol>
-            <article class="lesson" id="lesson"></article>
+        <p class="status" id="status"><span class="status__dot" aria-hidden="true"></span><span id="status-text">Planning the lesson…</span></p>
+        <div class="reader__view" id="reader-view">
+          <ol class="activity" id="activity" aria-hidden="true"></ol>
+          <article class="lesson" id="lesson"></article>
+        </div>
+        <form class="composer composer--close yourturn" id="yourturn" data-composer>
+          <label class="yourturn__ask" for="topic-3">Your turn. What should Wonder write for you?</label>
+          <p class="yourturn__try">This lesson is yours to try first, no sign-in: take the quiz above, step through the examples.</p>
+          <div class="composer__row">
+            <input id="topic-3" name="topic" type="text" placeholder="Any topic, any level" autocomplete="off" maxlength="200" tabindex="-1">
+            <button type="submit" tabindex="-1">Start a lesson</button>
           </div>
-        </div>
+        </form>
       </div>
     </div>
   </section>
 
-  <!-- PAGE 3: a quiet, close exchange. The tutor asks; you answer. -->
+  <!-- PAGE 3: the tutor beside the lesson. A Guide me exchange you can answer. -->
   <section id="p3" class="page p3 sc-section" data-sc-act="flow" data-sc-drift="#0A0A0A" data-page="3" aria-labelledby="p3-h">
     <div class="sc-wrap p3__grid">
       <div class="p3__copy sc-stack" data-sc-in data-sc-stagger="70">
-        <h2 id="p3-h" class="sc-display sc-display--md">It asks back.</h2>
-        <p class="sc-body">Turn on <em>Guide me</em> and the tutor stops lecturing. It asks one question at a time, gives a hint before an answer, and lets you get there yourself.</p>
+        <h2 id="p3-h" class="sc-display sc-display--md">A tutor beside the text.</h2>
+        <p class="sc-body">Highlight a sentence to have it explained, or ask about anything in the lesson. Turn on <em>Guide me</em> and it asks the questions instead, with a hint before every answer.</p>
       </div>
       <div class="tutor" data-sc-in>
         <p class="tutor__mode"><span class="switch" aria-hidden="true"></span>Guide me</p>
         <ol class="tutor__log" id="tutor-log" aria-live="polite">
-          <li class="msg msg--you">Why do the earliest galaxies look so red to Webb?</li>
-          <li class="msg msg--tutor">Good one to sit with. Before I explain: what do you think happens to light that crosses an expanding universe for more than 13 billion years?</li>
+          <li class="msg msg--you">Why did cheaper coins hurt Rome so much?</li>
+          <li class="msg msg--tutor">Good one to sit with. Before I explain: if every coin quietly holds less silver than it used to, what do you think happens to prices?</li>
         </ol>
         <div class="tutor__choices" id="tutor-choices" role="group" aria-label="Your answer">
-          <button type="button" data-a="slow">It slows down</button>
-          <button type="button" data-a="stretch">It gets stretched</button>
-          <button type="button" data-a="fade">It loses its color</button>
+          <button type="button" data-a="fall">Prices fall</button>
+          <button type="button" data-a="rise">Prices rise</button>
+          <button type="button" data-a="same">Nothing changes</button>
         </div>
-        <p class="tutor__note">A sample exchange, following Wonder's Guide me rules.</p>
+        <p class="tutor__note">A sample exchange with Guide me switched on.</p>
       </div>
     </div>
   </section>
@@ -180,67 +177,69 @@
   <section id="p4" class="page p4" data-sc-act="pin" data-sc-span="2.3" data-sc-drift="#090A0C" data-page="4" aria-labelledby="p4-h">
     <div data-sc-stage class="sc-stage p4__stage" id="memory" data-sc-verify-state="0">
       <div class="p4__copy sc-stack">
-        <h2 id="p4-h" class="sc-display sc-display--md">It remembers, so you don't have to.</h2>
-        <p class="sc-body" id="p4-body">Every idea you meet becomes a card. Wonder schedules each one with FSRS, so it comes back just before you'd forget it, and the gaps keep growing.</p>
-        <div class="card-mini" aria-hidden="true">
-          <p class="card-mini__term">redshift</p>
-          <p class="card-mini__def">How much light has been stretched to longer, redder wavelengths by the expansion of the universe.</p>
+        <h2 id="p4-h" class="sc-display sc-display--md">Then it makes sure you keep it.</h2>
+        <p class="sc-body" id="p4-body">When you finish a lesson, its key ideas become cards. Wonder brings each one back just before you'd forget it, and the gaps keep growing.</p>
+        <div class="keep" aria-label="Cards from the lesson above">
+          <p class="keep__k">Cards from the lesson above</p>
+          <ul class="keep__cards" id="keep"></ul>
         </div>
       </div>
       <figure class="curve">
         <div class="curve__read sc-nums" id="curve-read" aria-live="off">
-          <p><span class="k">Day</span> <b id="cr-day">0</b></p>
-          <p class="is-dim"><span class="k">No reviews</span> <b id="cr-off">100%</b></p>
-          <p class="is-on"><span class="k">With Wonder</span> <b id="cr-on">100%</b></p>
+          <p><span class="k">Days since the lesson</span> <b id="cr-day">0</b></p>
+          <p class="is-on"><span class="k">Next review</span> <b id="cr-next">in 4 days</b></p>
+          <p class="curve__legend"><span class="lg lg--on"></span>With reviews <span class="lg lg--off"></span>Without</p>
         </div>
         <svg id="curve-svg" viewBox="0 0 720 380" role="img" aria-labelledby="curve-title curve-desc">
-          <title id="curve-title">Predicted recall of one card over six months</title>
+          <title id="curve-title">How well you remember one card over six months</title>
           <desc id="curve-desc">Without reviews, recall decays steadily. With Wonder's scheduled reviews, recall returns to full at each review and decays more slowly each time.</desc>
         </svg>
-        <figcaption>Predicted recall for one card you keep getting right, computed in this page with the FSRS-5 defaults Wonder ships.</figcaption>
+        <figcaption>How well you'd remember one card you get right each time it comes back. The review dates come from the same scheduler Wonder uses.</figcaption>
       </figure>
     </div>
   </section>
 
-  <!-- PAGE 5: a real Teacher turn, travelling sideways day by day. -->
-  <section id="p5" class="page p5" data-sc-act="pan" data-sc-span="3" data-sc-drift="#0A0A0A" data-page="5" aria-labelledby="p5-h">
-    <div data-sc-stage class="sc-stage p5__stage">
-      <p class="p5__goal" aria-hidden="true"><span>Study plan</span><b id="goal"></b></p>
-      <div class="rail" data-sc-pan="0.04" id="rail">
-        <div class="rail__lead" style="--i:0">
-          <h2 id="p5-h" class="sc-display sc-display--md">A teacher with a plan.</h2>
-          <p class="sc-body">Tell the Teacher what you're after. It saves what matters, checks your progress, and drafts the week.</p>
+  <!-- PAGE 5: the daily loop. A real Teacher plan, the whole week visible at once. -->
+  <section id="p5" class="page p5 sc-section" data-sc-act="flow" data-sc-drift="#0A0A0A" data-page="5" aria-labelledby="p5-h">
+    <div class="sc-wrap">
+      <div class="p5__head" data-sc-in data-sc-stagger="70">
+        <h2 id="p5-h" class="sc-display sc-display--md">A little every day.</h2>
+        <p class="sc-body">Today shows the one thing to do next: finish a lesson, review what's due, or take the next step in a course. Tell the Teacher (Wonder's study coach, which knows what you've learned) a goal, and it plans your week.</p>
+      </div>
+      <div class="week" data-sc-in>
+        <div class="week__top">
           <p class="ask" id="ask"></p>
-          <ul class="trail" id="trail"></ul>
           <ul class="memchips" id="memchips"></ul>
         </div>
-        <!-- day cards are filled from the recorded plan -->
-        <div class="rail__end" style="--i:9" id="approval"></div>
+        <p class="week__goal"><span>Study plan</span> <b id="goal"></b></p>
+        <div class="week__days" id="rail"></div>
+        <div class="week__end" id="approval"></div>
       </div>
     </div>
   </section>
 
-  <!-- CLOSE: collect the cards. The last one is where you type. -->
+  <!-- CLOSE: five real topics to start, then your own. -->
   <section id="cards" class="close" data-sc-act="pin" data-sc-span="1.4" data-sc-drift="#050505" aria-labelledby="close-h">
     <div data-sc-stage class="sc-stage close__stage" id="close" data-sc-verify-state="0">
-      <h2 id="close-h" class="sc-display sc-display--md close__h" data-sc-cue="0 1 0 0">Collect the cards.</h2>
-      <ul class="fan" aria-label="What you just read">
-        <li class="ix" style="--k:-2;--ak:2;--hue:#E0452B"><p class="ix__t">Live lesson</p><p class="ix__d">Claude writes the lesson as interface. Every finished tag becomes something you can use.</p></li>
-        <li class="ix" style="--k:-1;--ak:1;--hue:#F29A30"><p class="ix__t">Steer</p><p class="ix__d">Ask for simpler, or more examples, while it's still writing.</p></li>
-        <li class="ix" style="--k:0;--ak:0;--hue:#3DBB6A"><p class="ix__t">Guide me</p><p class="ix__d">A tutor that asks one question at a time and hints before it tells.</p></li>
-        <li class="ix" style="--k:1;--ak:1;--hue:#2F7BF5"><p class="ix__t">Spaced review</p><p class="ix__d">Cards come back just before you'd forget them.</p></li>
-        <li class="ix" style="--k:2;--ak:2;--hue:#7B5CD6"><p class="ix__t">Teacher</p><p class="ix__d">Plans your week, remembers your goals, and quizzes your weak spots.</p></li>
+      <h2 id="close-h" class="sc-display sc-display--md close__h" data-sc-cue="0 1 0 0">What will you learn first?</h2>
+      <ul class="fan" aria-label="Lessons to start with">
+        <li class="ix" style="--k:-2;--ak:2;--hue:#E0452B"><a class="ix__a" href="/#/learn/Black%20holes%20for%20beginners"><span class="ix__tag">Space</span><span class="ix__t">Black holes for beginners</span><span class="ix__d">What they are, how they form, and why light can't leave.</span><span class="ix__go">Start this lesson</span></a></li>
+        <li class="ix" style="--k:-1;--ak:1;--hue:#F29A30"><a class="ix__a" href="/#/learn/Compound%20interest"><span class="ix__tag">Money</span><span class="ix__t">Compound interest</span><span class="ix__d">Why small amounts grow so large, given time.</span><span class="ix__go">Start this lesson</span></a></li>
+        <li class="ix" style="--k:0;--ak:0;--hue:#3DBB6A"><a class="ix__a" href="/#/learn/How%20habits%20form"><span class="ix__tag">Mind</span><span class="ix__t">How habits form</span><span class="ix__d">The loop behind a habit, and how to change one.</span><span class="ix__go">Start this lesson</span></a></li>
+        <li class="ix" style="--k:1;--ak:1;--hue:#2F7BF5"><a class="ix__a" href="/#/learn/Why%20some%20chords%20sound%20sad"><span class="ix__tag">Art &amp; music</span><span class="ix__t">Why some chords sound sad</span><span class="ix__d">What your ear is hearing in minor and major.</span><span class="ix__go">Start this lesson</span></a></li>
+        <li class="ix" style="--k:2;--ak:2;--hue:#7B5CD6"><a class="ix__a" href="/#/learn/The%20French%20Revolution%20in%205%20ideas"><span class="ix__tag">History</span><span class="ix__t">The French Revolution in 5 ideas</span><span class="ix__d">Five ideas that explain how it happened.</span><span class="ix__go">Start this lesson</span></a></li>
       </ul>
       <form class="composer composer--close" data-composer data-sc-cue="0 1 0 0">
-        <label class="close__ask" for="topic-2">What do you want to learn?</label>
+        <label class="close__ask" for="topic-2">Or name your own</label>
         <div class="composer__row">
-          <input id="topic-2" name="topic" type="text" placeholder="Black holes, sourdough…" autocomplete="off" maxlength="200">
+          <input id="topic-2" name="topic" type="text" placeholder="Anything at all" autocomplete="off" maxlength="200">
           <button type="submit">Start a lesson</button>
         </div>
+        <p class="composer__note" data-next hidden></p>
       </form>
       <footer class="foot">
-        <p><span class="foot__mark">Wonder</span> Lessons, the tutor and the Teacher are written by Claude (claude-opus-5-5).</p>
-        <p>A research build from genui-lab. Replays on this page are real recordings.</p>
+        <p><span class="foot__mark">Wonder</span> Lessons, the tutor and the Teacher are written by Claude, an AI made by Anthropic.</p>
+        <p>The lesson and the plan on this page are real recordings from Wonder.</p>
       </footer>
     </div>
   </section>
