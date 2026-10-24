@@ -1335,7 +1335,7 @@ observeMath(document.body);
 refreshChrome();
 loadStatus().then(() => {
   route();
-  if (needsOnboarding(store.data)) showOnboarding({ store, onDone: () => { refreshChrome(); if (!location.hash || location.hash === '#/') route(); } });
+  if (needsOnboarding(store.data)) showOnboarding({ store, startLesson, onDone: () => { refreshChrome(); if (!location.hash || location.hash === '#/') route(); } });
   // account sync: changes from other devices redraw Today / Library when that cannot disturb reading
   onSyncStatus((s) => {
     if (s.state === 'synced' && s.applied && ['home', 'library'].includes(document.body.dataset.screen) && window.scrollY < 40 && !document.querySelector('.onboard, dialog[open]')) route();

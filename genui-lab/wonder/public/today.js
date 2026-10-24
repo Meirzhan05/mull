@@ -68,7 +68,7 @@ export function renderToday(ctx) {
 
   // -- command bar
   let mode = 'lesson';
-  let level = 'beginner';
+  let level = LEVELS.includes(settings.level) ? settings.level : 'beginner';
   const input = el('textarea', { rows: '1', maxlength: '300', autocomplete: 'off', class: 'composer-input', 'aria-label': 'What do you want to learn?' });
   const go = el('button', { class: 'composer-send', type: 'submit', 'aria-label': 'Begin', title: 'Begin (Enter)' }, icon('arrow-up'));
   const goLabel = el('span', { class: 'composer-hint' });
@@ -79,7 +79,7 @@ export function renderToday(ctx) {
   const autosize = () => { input.style.height = 'auto'; input.style.height = `${Math.min(220, input.scrollHeight)}px`; };
   input.addEventListener('input', () => { autosize(); go.classList.toggle('ready', !!input.value.trim() || mode === 'material'); });
   input.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); submit(); } });
-  const levelSel = el('select', { class: 'cmd-level', 'aria-label': 'Level', onchange: (e) => { level = e.target.value; } }, ...LEVELS.map((lv) => el('option', { value: lv }, cap(lv))));
+  const levelSel = el('select', { class: 'cmd-level', 'aria-label': 'Level', onchange: (e) => { level = e.target.value; } }, ...LEVELS.map((lv) => el('option', { value: lv, selected: lv === level }, cap(lv))));
   // -- Phase 10: "Material": paste notes or attach a file; Begin writes a lesson from it, or a course
   let file = null;
   const notes = el('textarea', { class: 'cmd-notes', rows: '5', maxlength: '200000', placeholder: 'Paste your notes, a chapter or a syllabus. Wonder teaches from it and cites it.', 'aria-label': 'Your material' });
@@ -158,7 +158,7 @@ export function renderToday(ctx) {
     const list = mode === 'teacher' ? TEACHER_CHIPS : topics;
     chips.replaceChildren(...list.map((t) => el('button', { class: 'hero-chip', type: 'button', onclick: () => { input.value = t; autosize(); submit(); } },
       mode === 'teacher' ? null : el('span', { class: 'hero-chip-tag' }, topicInterest(t) || 'General'), t)),
-    ...(mode === 'teacher' ? [] : [el('a', { class: 'hero-chip hero-chip-link', href: '#/you' }, 'Interests', icon('arrow-right'))]));
+    ...(mode === 'teacher' ? [] : [el('a', { class: 'hero-chip hero-chip-link', href: '#/you', onclick: () => setTimeout(() => document.getElementById('interests')?.scrollIntoView({ block: 'center' }), 80) }, 'Interests', icon('arrow-right'))]));
   }
   const composer = el('form', { class: 'composer', onsubmit: (e) => { e.preventDefault(); submit(); } },
     el('label', { class: 'composer-field' }, input),
