@@ -247,10 +247,12 @@ function renderBlock(b, ctx) {
   const s = b.src;
   if (s.startsWith('<') && /^<[A-Z]/.test(s)) {
     if (!b.complete) {
+      // A tag whose name is still being typed shows nothing yet; a label would only guess.
+      if (!b.tag) return div('w-none');
       // The tag is still being written: the compiler cuts it. We show where it will land.
       const el = div('w w-pending');
       // In words a reader understands, not the tag name (cold readers took "<BarChart>" for a bug).
-      const doing = { Timeline: 'Laying out a timeline', Cycle: 'Drawing the loop', ExplainBack: 'Writing a question for you', BarChart: 'Drawing a chart', Quiz: 'Writing the quiz', CompareToggle: 'Building a comparison', LessonStepper: 'Laying out a worked example', Reveal: 'Writing a quick check', Callout: 'Adding a note', Sources: 'Listing the sources' }[b.tag] || 'Adding something you can use';
+      const doing = { Timeline: 'Laying out a timeline', Cycle: 'Drawing the loop', ExplainBack: 'Writing a question for you', BarChart: 'Drawing a chart', Quiz: 'Writing the quiz', CompareToggle: 'Building a comparison', LessonStepper: 'Laying out a worked example', Reveal: 'Writing a quick check', Callout: 'Adding a note', Sources: 'Listing the sources' }[b.tag] || 'Adding a diagram';
       el.innerHTML = `<span class="w-pending__name">${esc(doing)}…</span><span class="w-pending__bar"></span>`;
       return el;
     }
