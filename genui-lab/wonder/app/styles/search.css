@@ -1,0 +1,37 @@
+/* Search (search-core.js, search-ui.js): result rows in the ⌘K palette and the Library, with
+   highlighted matches. Built from the tokens in styles.css, so it follows the light and dark themes. */
+
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+
+mark.search-hit { background: var(--brand-subtle); color: var(--ink); border-radius: 3px; padding: 0 1px; box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 22%, transparent); }
+::highlight(search-found) { background-color: color-mix(in srgb, var(--accent) 28%, transparent); color: inherit; }
+
+/* -- a result: title, a snippet around the match, a meta line */
+.search-result-body { flex: 1; min-width: 0; display: grid; gap: 2px; }
+.search-result-title { font-size: 0.875rem; font-weight: 500; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.search-result-snippet { font-size: 0.8125rem; line-height: 1.45; color: var(--ink-2); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
+.search-result-meta { font-size: 0.75rem; color: var(--ink-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* -- palette */
+.palette-section + .palette-section { margin-top: 2px; }
+.palette-item.palette-result { align-items: flex-start; padding: 9px 10px; }
+.palette-item.palette-result > .ui-icon { margin-top: 2px; flex: 0 0 auto; }
+.palette-item[aria-selected="true"] mark.search-hit { background: color-mix(in srgb, var(--accent) 22%, var(--surface)); }
+
+/* -- library */
+.td-snippet { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; color: var(--ink-2); line-height: 1.45; }
+.search-list { list-style: none; margin: 0; padding: 0; }
+.search-list > li + li { border-top: 1px solid var(--line); }
+.search-row { display: flex; align-items: flex-start; gap: 12px; padding: 11px 16px; color: inherit; text-decoration: none; }
+.search-row:hover { background: var(--hover); }
+.search-row:focus-visible { outline: none; box-shadow: inset var(--ring); }
+.search-row > .ui-icon { width: 16px; height: 16px; margin-top: 2px; color: var(--ink-3); flex: 0 0 auto; }
+.search-row:hover .search-result-title { text-decoration: underline; text-underline-offset: 3px; text-decoration-color: var(--ink-3); }
+.search-list-more { margin: 0; padding: 10px 16px; border-top: 1px solid var(--line); }
+
+@media (max-width: 560px) {
+  .modal-overlay:has(> .palette) { padding-top: 8vh; padding-inline: 12px; }
+  .palette-list { max-height: min(64vh, 520px); }
+  .palette-foot { display: none; }
+  .search-row { padding: 10px 14px; gap: 10px; }
+}

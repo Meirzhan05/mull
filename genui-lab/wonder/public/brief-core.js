@@ -4,12 +4,13 @@
 //
 //   {headline, urgent, items:[{kind, title, why, action:{type, …}}]}   at most 3 items, best first
 //   urgent: the headline is about a deadline or a streak at risk (Today shows it in the header)
-//   action types: review | refresh(lessonId) | plan(planId, dayIndex, itemIndex) | teacher
+//   action types: review | refresh(lessonId) | course-review(courseId) | plan(planId, dayIndex, itemIndex) | teacher
 
 import { deckStats, dueEntries, currentStreak, dateKey } from './deck.js';
 import { planStatus, nextPlanItem, countdownLabel, dayLabel } from './plan-core.js';
 import { fadingLessons, RECALL_MIN } from './outcomes-core.js';
 import { dailyProgress } from './progress-core.js';
+import { courseReviewSuggestion } from './course-review-core.js';
 
 const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
 
@@ -43,7 +44,12 @@ export function dailyBrief(data, now = new Date()) {
     const why = fading.recall.n >= RECALL_MIN ? `You recalled ${Math.round(fading.recall.rate * 100)}% of it days later` : fading.memoryToday != null ? `Memory estimated at ${Math.round(fading.memoryToday * 100)}% today` : 'Some of its cards keep slipping';
     items.push({ kind: 'refresh', title: `Refresh “${fading.title}”`, why, action: { type: 'refresh', lessonId: fading.lessonId } });
   }
-  // 5. nothing pressing: let the Teacher pick
+  // 5. a course whose lessons are slipping together: one interleaved pass across all of them
+  const course = courseReviewSuggestion(data, now);
+  if (course) {
+    items.push({ kind: 'course-review', title: `Review all of “${course.title}”`, why: `Memory across its ${course.lessons} lessons is down to ~${Math.round(course.memory * 100)}% · one mixed session`, action: { type: 'course-review', courseId: course.courseId } });
+  }
+  // 6. nothing pressing: let the Teacher pick
   if (!items.length) items.push({ kind: 'teacher', title: 'Ask your Teacher what to learn next', why: st.total ? `Nothing due${st.nextDue ? ` until ${new Date(st.nextDue).toLocaleDateString(undefined, { weekday: 'short' })}` : ''}. A good moment for something new.` : 'A plan around your goal takes a minute.', action: { type: 'teacher' } });
 
   let headline;

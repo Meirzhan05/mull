@@ -1,7 +1,7 @@
-// Server-resolved media components (<Figure/>, <Video/>): one stream's lookups, delivered as
-// componentResults entries keyed by each component's __resolutionId so they ride in every dil
-// revision and are saved with the lesson. figures.js and videos.js configure one each; app.js
-// combines them per stream.
+// Server-resolved media components: one stream's lookups, delivered as componentResults entries
+// keyed by each component's __resolutionId so they ride in every dil revision and are saved with
+// the lesson. videos.js configures one for <Video/>; app.js combines it with the Figure resolver
+// (figures.js, which adds a vision check) per stream.
 //
 //   compile result ──componentResults(r)──▶ {rid: {status:'pending'}}  (lookup starts)
 //   lookup settles ──onUpdate──▶ writer.refresh()  ──▶ {rid: {status:'resolved', state:{found, …}}}

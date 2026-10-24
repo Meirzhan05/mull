@@ -19,12 +19,13 @@ import { createRuntime, encodeOps, createMirror } from '../../chatgpt-dil/src/ru
 import { LEARNING_PRELUDE, LEARNING_COMPONENT_NAMES } from './learning-catalog.js';
 import { EXTRAS_PRELUDE } from './catalog-extras.js'; // Phase 3+5: Cite/Sources/FunctionGraph
 import { MEDIA_PRELUDE } from './catalog-media.js'; // Diagram
+import { PRACTICE_PRELUDE } from './catalog-practice.js'; // visual practice widgets (review screen)
 import { createViewStateStore, VIEW_STATE_DEBOUNCE_MS } from './view-state.js';
 
 export { encodeOps, createMirror, LEARNING_COMPONENT_NAMES };
 
 export function withLearningCatalog(source) {
-  return source ? LEARNING_PRELUDE + EXTRAS_PRELUDE + MEDIA_PRELUDE + source : source;
+  return source ? LEARNING_PRELUDE + EXTRAS_PRELUDE + MEDIA_PRELUDE + PRACTICE_PRELUDE + source : source;
 }
 
 /**

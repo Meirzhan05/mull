@@ -6,6 +6,7 @@ import { dateKey, deckStats, currentStreak } from './deck.js';
 import { weakestConcepts } from './mastery-core.js';
 import { nextPlanItem } from './plan-core.js'; // Phase 10
 import { fadingLessons, RECALL_MIN } from './outcomes-core.js'; // Phase 9
+import { courseReviewSuggestion } from './course-review-core.js';
 
 export const DAILY_GOALS = Object.freeze([
   { xp: 10, label: 'Casual', hint: 'A few minutes a day' },
@@ -147,6 +148,7 @@ export function courseProgress(data, course) {
  *   review    due practice cards
  *   strengthen  shaky or fading concepts in the learner model (a Teacher quiz on them)
  *   refresh   a finished lesson whose cards are not sticking (Phase 9: delayed recall)
+ *   course-review  a course whose lessons are fading together: one interleaved review of all of them
  *   plan      the saved study plan's next item by calendar day: overdue, today's, or ahead
  *   course    the next lesson of a course in progress
  *   start     nothing in flight: start a first / new lesson
@@ -170,6 +172,8 @@ export function upNext(data, now = new Date()) {
       ...(fading.recall.n >= RECALL_MIN ? { recall: Math.round(fading.recall.rate * 100), reviews: fading.recall.n } : {}),
       ...(fading.memoryToday != null ? { memoryToday: Math.round(fading.memoryToday * 100) } : {}) });
   }
+  const cr = courseReviewSuggestion(data, now);
+  if (cr) out.push({ kind: 'course-review', courseId: cr.courseId, title: cr.title, memory: Math.round(cr.memory * 100), lessons: cr.lessons, due: cr.due });
   const plan = (data?.plans || [])[0];
   if (plan) {
     // Phase 10: by calendar day: overdue items first, then today's, then (ahead) the next day's

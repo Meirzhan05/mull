@@ -7,10 +7,12 @@ import { dueEntries, lessonEntries, reviewEntry, previewDue, deckStats, awardXp,
 import { gradePracticeItem } from './practice-core.js';
 import { recordEvidence, ratingScore } from './mastery-core.js';
 import { postJson } from './stream-client.js';
+import { createVisualPractice, isVisualItem, visualFeedbackTitle, VISUAL_TYPE_LABEL } from './review-visual.js';
 
 const SESSION_SIZE = 12;
 const TYPE_LABEL = { mcq: 'Multiple choice', cloze: 'Fill the blank', binary_choice: 'True or false', flashcard: 'Recall', explain: 'Explain it' };
 const GRADE_WORDS = ['Not yet', 'Partly there', 'Nearly there', 'Spot on'];
+Object.assign(TYPE_LABEL, VISUAL_TYPE_LABEL); // number_line / chart_select / order_steps
 
 function shuffle(list, seed) {
   const a = list.slice();
@@ -23,10 +25,12 @@ function shuffle(list, seed) {
   return a;
 }
 
-export function renderReview(root, { store, onExit, onXp, lessonId = null }) {
+// `entries` (optional): a ready-made queue, e.g. a whole-course review (course-review-core.js);
+// `summary(results)` (optional) adds a node to the end-of-session card.
+export function renderReview(root, { store, onExit, onXp, lessonId = null, entries = null, summary = null }) {
   const now = new Date();
   // a lesson refresh (Phase 9) reviews that lesson's weakest cards, due or not
-  const queue = lessonId ? lessonEntries(store.data.deck, lessonId, now, SESSION_SIZE) : dueEntries(store.data.deck, now, SESSION_SIZE);
+  const queue = entries || (lessonId ? lessonEntries(store.data.deck, lessonId, now, SESSION_SIZE) : dueEntries(store.data.deck, now, SESSION_SIZE));
   const session = { index: 0, correct: 0, answered: 0, xp: 0, results: [] };
   // keyboard: digits pick choices / grades, T and F answer true-false, Space reveals, Enter continues
   let keys = {};
@@ -34,12 +38,14 @@ export function renderReview(root, { store, onExit, onXp, lessonId = null }) {
     if (e.metaKey || e.ctrlKey || e.altKey || !root.isConnected) return;
     const t = e.target;
     if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA') && e.key !== 'Enter') return;
+    if (t?.closest?.('.dil-root') && (e.key === 'Enter' || e.key === ' ')) return; // a focused widget button handles these itself
     const k = e.key === ' ' ? 'space' : e.key.toLowerCase();
     const fn = keys[k];
     if (fn) { e.preventDefault(); fn(); }
   };
   document.addEventListener('keydown', onKey);
-  const cleanup = () => document.removeEventListener('keydown', onKey);
+  const visual = createVisualPractice(); // one sandboxed DIL surface for the session's visual cards
+  const cleanup = () => { document.removeEventListener('keydown', onKey); visual.destroy(); };
 
   root.replaceChildren();
   const wrap = el('section', { class: 'review' });
@@ -240,6 +246,11 @@ export function renderReview(root, { store, onExit, onXp, lessonId = null }) {
       } }, input, el('div', { class: 'review-actions' }, status, check));
       card.append(form);
       setTimeout(() => input.focus(), 30);
+    } else if (isVisualItem(item)) {
+      keys = visual.show(card, item, (g) => {
+        const due = record(entry, g.rating, g.correct);
+        feedback(card, { ...g, explanation: item.explanation, nextDue: due, title: visualFeedbackTitle(item, g) });
+      }, hint);
     } else {
       card.append(el('h2', { class: 'review-prompt' }, inlineMd(item.front)));
       const reveal = el('button', { class: 'btn btn-lg', type: 'button', onclick: () => {
@@ -279,13 +290,14 @@ export function renderReview(root, { store, onExit, onXp, lessonId = null }) {
         el('div', { class: 'stat' }, el('strong', null, `${acc}%`), el('span', null, 'correct')),
         el('div', { class: 'stat' }, el('strong', null, `+${session.xp}`), el('span', null, 'XP')),
         el('div', { class: 'stat' }, el('strong', null, String(currentStreak(store.data.stats))), el('span', null, 'day streak'))),
+      summary ? summary(session.results) : null,
       session.results.length ? el('ul', { class: 'next-list' }, ...session.results.slice(0, 6).map((r) => el('li', null,
         el('span', { class: `dot ${r.correct ? 'ok' : 'bad'}` }),
         el('span', { class: 'next-q' }, inlineMd(r.entry.item.prompt || r.entry.item.front)),
         el('span', { class: 'muted small' }, formatDue(r.nextDue))))) : null,
       el('p', { class: 'muted' }, stats.due ? `${stats.due} more card${stats.due === 1 ? '' : 's'} due now.` : stats.nextDue ? `Next card due ${formatDue(stats.nextDue)}.` : ''),
       el('div', { class: 'review-actions' },
-        stats.due && !lessonId ? el('button', { class: 'btn btn-secondary', type: 'button', onclick: () => { cleanup(); renderReview(root, { store, onExit, onXp }); } }, 'Keep going') : null,
+        stats.due && !lessonId && !entries ? el('button', { class: 'btn btn-secondary', type: 'button', onclick: () => { cleanup(); renderReview(root, { store, onExit, onXp }); } }, 'Keep going') : null,
         el('button', { class: 'btn', type: 'button', onclick: onExit }, 'Done'))));
   }
 

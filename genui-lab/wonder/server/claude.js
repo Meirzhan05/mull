@@ -68,10 +68,10 @@ export function buildStreamParams({ system, context, messages, effort = 'medium'
   };
 }
 
-/** Structured-output request for small extraction calls. */
-export function buildStructuredParams({ system, schema, user, effort = 'low', maxTokens = 16000 }) {
+/** Structured-output request for small extraction calls. `user` is a string or content blocks. */
+export function buildStructuredParams({ system, schema, user, effort = 'low', maxTokens = 16000, model = MODEL }) {
   return {
-    model: MODEL,
+    model,
     max_tokens: maxTokens,
     thinking: { type: 'adaptive' },
     output_config: { effort, format: { type: 'json_schema', schema } },
@@ -135,9 +135,9 @@ export async function streamText(client, params, { onText, signal, idleMs } = {}
   }
 }
 
-/** Non-streaming structured call; returns parsed JSON or throws. */
-export async function createStructured(client, params) {
-  const message = await client.messages.create(params);
+/** Non-streaming structured call; returns parsed JSON or throws. `options`: SDK request options ({signal, maxRetries}). */
+export async function createStructured(client, params, options) {
+  const message = await (options ? client.messages.create(params, options) : client.messages.create(params));
   if (message.stop_reason === 'refusal') {
     const err = new Error('Claude declined to produce this output');
     err.code = 'refusal';
@@ -163,10 +163,22 @@ function isNetworkError(err) {
     || (err instanceof TypeError && /terminated|fetch failed|network/i.test(String(err.message)));
 }
 
-/** Map an error to a user-facing {code, message}. Most specific class first. */
+const apiErrorType = (err) => err?.error?.error?.type || err?.error?.type || '';
+
+/** {retryAfterMs} from an API error's Retry-After header (seconds), or {}. */
+function retryAfterOf(err) {
+  const h = err?.headers;
+  const v = typeof h?.get === 'function' ? h.get('retry-after') : h?.['retry-after'];
+  const n = Number(v);
+  return v != null && v !== '' && Number.isFinite(n) && n >= 0 ? { retryAfterMs: Math.round(Math.min(n, 300) * 1000) } : {};
+}
+
+/** Map an error to a user-facing {code, message, retryAfterMs?}. Most specific class first. */
 export function friendlyError(err) {
   if (err instanceof Anthropic.AuthenticationError) return { code: 'auth_failed', message: 'Claude rejected the credentials. Check ANTHROPIC_API_KEY in genui-lab/wonder/.env and restart the server.' };
-  if (err instanceof Anthropic.RateLimitError) return { code: 'rate_limited', message: 'Claude is busy right now (rate limit). Wait a few seconds and try again.' };
+  if (err instanceof Anthropic.RateLimitError) return { code: 'rate_limited', message: 'Claude is busy right now (rate limit). Wait a few seconds and try again.', ...retryAfterOf(err) };
+  // 529, or an `overloaded_error` event mid-stream (no HTTP status): retryable, like a 429
+  if (err instanceof Anthropic.APIError && (err.status === 529 || apiErrorType(err) === 'overloaded_error')) return { code: 'overloaded', message: 'Claude is overloaded right now. Wait a moment and try again.', ...retryAfterOf(err) };
   if (err instanceof Anthropic.BadRequestError && /anthropic-workspace-id/.test(String(err?.error?.error?.message || err.message))) return { code: 'workspace_required', message: 'This API key is not scoped to a workspace. Add ANTHROPIC_WORKSPACE_ID=wrkspc_... to ~/.config/wonder/.env and restart.' };
   if (err instanceof Anthropic.BadRequestError) return { code: 'bad_request', message: 'Claude could not process this request. Try a shorter or simpler prompt.' };
   if (err?.code === 'stalled' || err instanceof StreamStalledError) return { code: 'stalled', message: 'Claude stopped responding partway through. Resume to continue from the last complete page.' };
