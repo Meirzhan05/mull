@@ -1,0 +1,13 @@
+# Uploads from the repo root (vercel deploy). The project builds genui-lab/wonder (root directory)
+# and needs its sibling folders genui-lab/chatgpt-dil and genui-lab/wondering-genui.
+re
+scrollcraft
+PLAN.md
+**/node_modules
+**/.next
+**/.env
+**/.env.*
+genui-lab/wonder/data
+**/.agents
+**/.claude
+**/skills-lock.json
