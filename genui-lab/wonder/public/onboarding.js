@@ -28,10 +28,13 @@ export function interestGrid(selected, onToggle) {
 }
 
 /**
- * @param {{store: object, onDone?: () => void, startLesson?: (topic: string, level: string) => void}} opts
- *   startLesson opens the first lesson; without it the last step only finishes.
+ * @param {{store: object, onDone?: () => void, startLesson?: (topic: string, level: string) => void,
+ *   firstTopic?: string, accountName?: Promise<string> | null}} opts
+ *   startLesson opens the first lesson; without it the last step only finishes. firstTopic (the
+ *   topic brought from the landing page) leads the last step, ready to start. accountName fills
+ *   an untouched, empty name field with the signed-in account's first name.
  */
-export function showOnboarding({ store, onDone, startLesson }) {
+export function showOnboarding({ store, onDone, startLesson, firstTopic = '', accountName = null }) {
   const settings = store.data?.settings || {};
   const pick = { name: String(settings.name || '').trim(), interests: new Set(settings.interests || []), level: levelOf(settings), dailyGoal: goalOf(settings) };
   const touched = new Set(); // the picks the learner made; only these are saved
@@ -99,9 +102,11 @@ export function showOnboarding({ store, onDone, startLesson }) {
       touched.add('interests');
       drawPreview();
     });
-    // the account's first name (Clerk loads on its own time) fills an untouched, empty field
-    if (!pick.name && !touched.has('name')) pick.name = String(globalThis.Clerk?.user?.firstName || '').trim();
     const nameInput = el('input', { class: 'onboard-input', type: 'text', maxlength: '40', placeholder: 'Your first name', value: pick.name, autocomplete: 'given-name', 'aria-label': 'Your first name (optional)', oninput: (e) => { pick.name = e.target.value; touched.add('name'); } });
+    // the Google account's first name (it arrives on its own time) fills an untouched, empty field
+    accountName?.then?.((n) => {
+      if (n && !pick.name && !touched.has('name') && !nameInput.value) { pick.name = n; nameInput.value = n; }
+    }).catch(() => {});
     drawPreview();
     const form = el('form', { class: 'onboard-step', onsubmit: (e) => { e.preventDefault(); go(1); } },
       heading('What are you curious about?',
@@ -143,16 +148,21 @@ export function showOnboarding({ store, onDone, startLesson }) {
   }
 
   function firstLessonStep() {
-    const topics = suggestedTopics({ interests: [...pick.interests] }, {}, new Date(), 3);
+    // the topic brought from the landing page leads, ready to start; suggestions follow it
+    const mine = String(firstTopic || '').trim();
+    const suggested = suggestedTopics({ interests: [...pick.interests] }, {}, new Date(), 3).filter((t) => t.toLowerCase() !== mine.toLowerCase());
+    const topics = mine ? [mine, ...suggested.slice(0, 2)] : suggested;
     const input = el('input', { class: 'onboard-input', type: 'text', maxlength: '200', placeholder: 'Or ask about anything: how tides work, the Cold War…', 'aria-label': 'Your own topic' });
     const send = el('button', { class: 'onboard-ask-go', type: 'submit', 'aria-label': 'Begin this lesson' }, icon('arrow-right'));
     input.addEventListener('input', () => send.classList.toggle('ready', !!input.value.trim()));
     const node = el('div', { class: 'onboard-step' },
-      heading('Pick your first lesson', `About eight minutes, written for you as you read${pick.level === 'beginner' ? '' : ` at ${pick.level} level`}. The key ideas come back later as review cards, so they stick.`),
+      heading(mine ? 'Your first lesson' : 'Pick your first lesson', `About eight minutes, written for you as you read${pick.level === 'beginner' ? '' : ` at ${pick.level} level`}. The key ideas come back later as review cards, so they stick.`),
       el('div', { class: 'onboard-topics' }, ...topics.map((t, i) => el('button', { class: `onboard-topic${i === 0 ? ' featured' : ''}`, type: 'button', onclick: () => finish(t) },
-        el('span', { class: 'onboard-topic-tag' }, topicInterest(t) || 'Popular'),
+        el('span', { class: 'onboard-topic-tag' }, mine && i === 0 ? 'Your pick' : topicInterest(t) || 'Popular'),
         el('span', { class: 'onboard-topic-title' }, t),
+        mine && i === 0 ? el('span', { class: 'onboard-topic-go' }, 'Start this lesson') : null,
         icon('arrow-right')))),
+      mine ? el('p', { class: 'onboard-or muted' }, 'Or ask about something else:') : null,
       el('form', { class: 'onboard-ask', onsubmit: (e) => { e.preventDefault(); const t = input.value.trim(); if (t) finish(t); else input.focus(); } }, icon('search'), input, send),
       el('div', { class: 'onboard-actions' },
         el('button', { class: 'btn btn-ghost', type: 'button', onclick: () => go(1) }, icon('arrow-left'), 'Back'),

@@ -654,3 +654,13 @@ button { cursor: pointer; }
 /* the second hero line sits over the composer, invisible until you scroll; it is display text and
    must never take the clicks meant for the field under it */
 .hero__beat { pointer-events: none; }
+
+/* the close: how you start, in onboarding's own step names */
+.steps { list-style: none; margin: 12px 0 0; padding: 0; display: flex; flex-wrap: wrap; justify-content: center; gap: 6px 4px; counter-reset: step; font-size: 0.84rem; color: var(--sc-ink-soft); }
+.steps[hidden] { display: none; }
+.steps li { counter-increment: step; display: inline-flex; align-items: center; gap: 6px; }
+.steps li::before { content: counter(step); display: inline-grid; place-items: center; width: 18px; height: 18px; border-radius: 50%; border: 1px solid var(--line-strong); font-family: var(--sc-font-mono); font-size: 0.66rem; color: var(--sc-ink); }
+.steps li + li::after { content: none; }
+/* wider than the composer it sits under, so the four steps fit on one line on desktop */
+@media (min-width: 761px) { .steps { width: max(100%, 48rem); margin-left: 50%; transform: translateX(-50%); gap: 6px 18px; flex-wrap: nowrap; } }
+@media (max-width: 760px) { .steps { font-size: 0.74rem; } }

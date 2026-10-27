@@ -57,7 +57,7 @@
         <form class="composer" data-composer>
           <label class="sr" for="topic-1">What do you want to learn?</label>
           <input id="topic-1" name="topic" type="text" placeholder="What do you want to learn?" autocomplete="off" maxlength="200" data-examples>
-          <button type="submit">Start a lesson</button>
+          <button type="submit">Continue with Google</button>
         </form>
         <p class="composer__note" data-next data-try hidden></p>
       </div>
@@ -143,7 +143,7 @@
           <p class="yourturn__try">This lesson is yours to try first, no sign-in: take the quiz above, step through the examples.</p>
           <div class="composer__row">
             <input id="topic-3" name="topic" type="text" placeholder="Any topic, any level" autocomplete="off" maxlength="200" tabindex="-1">
-            <button type="submit" tabindex="-1">Start a lesson</button>
+            <button type="submit" tabindex="-1">Continue with Google</button>
           </div>
         </form>
       </div>
@@ -223,19 +223,21 @@
     <div data-sc-stage class="sc-stage close__stage" id="close" data-sc-verify-state="0">
       <h2 id="close-h" class="sc-display sc-display--md close__h" data-sc-cue="0 1 0 0">What will you learn first?</h2>
       <ul class="fan" aria-label="Lessons to start with">
-        <li class="ix" style="--k:-2;--ak:2;--hue:#E0452B"><a class="ix__a" href="/#/learn/Black%20holes%20for%20beginners"><span class="ix__tag">Space</span><span class="ix__t">Black holes for beginners</span><span class="ix__d">What they are, how they form, and why light can't leave.</span><span class="ix__go">Start this lesson</span></a></li>
-        <li class="ix" style="--k:-1;--ak:1;--hue:#F29A30"><a class="ix__a" href="/#/learn/Compound%20interest"><span class="ix__tag">Money</span><span class="ix__t">Compound interest</span><span class="ix__d">Why small amounts grow so large, given time.</span><span class="ix__go">Start this lesson</span></a></li>
-        <li class="ix" style="--k:0;--ak:0;--hue:#3DBB6A"><a class="ix__a" href="/#/learn/How%20habits%20form"><span class="ix__tag">Mind</span><span class="ix__t">How habits form</span><span class="ix__d">The loop behind a habit, and how to change one.</span><span class="ix__go">Start this lesson</span></a></li>
-        <li class="ix" style="--k:1;--ak:1;--hue:#2F7BF5"><a class="ix__a" href="/#/learn/Why%20some%20chords%20sound%20sad"><span class="ix__tag">Art &amp; music</span><span class="ix__t">Why some chords sound sad</span><span class="ix__d">What your ear is hearing in minor and major.</span><span class="ix__go">Start this lesson</span></a></li>
-        <li class="ix" style="--k:2;--ak:2;--hue:#7B5CD6"><a class="ix__a" href="/#/learn/The%20French%20Revolution%20in%205%20ideas"><span class="ix__tag">History</span><span class="ix__t">The French Revolution in 5 ideas</span><span class="ix__d">Five ideas that explain how it happened.</span><span class="ix__go">Start this lesson</span></a></li>
+        <li class="ix" style="--k:-2;--ak:2;--hue:#E0452B"><a class="ix__a" href="/#/start/Black%20holes%20for%20beginners"><span class="ix__tag">Space</span><span class="ix__t">Black holes for beginners</span><span class="ix__d">What they are, how they form, and why light can't leave.</span><span class="ix__go">Start with this lesson</span></a></li>
+        <li class="ix" style="--k:-1;--ak:1;--hue:#F29A30"><a class="ix__a" href="/#/start/Compound%20interest"><span class="ix__tag">Money</span><span class="ix__t">Compound interest</span><span class="ix__d">Why small amounts grow so large, given time.</span><span class="ix__go">Start with this lesson</span></a></li>
+        <li class="ix" style="--k:0;--ak:0;--hue:#3DBB6A"><a class="ix__a" href="/#/start/How%20habits%20form"><span class="ix__tag">Mind</span><span class="ix__t">How habits form</span><span class="ix__d">The loop behind a habit, and how to change one.</span><span class="ix__go">Start with this lesson</span></a></li>
+        <li class="ix" style="--k:1;--ak:1;--hue:#2F7BF5"><a class="ix__a" href="/#/start/Why%20some%20chords%20sound%20sad"><span class="ix__tag">Art &amp; music</span><span class="ix__t">Why some chords sound sad</span><span class="ix__d">What your ear is hearing in minor and major.</span><span class="ix__go">Start with this lesson</span></a></li>
+        <li class="ix" style="--k:2;--ak:2;--hue:#7B5CD6"><a class="ix__a" href="/#/start/The%20French%20Revolution%20in%205%20ideas"><span class="ix__tag">History</span><span class="ix__t">The French Revolution in 5 ideas</span><span class="ix__d">Five ideas that explain how it happened.</span><span class="ix__go">Start with this lesson</span></a></li>
       </ul>
       <form class="composer composer--close" data-composer data-sc-cue="0 1 0 0">
         <label class="close__ask" for="topic-2">Or name your own</label>
         <div class="composer__row">
           <input id="topic-2" name="topic" type="text" placeholder="Anything at all" autocomplete="off" maxlength="200">
-          <button type="submit">Start a lesson</button>
+          <button type="submit">Continue with Google</button>
         </div>
-        <p class="composer__note" data-next hidden></p>
+        <ol class="steps" data-steps aria-label="How you start">
+          <li>Sign in with Google</li><li>What are you curious about?</li><li>Your pace</li><li>Your first lesson</li>
+        </ol>
       </form>
       <footer class="foot">
         <p><span class="foot__mark">Wonder</span> Lessons, the tutor and the Teacher are written by Claude, an AI made by Anthropic.</p>

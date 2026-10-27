@@ -11,7 +11,12 @@ const $ = (s, r = document) => r.querySelector(s);
 const clamp01 = (x) => (x < 0 ? 0 : x > 1 ? 1 : x);
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const actP = (el) => parseFloat(el.style.getPropertyValue('--sc-p')) || 0;
-const learnUrl = (topic) => `${APP}#/learn/${encodeURIComponent(topic)}`;
+// Every way in goes through the app's #/start route (public/start-core.js): with accounts on it
+// signs in with Google, then onboarding offers the topic as the first lesson; without accounts it
+// opens onboarding or the lesson straight away.
+const startUrl = (topic = '') => `${APP}#/start${topic ? `/${encodeURIComponent(topic)}` : ''}`;
+// Sign-in first until /api/account says otherwise (accounts off, or already signed in).
+let signInFirst = true;
 
 // ------------------------------------------------------------------ composers
 document.querySelectorAll('[data-composer]').forEach((form) => {
@@ -33,31 +38,40 @@ document.querySelectorAll('[data-composer]').forEach((form) => {
     if (!topic) {
       // An example is showing in the field: hand it over, so a second press starts it.
       if (input.dataset.example) { input.value = input.dataset.example; input.focus(); return; }
+      // Continue with Google needs no topic: onboarding's last step picks one after sign-in.
+      if (signInFirst) { location.href = startUrl(); return; }
       form.classList.remove('is-empty'); void form.offsetWidth; form.classList.add('is-empty');
       input.focus();
       return;
     }
-    location.href = learnUrl(topic);
+    location.href = startUrl(topic);
   });
 });
 
 // ------------------------------------------------------------------ what happens next
-// With accounts on, Claude needs a signed-in user: say so before the click, and give people who
-// already use Wonder a way straight in. Without the app behind this page (the standalone build),
-// /api/account is missing and the page keeps "Open Wonder".
+// With accounts on, everything in Wonder needs a signed-in user: the composers say "Continue with
+// Google" and the notes say what comes after it (the same steps onboarding shows). Accounts off,
+// or already signed in, they go straight to a lesson. Without the app behind this page (the
+// standalone build), /api/account is missing and the page keeps its sign-in wording.
 fetch('/api/account', { credentials: 'same-origin' })
   .then((r) => (r.ok ? r.json() : null))
   .then((a) => {
-    if (!a?.sync || a.signedIn) return;
+    if (!a) return;
+    if (!a.sync || a.signedIn) {
+      signInFirst = false;
+      document.querySelectorAll('[data-composer] button[type="submit"]').forEach((b) => { b.textContent = 'Start a lesson'; });
+      document.querySelectorAll('[data-steps]').forEach((n) => { n.hidden = true; });
+      return;
+    }
     const barIn = $('#bar-in');
     barIn.textContent = 'Sign in';
     barIn.href = `${APP}#/signin`;
     document.querySelectorAll('[data-next]').forEach((n) => {
-      // The hero's note stays one line (it sits under the headline); it offers the lesson on this
-      // page that needs no sign-in. The others say why sign-in comes first.
+      // The hero's note stays one line (it sits under the headline); it also offers the lesson on
+      // this page that needs no sign-in.
       n.innerHTML = n.hasAttribute('data-try')
-        ? "Sign in with Google to save your lessons, or <a href=\"#p2\">try a real one first</a>, no sign-in."
-        : "You'll sign in with Google so your lessons and cards are saved to your account. <b>Your topic will be waiting.</b>";
+        ? "Then pick your pace, and it's your first lesson. Or <a href=\"#p2\">try a real one first</a>, no sign-in."
+        : "Sign in with Google, pick your pace, and it's your first lesson.";
       n.hidden = false;
     });
   })
@@ -103,7 +117,7 @@ function updateBar() {
     segs.get(current.id).setAttribute('aria-current', 'step');
     where.textContent = `Page ${current.dataset.page} of 5`;
   } else {
-    where.textContent = scrollY < vh ? '' : 'Start';
+    where.textContent = '';
   }
 }
 
@@ -201,7 +215,7 @@ async function buildTopics() {
   const rows = Array.from({ length: ROWS }, () => []);
   all.forEach((x, i) => rows[i % ROWS].push(x)); // deal round-robin so each row mixes subjects
   $('#topics').innerHTML = rows.map((row, r) => `<div class="topics__row" style="--dir:${r % 2 ? 1 : -1};--spd:${180 + r * 40}px">${
-    row.map((x) => `<a class="chip" href="${esc(learnUrl(x.t))}"><span class="chip__tag">${esc(x.tag)}</span>${esc(x.t)}</a>`).join('')}</div>`).join('');
+    row.map((x) => `<a class="chip" href="${esc(startUrl(x.t))}"><span class="chip__tag">${esc(x.tag)}</span>${esc(x.t)}</a>`).join('')}</div>`).join('');
 }
 buildTopics();
 
@@ -450,7 +464,7 @@ function updateCurve() {
       <p class="approval__k">Suggested lesson · ${esc(a.level)}</p>
       <h3 class="approval__t">${esc(a.topic)}</h3>
       <p class="approval__r">${esc(a.reason)}</p>
-      <div class="approval__go"><a class="btn btn--primary" href="${esc(learnUrl(a.topic))}">Start a lesson</a></div>
+      <div class="approval__go"><a class="btn btn--primary" href="${esc(startUrl(a.topic))}">Start this lesson</a></div>
     </div>
     <p class="rail__note">A real plan the Teacher made for one learner, who asked the question above. You can see and delete anything it remembers.</p>`;
 }
