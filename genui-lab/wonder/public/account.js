@@ -196,8 +196,12 @@ export async function signIn() {
   if (!a) throw new Error('Sign-in is not available right now. Reload and try again.');
   const user = sessionUser || (await loadSessionUser());
   if (user) return current && user.id === current.userId ? location.reload() : current ? switchToSignedIn() : beginAccount(user.id);
-  // the callback is this page without its #route (the verifier goes in the query); the route comes back after
-  try { sessionStorage.setItem(RETURN_HASH, location.hash || ''); } catch {}
+  // the callback is this page without its #route (the verifier goes in the query); the route comes back after.
+  // From the home page, a link the landing script saved (a signed-out deep link) is kept instead.
+  try {
+    const here = location.hash && location.hash !== '#/' ? location.hash : '';
+    if (here || !sessionStorage.getItem(RETURN_HASH)) sessionStorage.setItem(RETURN_HASH, here);
+  } catch {}
   const { error } = await a.signIn.social({ provider: 'google', callbackURL: `${location.origin}${location.pathname}` });
   if (error) throw new Error(error.message || 'Could not start sign-in with Google');
 }
@@ -248,6 +252,12 @@ export async function switchToSignedIn() {
 }
 
 /** The signed-in person's email (or name), when the session has loaded. */
+/** The signed-in user's first name from their Google account (for onboarding), or ''. */
+export async function accountFirstName() {
+  const user = sessionUser || (await loadSessionUser());
+  return String(user?.name || '').trim().split(/\s+/)[0] || '';
+}
+
 export function accountLabel() {
   return sessionUser?.email || sessionUser?.name || null;
 }

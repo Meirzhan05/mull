@@ -3,7 +3,8 @@
 // and You (stats, settings, learner memory).
 
 import { createStore, uid } from './store.js';
-import { openLocalCache, startAccount, pushActive, onSyncStatus, signIn } from './account.js'; // account sync
+import { openLocalCache, startAccount, pushActive, onSyncStatus, signIn, accountFirstName } from './account.js'; // account sync
+import { startAction, startTopic } from './start-core.js'; // sign in, onboarding, first lesson
 import { DilSurface, mergeComponentResults } from './dil-surface.js';
 import { streamTurn, postJson, failureError, retryDelay } from './stream-client.js';
 import { retryControl } from './retry-ui.js'; // recoverable streams
@@ -72,6 +73,25 @@ const AFTER_SIGN_IN = 'wonder.afterSignIn';
 function startAfterSignIn(topic, level) {
   try { sessionStorage.setItem(AFTER_SIGN_IN, JSON.stringify({ topic, level, at: Date.now() })); } catch {}
 }
+// Accounts on (app/layout.js data-accounts): everything needs a signed-in user, so a topic waits
+// through sign-in and onboarding comes after it.
+const ACCOUNTS = document.documentElement.dataset.accounts === 'on';
+let signingIn = false; // a Google redirect is starting: nothing else should open over it
+
+/** Sign in with Google; a topic waits for the first page load with an account (startAfterSignIn). */
+function beginSignIn(topic) {
+  if (topic) startAfterSignIn(topic, levelOf(store.data.settings));
+  signingIn = true;
+  signIn().catch((err) => { signingIn = false; toast(err.message || 'Sign-in is not available right now'); });
+}
+
+/** First-run onboarding; firstTopic is the topic brought from the landing page (its last step). */
+function openOnboarding(firstTopic = '') {
+  if (signingIn || document.querySelector('.onboard')) return;
+  showOnboarding({ store, startLesson, firstTopic, accountName: localCache.account ? accountFirstName() : null,
+    onDone: () => { refreshChrome(); if (!location.hash || location.hash === '#/') route(); } });
+}
+
 function takeAfterSignIn() {
   if (!localCache.account) return null;
   try {
@@ -1329,14 +1349,26 @@ function route() {
     let t = '';
     try { t = decodeURIComponent(m[1]); } catch {}
     location.replace('#/');
-    if (t.trim()) startLesson(t.slice(0, 200));
+    t = t.trim().slice(0, 200);
+    if (ACCOUNTS && !localCache.account) beginSignIn(t); // an old link, signed out: sign in first
+    else if (t) startLesson(t);
+    return;
+  }
+  // #/start[/<topic>] is the landing page's "Continue with Google": sign in first, then onboarding
+  // (offering the topic as the first lesson), then the lesson (public/start-core.js).
+  if (/^#\/start(\/|$)/.test(h)) {
+    const next = startAction({ accounts: ACCOUNTS, signedIn: !!localCache.account, needsOnboarding: needsOnboarding(store.data), topic: startTopic(h) });
+    location.replace('#/');
+    if (next.action === 'signin') beginSignIn(next.topic);
+    else if (next.action === 'onboard') openOnboarding(next.topic);
+    else if (next.action === 'lesson') startLesson(next.topic);
     return;
   }
   // #/signin opens sign-in over Today (the landing page's "Sign in" link; a plain / would send a
   // signed-out visitor back to the landing page).
   if (h === '#/signin') {
     location.replace('#/');
-    signIn().catch((err) => toast(err.message || 'Sign-in is not available right now'));
+    beginSignIn();
     return;
   }
   if ((m = /^#\/lesson\/([\w-]+)$/.exec(h))) { screen = 'lesson'; document.body.dataset.screen = screen; renderLesson(m[1]); }
@@ -1362,10 +1394,13 @@ applyFontScale();
 observeMath(document.body);
 refreshChrome();
 loadStatus().then(() => {
+  // A new account onboards first (the topic it brought waits in onboarding's last step); with
+  // accounts on, onboarding only ever runs signed in.
   const afterSignIn = takeAfterSignIn();
-  if (afterSignIn) startLesson(afterSignIn.topic, afterSignIn.level || undefined); // its hashchange routes
+  const onboard = needsOnboarding(store.data) && (!ACCOUNTS || !!localCache.account);
+  if (afterSignIn && !onboard) startLesson(afterSignIn.topic, afterSignIn.level || undefined); // its hashchange routes
   else route();
-  if (needsOnboarding(store.data)) showOnboarding({ store, startLesson, onDone: () => { refreshChrome(); if (!location.hash || location.hash === '#/') route(); } });
+  if (onboard) openOnboarding(afterSignIn?.topic || '');
   // account sync: changes from other devices redraw Today / Library when that cannot disturb reading
   onSyncStatus((s) => {
     if (s.state === 'synced' && s.applied && ['home', 'library'].includes(document.body.dataset.screen) && window.scrollY < 40 && !document.querySelector('.onboard, dialog[open]')) route();

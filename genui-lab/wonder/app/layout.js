@@ -40,11 +40,13 @@ const THEME_SCRIPT = "try{var t=localStorage.getItem('wonder.theme');if(t==='lig
 
 
 // signed out (account sync on) or a first visit: the home page opens on the landing page
-const LANDING_SCRIPT = landingScript({ accounts: syncConfig().enabled });
+const ACCOUNTS = syncConfig().enabled;
+const LANDING_SCRIPT = landingScript({ accounts: ACCOUNTS });
 
 export default function RootLayout({ children }) {
   return (
-    <html lang="en" className={`${sans.variable} ${mono.variable}`} suppressHydrationWarning>
+    // data-accounts: whether everything needs a signed-in user (public/app.js reads it at boot)
+    <html lang="en" className={`${sans.variable} ${mono.variable}`} data-accounts={ACCOUNTS ? 'on' : 'off'} suppressHydrationWarning>
       <head>
         <script dangerouslySetInnerHTML={{ __html: LANDING_SCRIPT }} />
         <script dangerouslySetInnerHTML={{ __html: THEME_SCRIPT }} />
