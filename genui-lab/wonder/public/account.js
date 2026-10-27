@@ -29,6 +29,7 @@ let engine = null;
 let cache = null; // the account's storage
 let current = null; // {userId}
 let theStore = null;
+let switching = false; // beginAccount() is reloading this page into an account
 const statusListeners = new Set();
 let syncStatus = { state: 'off' };
 
@@ -183,6 +184,7 @@ export async function beginAccount(userId, { store } = {}) {
     ls()?.setItem(ACCOUNT_KEY, JSON.stringify({ userId }));
   } catch {}
   if (readJson(ACCOUNT_KEY)?.userId !== userId) throw new Error('This browser’s storage is full or blocked, so it cannot switch to your account. Free some space (or export and erase your data) and try again.');
+  switching = true;
   location.reload();
 }
 
@@ -264,6 +266,7 @@ export function accountLabel() {
 
 export const accountInfo = () => info;
 export const signedInAccount = () => current;
+export const accountSwitching = () => switching;
 export const syncEngine = () => engine;
 export const currentSyncStatus = () => syncStatus;
 export function onSyncStatus(fn) { statusListeners.add(fn); return () => statusListeners.delete(fn); }

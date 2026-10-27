@@ -18,6 +18,7 @@ export default function WonderApp() {
     globalThis.__wonderAuth ??= createAuthClient();
     import(/* webpackIgnore: true */ /* turbopackIgnore: true */ '/app.js').catch((err) => {
       console.error('[wonder] client failed to start', err);
+      document.documentElement.removeAttribute('data-handoff'); // (app/landing-script.js)
       const main = document.getElementById('app');
       if (main) main.textContent = 'Wonder could not start. Reload the page to try again.';
     });

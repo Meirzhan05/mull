@@ -137,6 +137,14 @@ body {
   margin: 0; background: var(--bg); color: var(--ink); font-family: var(--font); font-size: 14px; line-height: 1.5;
   -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; overflow-x: hidden; text-rendering: optimizeLegibility;
 }
+/* sign-in handing off to Google and back (app/landing-script.js): the app waits behind a short note */
+html[data-handoff] { background: var(--bg); }
+html[data-handoff] body { visibility: hidden; }
+html[data-handoff]::after {
+  content: 'Opening Google sign-in…'; position: fixed; inset: 0; display: grid; place-items: center;
+  visibility: visible; color: var(--ink-3); font-family: var(--font); font-size: 14px; animation: fade-in 400ms 300ms ease both;
+}
+html[data-handoff="return"]::after { content: 'Signing you in…'; }
 a { color: inherit; }
 button, input, textarea, select { font: inherit; color: inherit; }
 :focus-visible { outline: none; box-shadow: var(--ring); border-radius: var(--r-sm); }
