@@ -15,6 +15,17 @@ const learnUrl = (topic) => `${APP}#/learn/${encodeURIComponent(topic)}`;
 
 // ------------------------------------------------------------------ composers
 document.querySelectorAll('[data-composer]').forEach((form) => {
+  // The whole box reads as one field, but the input is only part of it: a press on its padding or
+  // the gap before the button focused nothing. Anywhere in the box but the button focuses it.
+  const field = form.querySelector('input');
+  form.addEventListener('pointerdown', (e) => {
+    if (e.target === field || e.target.closest('button, a, label')) return;
+    // the visible box: .composer__row where there is one, else the hero form itself
+    const box = e.target.closest('.composer__row') || (e.target === form && !form.querySelector('.composer__row') ? form : null);
+    if (!box) return;
+    e.preventDefault();
+    field.focus();
+  });
   form.addEventListener('submit', (e) => {
     e.preventDefault();
     const input = form.querySelector('input');

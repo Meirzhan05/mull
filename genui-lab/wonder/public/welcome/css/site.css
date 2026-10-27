@@ -646,3 +646,11 @@ button { cursor: pointer; }
 /* the hero copy rides above the light layers: drifting dust and spectrum lightened the small
    note under the composer below 4.5:1 */
 .hero__copy, .hero__beat { z-index: 6; }
+
+/* the composer box is one field: text cursor across it, and the input fills its height */
+.composer, .composer__row { cursor: text; }
+.composer button, .composer label { cursor: pointer; }
+.composer input { align-self: stretch; }
+/* the second hero line sits over the composer, invisible until you scroll; it is display text and
+   must never take the clicks meant for the field under it */
+.hero__beat { pointer-events: none; }
