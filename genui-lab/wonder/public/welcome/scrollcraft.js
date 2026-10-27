@@ -883,7 +883,9 @@
           a.vp = a.dwell ? dwell(vraw, a.dwell) : vraw;
         }
         a.live = (y > a.top - vh * 1.25) && (y < a.top + a.height + vh * 1.25);
-        a.el.style.setProperty('--sc-p', a.p.toFixed(4));
+        // Only on change: every write restyles the act's whole subtree, and most acts sit at 0 or 1.
+        var ps = a.p.toFixed(4);
+        if (ps !== a.ps) { a.ps = ps; a.el.style.setProperty('--sc-p', ps); }
 
         // Fetch earlier than we drive. A 1080p clip is megabytes, and a reader
         // who scrolls briskly will otherwise arrive at a stage that is still
@@ -917,6 +919,7 @@
               pq.el.style.opacity = '0';
               pq.el.style.pointerEvents = 'none';
               pq.state = 0;
+              pq.vis = null;
               if (pq.units) for (var zu = 0; zu < pq.units.length; zu++) pq.units[zu].style.opacity = '0';
             }
             a.parked = true;
@@ -956,8 +959,9 @@
                 : 'translate3d(0,' + ((1 - uv) * 100).toFixed(2) + '%,0)';
             }
             q.el.style.opacity = '1';
-          } else {
-            q.el.style.opacity = vis.toFixed(3);
+          } else if (vis.toFixed(3) !== q.vis) {
+            q.vis = vis.toFixed(3);
+            q.el.style.opacity = q.vis;
             q.el.style.transform = reduce ? 'none'
               : 'translate3d(0,' + ((1 - vis) * 2.4 * q.rise).toFixed(2) + 'vh,0)';
           }
@@ -1232,7 +1236,8 @@
 
     layout();
     initPointer();
-    scTickFrame = requestAnimationFrame(tick);
+    // The seek loop runs every frame, so only a page with scrubbed clips starts it.
+    if (playheads.length) scTickFrame = requestAnimationFrame(tick);
     document.documentElement.classList.add('sc-ready');
 
     var api = { layout: layout, read: read, acts: acts, worlds: worlds, clips: playheads, lerp: LERP };

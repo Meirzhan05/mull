@@ -101,18 +101,23 @@ const bar = $('#bar');
 const where = $('#where');
 const pages = [...document.querySelectorAll('[data-page]')];
 const segs = new Map([...document.querySelectorAll('[data-seg]')].map((a) => [a.dataset.seg, a]));
+let barCurrent;
 function updateBar() {
   const vh = innerHeight;
   bar.classList.toggle('is-solid', scrollY > vh * 0.55);
+  // every read before any write, so the rects cost one layout, not one per page
+  const rects = pages.map((sec) => sec.getBoundingClientRect());
   let current = null;
-  for (const sec of pages) {
-    const r = sec.getBoundingClientRect();
-    const f = clamp01((vh * 0.5 - r.top) / r.height);
+  pages.forEach((sec, k) => {
+    const r = rects[k];
+    const f = clamp01((vh * 0.5 - r.top) / r.height).toFixed(3);
     const seg = segs.get(sec.id);
-    seg.style.setProperty('--f', f.toFixed(3));
+    if (seg.style.getPropertyValue('--f') !== f) seg.style.setProperty('--f', f);
     if (r.top <= vh * 0.5 && r.bottom > vh * 0.5) current = sec;
-    seg.toggleAttribute('aria-current', false);
-  }
+  });
+  if (current === barCurrent) return;
+  barCurrent = current;
+  segs.forEach((seg) => seg.removeAttribute('aria-current'));
   if (current) {
     segs.get(current.id).setAttribute('aria-current', 'step');
     where.textContent = `Page ${current.dataset.page} of 5`;
@@ -128,15 +133,19 @@ if (fine && !reduce) {
   addEventListener('pointermove', (e) => {
     ptr.tx = (e.clientX / innerWidth) * 2 - 1;
     ptr.ty = (e.clientY / innerHeight) * 2 - 1;
+    kick();
   }, { passive: true });
 }
+/** Returns true while the pointer parallax is still easing (another frame wanted). */
 function updateHero() {
   updateSpill();
-  if (!fine || reduce) return;
+  if (!fine || reduce) return false;
+  if (Math.abs(ptr.tx - ptr.x) < 0.0005 && Math.abs(ptr.ty - ptr.y) < 0.0005) return false;
   ptr.x += (ptr.tx - ptr.x) * 0.06;
   ptr.y += (ptr.ty - ptr.y) * 0.06;
   heroStage.style.setProperty('--mx', ptr.x.toFixed(4));
   heroStage.style.setProperty('--my', ptr.y.toFixed(4));
+  return true;
 }
 
 // ------------------------------------------------------------------ hero: the spectrum becomes the lesson
@@ -176,9 +185,12 @@ function layoutSpill() {
   return L;
 }
 const easeOut = (x) => 1 - Math.pow(1 - x, 3);
+let spillAt = '';
 function updateSpill() {
   const L = layoutSpill();
   const p = actP(hero);
+  if (`${spillKey}:${p}` === spillAt) return;
+  spillAt = `${spillKey}:${p}`;
   const lines = rays.querySelectorAll('line');
   let li = 0;
   frags.forEach((el, k) => {
@@ -301,9 +313,15 @@ function showFrame(i) {
   stream.dataset.scVerifyState = String(i);
   shown = i;
 }
+/** Returns true while the reader is still gliding to the writing head (another frame wanted). */
+let streamAt = -1;
+let streamGliding = false;
 function updateStream() {
-  const u = (actP(p2) - 0.03) / 0.88;
-  showFrame(frameAt(u));
+  const p = actP(p2);
+  // offscreen and nothing left to glide: the measurements below would cost a layout for nothing
+  if (p === streamAt && !streamGliding) return false;
+  streamAt = p;
+  showFrame(frameAt((p - 0.03) / 0.88));
   // Keep the writing head in view, the way the app follows a stream.
   const last = lessonEl.lastElementChild;
   const bottom = last ? last.offsetTop + last.offsetHeight : 0;
@@ -312,6 +330,8 @@ function updateStream() {
   follow += (target - follow) * (reduce ? 1 : 0.14);
   if (Math.abs(target - follow) < 0.5) follow = target;
   lessonEl.style.transform = `translate3d(0, ${-follow.toFixed(1)}px, 0)`;
+  streamGliding = follow !== target;
+  return streamGliding;
 }
 
 // ------------------------------------------------------------------ page 4: the lesson's own cards
@@ -424,8 +444,11 @@ const cvHead = $('#cv-head');
 const cvRevs = [...document.querySelectorAll('.cv-rev')];
 const crDay = $('#cr-day'), crNext = $('#cr-next');
 let lastDay = -1;
+let curveAt = -1;
 function updateCurve() {
   const u = clamp01((actP(p4) - 0.06) / 0.84);
+  if (u === curveAt) return;
+  curveAt = u;
   const t = TMAX * u * u;
   const x = xOf(t);
   cvClip.setAttribute('width', (x + 1).toFixed(1));
@@ -473,16 +496,31 @@ function updateCurve() {
 const close = $('#close');
 const closeAct = $('#cards');
 function updateClose() {
-  close.dataset.scVerifyState = (Math.round(clamp01((actP(closeAct) - 0.04) * 2.3) * 20)).toString();
+  const v = (Math.round(clamp01((actP(closeAct) - 0.04) * 2.3) * 20)).toString();
+  if (close.dataset.scVerifyState !== v) close.dataset.scVerifyState = v;
 }
 
 // ------------------------------------------------------------------ one loop
+// Runs only while something moves: a scroll or resize, the hero easing after the pointer, the
+// reader gliding to the writing head. A page left alone does no work: a loop that measured the
+// layout on every frame kept phones busy and made typing in the composers lag.
+// The engine publishes --sc-p from its own scroll frame, queued before this one (its script runs
+// first); a frame whose progress still changed asks for one more, so the last value is drawn.
+let raf = 0;
+let progressAt = '';
+function kick() { if (!raf) raf = requestAnimationFrame(frame); }
 function frame() {
+  raf = 0;
   updateBar();
-  updateHero();
-  updateStream();
+  const easing = updateHero();
+  const gliding = updateStream();
   updateCurve();
   updateClose();
-  requestAnimationFrame(frame);
+  const progress = [hero, p2, p4, closeAct].map(actP).join();
+  if (easing || gliding || progress !== progressAt) kick();
+  progressAt = progress;
 }
-requestAnimationFrame(frame);
+addEventListener('scroll', kick, { passive: true });
+addEventListener('resize', () => { streamAt = -1; curveAt = -1; kick(); });
+document.fonts?.ready.then(() => { streamAt = -1; kick(); }); // the engine relays out then too
+kick();
