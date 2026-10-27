@@ -654,6 +654,12 @@ button { cursor: pointer; }
 /* the second hero line sits over the composer, invisible until you scroll; it is display text and
    must never take the clicks meant for the field under it */
 .hero__beat { pointer-events: none; }
+/* typing in the hero: a phone scrolls the page up to make room for its keyboard, far enough that
+   the copy's cue faded the composer out and made it untappable mid-word. While the composer has
+   focus or text it stays put and the second line waits. (!important: the engine's cue styles are
+   inline.) */
+.hero__copy:focus-within, .hero__copy:has(input:not(:placeholder-shown)) { opacity: 1 !important; transform: none !important; pointer-events: auto !important; }
+.hero__stage:has(.hero__copy :focus-within, .hero__copy input:not(:placeholder-shown)) .hero__beat { opacity: 0 !important; }
 
 /* the close: how you start, in onboarding's own step names */
 .steps { list-style: none; margin: 12px 0 0; padding: 0; display: flex; flex-wrap: wrap; justify-content: center; gap: 6px 4px; counter-reset: step; font-size: 0.84rem; color: var(--sc-ink-soft); }
