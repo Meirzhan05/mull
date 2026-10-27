@@ -6,14 +6,21 @@ import vm from 'node:vm';
 import { landingScript } from '../app/landing-script.js';
 
 /** Run the script on a page; returns where it sent the page, or null when it stayed. */
-function land(accounts, { url = 'http://localhost/', cookie = '', storage = {}, session = {} } = {}) {
+function land(accounts, opts = {}) {
+  return visit(accounts, opts).to;
+}
+
+/** The same, with the page's <html data-handoff> too ({to, handoff}). */
+function visit(accounts, { url = 'http://localhost/', cookie = '', storage = {}, session = {} } = {}) {
   const u = new URL(url);
   let to = null;
+  const attrs = {};
   const location = { pathname: u.pathname, hash: u.hash, search: u.search, replace: (x) => { to = x; } };
   const localStorage = { getItem: (k) => (k in storage ? storage[k] : null) };
-  const sessionStorage = { setItem: (k, v) => { session[k] = v; } };
-  vm.runInNewContext(landingScript({ accounts }), { location, localStorage, sessionStorage, document: { cookie } });
-  return to;
+  const sessionStorage = { getItem: (k) => (k in session ? session[k] : null), setItem: (k, v) => { session[k] = v; } };
+  const documentElement = { setAttribute: (k, v) => { attrs[k] = v; } };
+  vm.runInNewContext(landingScript({ accounts }), { location, localStorage, sessionStorage, Date, Number, document: { cookie, documentElement } });
+  return { to, handoff: attrs['data-handoff'] ?? null };
 }
 
 test('landing, accounts on: every signed-out visit to the home page goes to /welcome', () => {
@@ -37,6 +44,20 @@ test('landing, accounts on: a browser with an account, the return from Google an
   assert.equal(land(true, { url: 'http://localhost/#/learn/black%20holes' }), null);
   assert.equal(land(true, { url: 'http://localhost/#/starter' }), '/welcome', 'only #/start itself');
   assert.equal(land(true, { url: 'http://localhost/welcome' }), null);
+});
+
+test('landing, accounts on: the app stays hidden on the way to Google and back (data-handoff)', () => {
+  assert.deepEqual(visit(true, { url: 'http://localhost/#/start/black%20holes' }), { to: null, handoff: 'google' });
+  assert.equal(visit(true, { url: 'http://localhost/#/signin' }).handoff, 'google');
+  assert.equal(visit(true, { url: 'http://localhost/#/learn/tides' }).handoff, 'google');
+  assert.deepEqual(visit(true, { url: 'http://localhost/?neon_auth_session_verifier=6JZ' }), { to: null, handoff: 'return' });
+  // the reload into a fresh account (public/account.js beginAccount) lands on onboarding unseen
+  const account = { 'wonder.account': '{"userId":"9e3c-user"}' };
+  assert.equal(visit(true, { storage: account, session: { 'wonder.beginAccount': String(Date.now() - 2000) } }).handoff, 'return');
+  assert.equal(visit(true, { storage: account, session: { 'wonder.beginAccount': String(Date.now() - 60_000) } }).handoff, null, 'a later reload shows the app at once');
+  assert.equal(visit(true, { storage: account }).handoff, null);
+  assert.equal(visit(true).handoff, null, 'the redirect to /welcome is not a hand-off');
+  assert.equal(visit(false, { url: 'http://localhost/#/start' }).handoff, null, 'accounts off: nothing to hand off to');
 });
 
 test('landing, accounts on: a signed-out deep link goes to /welcome and is kept for after sign-in', () => {

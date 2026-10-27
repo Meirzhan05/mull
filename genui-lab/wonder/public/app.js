@@ -3,7 +3,7 @@
 // and You (stats, settings, learner memory).
 
 import { createStore, uid } from './store.js';
-import { openLocalCache, startAccount, pushActive, onSyncStatus, signIn, accountFirstName } from './account.js'; // account sync
+import { openLocalCache, startAccount, pushActive, onSyncStatus, signIn, accountFirstName, accountSwitching } from './account.js'; // account sync
 import { startAction, startTopic } from './start-core.js'; // sign in, onboarding, first lesson
 import { DilSurface, mergeComponentResults } from './dil-surface.js';
 import { streamTurn, postJson, failureError, retryDelay } from './stream-client.js';
@@ -77,12 +77,16 @@ function startAfterSignIn(topic, level) {
 // through sign-in and onboarding comes after it.
 const ACCOUNTS = document.documentElement.dataset.accounts === 'on';
 let signingIn = false; // a Google redirect is starting: nothing else should open over it
+// On the way to Google and back, the pre-paint script (app/landing-script.js) hides the app behind
+// a short note (<html data-handoff>); it shows again once there is somewhere to land.
+const endHandoff = () => document.documentElement.removeAttribute('data-handoff');
+setTimeout(endHandoff, 20_000); // a hand-off that never lands still ends in the app
 
 /** Sign in with Google; a topic waits for the first page load with an account (startAfterSignIn). */
 function beginSignIn(topic) {
   if (topic) startAfterSignIn(topic, levelOf(store.data.settings));
   signingIn = true;
-  signIn().catch((err) => { signingIn = false; toast(err.message || 'Sign-in is not available right now'); });
+  signIn().catch((err) => { signingIn = false; endHandoff(); toast(err.message || 'Sign-in is not available right now'); });
 }
 
 /** First-run onboarding; firstTopic is the topic brought from the landing page (its last step). */
@@ -1401,10 +1405,15 @@ loadStatus().then(() => {
   if (afterSignIn && !onboard) startLesson(afterSignIn.topic, afterSignIn.level || undefined); // its hashchange routes
   else route();
   if (onboard) openOnboarding(afterSignIn?.topic || '');
+  // back from Google, startAccount() finishes the sign-in and reloads into the account
+  const finishingSignIn = !localCache.account && new URLSearchParams(location.search).has('neon_auth_session_verifier');
+  if (!signingIn && !finishingSignIn) endHandoff();
   // account sync: changes from other devices redraw Today / Library when that cannot disturb reading
   onSyncStatus((s) => {
     if (s.state === 'synced' && s.applied && ['home', 'library'].includes(document.body.dataset.screen) && window.scrollY < 40 && !document.querySelector('.onboard, dialog[open]')) route();
     else refreshChrome();
   });
-  startAccount({ store, toast }).catch((e) => console.warn('[wonder] account sync could not start', e));
+  startAccount({ store, toast })
+    .then(() => { if (!signingIn && !accountSwitching()) endHandoff(); })
+    .catch((e) => { endHandoff(); console.warn('[wonder] account sync could not start', e); });
 });
