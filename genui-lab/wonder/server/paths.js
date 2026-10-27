@@ -11,7 +11,9 @@ function findRoot() {
   const candidates = [];
   if (process.env.WONDER_ROOT) candidates.push(path.resolve(process.env.WONDER_ROOT));
   try { candidates.push(path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')); } catch { /* not a file: URL */ }
-  candidates.push(process.cwd(), path.join(process.cwd(), 'genui-lab', 'wonder'));
+  // a deployment traced from genui-lab/ (outputFileTracingRoot) runs from the bundle root, with the
+  // app under wonder/
+  candidates.push(process.cwd(), path.join(process.cwd(), 'wonder'), path.join(process.cwd(), 'genui-lab', 'wonder'));
   return candidates.find((d) => fs.existsSync(path.join(d, 'server', 'demo'))) || process.cwd();
 }
 
