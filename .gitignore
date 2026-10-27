@@ -29,3 +29,6 @@ genui-lab/wonder/data/
 
 # Agent worktrees
 .claude/worktrees/
+
+# Vercel CLI link (the project builds genui-lab/wonder)
+.vercel

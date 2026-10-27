@@ -1,8 +1,0 @@
-.agents
-.claude
-skills-lock.json
-**/node_modules
-**/.next
-wonder/data
-**/.env
-**/.env.*
