@@ -20,7 +20,7 @@ export default function WonderApp() {
       console.error('[wonder] client failed to start', err);
       document.documentElement.removeAttribute('data-handoff'); // (app/landing-script.js)
       const main = document.getElementById('app');
-      if (main) main.textContent = 'Wonder could not start. Reload the page to try again.';
+      if (main) main.textContent = 'Mull could not start. Reload the page to try again.';
     });
   }, []);
 

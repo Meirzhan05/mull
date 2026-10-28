@@ -6,8 +6,9 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { createMaterialStore, documentBlock, materialCitation, materialTitle, demoMaterialLesson, demoMaterialCourse, isMaterialUrl, MAX_TEXT_CHARS } from '../server/materials.js';
+import { createMaterialStore, documentBlock, materialCitation, materialTitle, demoMaterialLesson, demoMaterialCourse, isMaterialUrl, MAX_TEXT_CHARS, PART_BYTES, MAX_PDF_BYTES, MAX_MATERIAL_TOKENS, MAX_OPEN_UPLOADS, UPLOAD_MAX_AGE_MS, newUploadId, createPartStore, pruneUploads, takeUpload } from '../server/materials.js';
 import { createSourceRegistry } from '../server/grounding.js';
+import Anthropic from '@anthropic-ai/sdk';
 import { createWonderServer } from '../server/app.js';
 import { parseConversationSource, ConversationTurn } from '../../chatgpt-dil/src/stream.js';
 import { runProgram, catalogNodes } from './helpers.js';
@@ -205,4 +206,75 @@ test('web adapter: a PDF larger than the JSON limit uploads to /api/materials on
   assert.equal(Buffer.from(await file.arrayBuffer()).subarray(0, 5).toString('latin1'), '%PDF-');
   const del = await handleWebRequest(core, new Request(`http://localhost/api/materials?id=${item.id}`, { method: 'DELETE' }), { logger: quiet });
   assert.equal((await del.json()).items.length, 0);
+});
+
+test('web adapter: a PDF over Vercel\'s 4.5 MB body cap goes up in parts, each request under it', async () => {
+  const VERCEL_BODY_CAP = 4.5 * 1024 * 1024;
+  const core = createWonderCore({ mode: 'demo', demoDelayMs: 0, logger: quiet, memoryFile: null });
+  const book = Buffer.concat([PDF, Buffer.alloc(7 * 1024 * 1024, 0x20)]);
+  const send = async (path, payload) => {
+    const b = JSON.stringify(payload);
+    assert.ok(Buffer.byteLength(b) < VERCEL_BODY_CAP, `${path} body is ${Buffer.byteLength(b)} bytes`);
+    const res = await handleWebRequest(core, new Request(`http://localhost${path}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: b }), { logger: quiet });
+    return { status: res.status, body: await res.json() };
+  };
+  const total = Math.ceil(book.length / PART_BYTES);
+  let upload = null;
+  for (let index = 0; index < total; index++) {
+    const r = await send('/api/materials/part', { upload, index, total, base64: book.subarray(index * PART_BYTES, (index + 1) * PART_BYTES).toString('base64') });
+    assert.equal(r.status, 200);
+    upload = r.body.upload;
+  }
+  assert.match(upload, /^up-[0-9a-f]{16}$/);
+  const done = await send('/api/materials', { kind: 'pdf', upload, parts: total, filename: 'Book.pdf' });
+  assert.equal(done.status, 200);
+  assert.equal(done.body.item.bytes, book.length);
+  assert.equal(done.body.item.title, 'Book');
+  const file = await handleWebRequest(core, new Request(`http://localhost/api/materials/file?id=${done.body.item.id}`), { logger: quiet });
+  assert.ok(Buffer.from(await file.arrayBuffer()).equals(book), 'the parts are put back together in order');
+  // the parts are gone once used; a missing part, a forged id or a too-large file is refused
+  assert.equal((await send('/api/materials', { kind: 'pdf', upload, parts: total })).status, 400);
+  const first = await send('/api/materials/part', { index: 0, total: 2, base64: PDF.toString('base64') });
+  assert.equal((await send('/api/materials', { kind: 'pdf', upload: first.body.upload, parts: 2 })).status, 400);
+  assert.equal((await send('/api/materials/part', { upload: '../x', index: 1, total: 2, base64: 'AAAA' })).status, 400);
+  assert.equal((await send('/api/materials/part', { index: 0, total: Math.ceil(MAX_PDF_BYTES / PART_BYTES) + 1, base64: 'AAAA' })).status, 400);
+  // the size limit itself: a 20 MB book is kept, a byte more is refused
+  assert.equal(MAX_PDF_BYTES, 20 * 1024 * 1024);
+  const store = createMaterialStore({ dir: null });
+  const atLimit = Buffer.concat([PDF, Buffer.alloc(MAX_PDF_BYTES - PDF.length, 0x20)]);
+  assert.equal(store.add({ kind: 'pdf', bytes: atLimit }).ok, true);
+  assert.match(store.add({ kind: 'pdf', bytes: Buffer.concat([atLimit, Buffer.from(' ')]) }).error, /the limit is 20 MB/);
+});
+
+test('upload parts: abandoned uploads are pruned; only exactly the stated parts are put together', async () => {
+  const now = Date.now();
+  const parts = createPartStore();
+  const old = newUploadId(now - UPLOAD_MAX_AGE_MS - 1000);
+  const recent = [3, 2, 1].map((m) => newUploadId(now - m * 60_000)); // oldest first
+  for (const u of [old, ...recent]) await parts.put(u, 0, Buffer.from('x'));
+  await pruneUploads(parts, now);
+  assert.deepEqual((await parts.list()).sort(), recent.slice(-MAX_OPEN_UPLOADS).map((u) => `${u}.0`).sort(), 'the stale one and all but the newest are gone');
+  // five parts stored, four claimed: refused (a truncated PDF is never saved), and none are left behind
+  const u = newUploadId(now);
+  for (let i = 0; i < 5; i++) await parts.put(u, i, Buffer.from(`${i}`));
+  assert.equal(await takeUpload(parts, u, 4), null);
+  assert.equal((await parts.list()).filter((k) => k.startsWith(u)).length, 0);
+  for (let i = 0; i < 3; i++) await parts.put(u, i, Buffer.from(`${i}`));
+  assert.equal((await takeUpload(parts, u, 3)).toString(), '012');
+});
+
+test('Claude mode: a material too long for a lesson is refused at upload, with Claude\'s own reason for an unreadable one', async () => {
+  let answer = { input_tokens: MAX_MATERIAL_TOKENS + 1 };
+  const client = { messages: { countTokens: async () => { if (answer instanceof Error) throw answer; return answer; } } };
+  const core = createWonderCore({ mode: 'claude', client, demoDelayMs: 0, logger: quiet, memoryFile: null });
+  const add = async () => (await handleWebRequest(core, new Request('http://localhost/api/materials', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ kind: 'pdf', base64: PDF.toString('base64'), filename: 'Book.pdf' }) }), { logger: quiet })).json();
+  assert.match((await add()).error, /too long for one lesson .*the limit is 800k/);
+  answer = new Anthropic.BadRequestError(400, { type: 'error', error: { type: 'invalid_request_error', message: 'A maximum of 600 PDF pages may be provided.' } }, undefined, new Headers());
+  assert.match((await add()).error, /Claude can't read that file: A maximum of 600 PDF pages/);
+  answer = new Error('socket hang up');
+  const kept = await add();
+  assert.equal(kept.ok, true, 'a counting hiccup keeps the material');
+  assert.equal(kept.item.tokens, undefined);
+  answer = { input_tokens: 120_000 };
+  assert.equal((await add()).item.tokens, 120_000);
 });

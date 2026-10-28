@@ -64,7 +64,7 @@ export function insightsPanel(ctx) {
     ? el('ul', { class: 'works-findings' }, ...w.findings.map((f) => el('li', { dataset: { tone: f.positive === false ? 'down' : 'up' } }, el('span', { class: 'status-dot', 'aria-hidden': 'true' }), el('span', null, f.text))))
     : el('p', { class: 'muted small works-empty' }, w.totalReviews
       ? `No clear pattern yet. A finding needs ${FINDING_LESSONS} lessons and ${FINDING_MIN} delayed reviews on each side, and a 10-point gap.`
-      : 'When a lesson’s cards come back for review a day or more later, Wonder checks what you still remember. Patterns show up here once there is enough data.');
+      : 'When a lesson’s cards come back for review a day or more later, Mull checks what you still remember. Patterns show up here once there is enough data.');
 
   const styles = el('ul', { class: 'mastery-items' }, ...w.variants.map((v) => meterRow(v.label,
     v.n ? `${v.hint} · ${reviews(v.n)}, ${v.lessons} lesson${v.lessons === 1 ? '' : 's'}` : v.assigned ? `${v.hint} · ${v.assigned} lesson${v.assigned === 1 ? '' : 's'}, not reviewed yet` : `${v.hint} · no lessons yet`,
@@ -101,6 +101,6 @@ export function insightsPanel(ctx) {
         fadingList) : null,
       el('div', { class: 'setting works-toggle' },
         el('div', { class: 'setting-text' }, el('strong', null, 'Teaching-style experiment'),
-          el('p', { class: 'muted small' }, `New lessons rotate between ${VARIANT_IDS.length} styles until Wonder can tell which one you remember best, then mostly use that one.`)),
+          el('p', { class: 'muted small' }, `New lessons rotate between ${VARIANT_IDS.length} styles until Mull can tell which one you remember best, then mostly use that one.`)),
         toggle)));
 }

@@ -84,6 +84,18 @@ test('account sync over HTTP: learner memory belongs to the signed-in user', asy
   });
 });
 
+test('account sync over HTTP: upload parts belong to the signed-in user', async () => {
+  await withServer({}, async ({ alice, bob, anon }) => {
+    const PDF = Buffer.from('%PDF-1.4\n1 0 obj<<>>endobj\ntrailer<<>>\n%%EOF\n');
+    assert.equal((await anon('POST', '/api/materials/part', { index: 0, total: 1, base64: PDF.toString('base64') })).status, 401);
+    const { upload } = (await alice('POST', '/api/materials/part', { index: 0, total: 1, base64: PDF.toString('base64') })).body;
+    assert.equal((await bob('POST', '/api/materials', { kind: 'pdf', upload, parts: 1 })).status, 400, 'Bob cannot claim Alice\'s upload');
+    const done = await alice('POST', '/api/materials', { kind: 'pdf', upload, parts: 1, filename: 'Notes.pdf' });
+    assert.equal(done.status, 200);
+    assert.equal(done.body.item.bytes, PDF.length);
+  });
+});
+
 test('account sync over HTTP: material and its file are readable only by their owner', async () => {
   await withServer({}, async ({ alice, bob, anon }) => {
     const up = await alice('POST', '/api/materials', { kind: 'text', text: NOTES });
@@ -120,6 +132,35 @@ test('push subscriptions are per user, validated, and move with the browser', as
     await bob('POST', '/api/push/subscribe', { subscription, timeZone: 'Europe/Berlin' });
     assert.equal((await sync.db.listSubscriptions('alice')).length, 0);
     assert.equal((await sync.db.listSubscriptions('bob')).length, 1);
+  });
+});
+
+test('delete account: removes only the signed-in user\'s data, then the sign-in; usage counts stay', async () => {
+  const push = { publicKey: 'BPUB', privateKey: 'secret', subject: 'mailto:a@b.c' };
+  const authDeleted = [];
+  await withServer({ push, deleteAuthUser: async () => { authDeleted.push(1); return true; } }, async ({ alice, bob, anon, sync }) => {
+    const lesson = (id, since = 0) => ({ since, changes: [{ kind: 'lesson', id, data: { id }, baseRev: 0, updatedAt: 1 }] });
+    const before = (await alice('POST', '/api/sync', lesson('a1'))).body.rev;
+    await bob('POST', '/api/sync', lesson('b1'));
+    const m = (await alice('POST', '/api/materials', { kind: 'text', text: NOTES })).body.item;
+    await alice('POST', '/api/memory', { fact: 'Preparing for the statistics exam in May', kind: 'goal' });
+    await alice('POST', '/api/push/subscribe', { subscription: { endpoint: 'https://push.example.test/send/a', keys: { p256dh: 'p', auth: 'a' } } });
+    await sync.db.useQuota('alice', '2026-10-28', 'lesson', 10);
+    assert.equal((await anon('DELETE', '/api/account')).status, 401);
+    assert.equal(authDeleted.length, 0);
+    assert.deepEqual((await alice('DELETE', '/api/account')).body, { ok: true, authDeleted: true });
+    assert.equal(authDeleted.length, 1, 'the sign-in goes in the same request');
+    assert.equal((await alice('GET', '/api/account')).body.records, 0);
+    assert.deepEqual((await alice('POST', '/api/sync', { since: 0, changes: [] })).body.records, []);
+    assert.deepEqual((await alice('GET', '/api/memory')).body.items, []);
+    assert.deepEqual((await alice('GET', '/api/materials')).body.items, []);
+    assert.equal(await sync.db.getFile('alice', m.id), null);
+    assert.equal((await sync.db.listSubscriptions('alice')).length, 0);
+    assert.deepEqual(await sync.db.quotaUsed('alice', '2026-10-28'), { lesson: 1 }, 'deleting does not reset the day\'s caps');
+    // another device still holding the deleted data cannot push it back
+    assert.equal((await alice('POST', '/api/sync', lesson('a2', before))).status, 410);
+    assert.equal((await alice('GET', '/api/account')).body.records, 0);
+    assert.equal((await bob('GET', '/api/account')).body.records, 1, 'Bob keeps his');
   });
 });
 

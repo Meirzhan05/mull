@@ -84,7 +84,7 @@ export function renderTeacher(ctx, threadId) {
       ctxToggle),
     scroller,
     form);
-  const contextPanel = buildContext(store);
+  const contextPanel = buildContext(store, ctx.actions);
   const layout = el('div', { class: 'teacher-layout' }, threadsPanel, main, contextPanel.el);
   ctxToggle.addEventListener('click', () => {
     const open = !layout.classList.contains('ctx-open');
@@ -363,7 +363,7 @@ export function renderTeacher(ctx, threadId) {
  * The Teacher's context, shown beside the conversation: the learner memory it reads, the progress
  * snapshot it receives with every message, and the saved study plan.
  */
-function buildContext(store) {
+function buildContext(store, actions) {
   const memList = el('ul', { class: 'ctx-list' }, el('li', { class: 'faint' }, 'Loading…'));
   const progress = el('dl', { class: 'kv' });
   const planBox = el('div', { class: 'ctx-plan' });
@@ -383,7 +383,8 @@ function buildContext(store) {
     const plan = (d.plans || [])[0];
     if (plan) {
       const items = (plan.days || []).flatMap((x) => x.items || []);
-      planBox.replaceChildren(el('p', { class: 'ctx-plan-goal' }, plan.goal), el('p', { class: 'faint small' }, `${items.filter((i) => i.opened).length} of ${items.length} items opened`));
+      planBox.replaceChildren(el('p', { class: 'ctx-plan-goal' }, plan.goal), el('p', { class: 'faint small' }, `${items.filter((i) => i.opened).length} of ${items.length} items opened`),
+        el('button', { class: 'link-btn', type: 'button', onclick: () => actions?.exportPlan?.(plan.id) }, icon('calendar'), 'Add to calendar'));
     } else planBox.replaceChildren(el('p', { class: 'faint small' }, 'No saved plan. Ask for one and press Save.'));
     if (d.settings?.memoryEnabled === false) { memList.replaceChildren(el('li', { class: 'faint small' }, 'Memory is off.')); return; }
     fetch('/api/memory').then((r) => r.json()).then((r) => {

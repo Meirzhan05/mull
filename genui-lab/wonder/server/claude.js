@@ -188,4 +188,9 @@ export function friendlyError(err) {
   return { code: 'internal', message: 'Something went wrong while generating. Please try again.' };
 }
 
+/** The API's own message for a request Claude refused as invalid (HTTP 400), else null. */
+export function badRequestMessage(err) {
+  return err instanceof Anthropic.BadRequestError ? String(err?.error?.error?.message || err.message) : null;
+}
+
 export const REFUSAL_MESSAGE = "\n\n*I can't help with that topic. Try asking about something else you're curious about.*\n";

@@ -71,7 +71,7 @@ export function dailyBrief(data, now = new Date()) {
 /** One-line notification text: the headline plus the top action. */
 export function briefNotification(brief) {
   const top = brief.items[0];
-  return { title: 'Wonder', body: top ? `${brief.headline} Next: ${top.title}.` : brief.headline };
+  return { title: 'Mull', body: top ? `${brief.headline} Next: ${top.title}.` : brief.headline };
 }
 
 /** Should the daily reminder fire now? (enabled, past its time, nothing studied today, not yet shown today) */

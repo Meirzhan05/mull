@@ -9,6 +9,7 @@ import { createMemoryDb } from '../server/sync/memory-db.js';
 import { usageKind, usageLimits, usageDay, limitBody, createUsageGate, DEFAULT_LIMITS, RETRY_FREE, RETRY_WINDOW_MS } from '../server/usage.js';
 import { streamTurn, classifyFailure, postJson } from '../public/stream-client.js';
 import { fakeClient } from './helpers.js';
+import { materialCharge } from '../server/materials.js';
 
 const quiet = { warn() {}, error() {}, log() {}, info() {} };
 
@@ -92,7 +93,7 @@ test('accounts on, Claude mode: signed out gets 401 on every Claude route; caps 
       const r = await anon('POST', p, body);
       assert.equal(r.status, 401, p);
       assert.equal(r.body.signedOut, true, p);
-      assert.match(r.body.error, /Sign in to use Wonder/);
+      assert.match(r.body.error, /Sign in to use Mull/);
     }
     assert.equal(client.calls.stream.length, 0, 'no Claude call for a signed-out request');
     const first = await alice('POST', '/api/lesson/stream', LESSON);
@@ -113,6 +114,22 @@ test('accounts on, Claude mode: signed out gets 401 on every Claude route; caps 
   });
 });
 
+test('a lesson from a long material counts as several against the cap', async () => {
+  const fake = fakeClient({ text: '# T\n\nBody.' });
+  const client = { ...fake, messages: { ...fake.messages, countTokens: async () => ({ input_tokens: 600_000 }) } };
+  await withServer({ mode: 'claude', client, env: { WONDER_LIMIT_LESSON: '5' } }, async ({ alice }) => {
+    const { item } = (await alice('POST', '/api/materials', { kind: 'text', text: 'Plants turn light, water and carbon dioxide into glucose and oxygen. '.repeat(3) })).body;
+    assert.equal(item.tokens, 600_000);
+    assert.equal(materialCharge(item), 3);
+    assert.equal((await alice('POST', '/api/lesson/stream', { ...LESSON, materialId: item.id })).status, 200);
+    assert.deepEqual((await alice('GET', '/api/account')).body.usage.kinds.lesson, { used: 3, max: 5 });
+    const second = await alice('POST', '/api/lesson/stream', { ...LESSON, materialId: item.id });
+    assert.equal(second.status, 429);
+    assert.match(second.body.error, /counts as 3 of today's 5 lessons/);
+    assert.equal((await alice('POST', '/api/lesson/stream', LESSON)).status, 200, 'a lesson without the material still fits');
+  });
+});
+
 test('demo mode has no caps (it costs nothing); accounts off keeps the single-user app open', async () => {
   await withServer({ mode: 'demo', env: { WONDER_LIMIT_LESSON: '0' } }, async ({ alice, anon }) => {
     assert.equal((await alice('POST', '/api/lesson/stream', LESSON)).status, 200, 'cap 0 ignored in demo mode');
@@ -127,10 +144,10 @@ test('demo mode has no caps (it costs nothing); accounts off keeps the single-us
 test('browser: signed out and a used-up cap are not retried, and say so', async () => {
   const reply = (status, body) => async () => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
   const err = async (status, body) => { try { await streamTurn('/api/lesson/stream', {}, { fetch: reply(status, body) }); } catch (e) { return e; } return null; };
-  const out = await err(401, { ok: false, error: 'Sign in to use Wonder', signedOut: true });
+  const out = await err(401, { ok: false, error: 'Sign in to use Mull', signedOut: true });
   assert.equal(out.code, 'signed_out');
   assert.equal(out.retryable, false);
-  assert.equal(out.message, 'Sign in to use Wonder');
+  assert.equal(out.message, 'Sign in to use Mull');
   const lim = await err(429, limitBody('lesson', 20));
   assert.equal(lim.code, 'daily_limit');
   assert.equal(lim.retryable, false, 'a 429 that carries `limited` is final, unlike Claude being busy');

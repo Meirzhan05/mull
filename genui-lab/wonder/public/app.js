@@ -3,7 +3,7 @@
 // and You (stats, settings, learner memory).
 
 import { createStore, uid } from './store.js';
-import { openLocalCache, startAccount, pushActive, onSyncStatus, signIn, accountFirstName, accountSwitching } from './account.js'; // account sync
+import { openLocalCache, startAccount, pushActive, onSyncStatus, signIn, accountFirstName, accountSwitching, accountAwaitsFirstSync } from './account.js'; // account sync
 import { startAction, startTopic } from './start-core.js'; // sign in, onboarding, first lesson
 import { DilSurface, mergeComponentResults } from './dil-surface.js';
 import { streamTurn, postJson, failureError, retryDelay } from './stream-client.js';
@@ -1253,7 +1253,7 @@ async function finishLesson(lessonId, btn, { onFinished } = {}) {
       saveLesson(lessonId, { memoryExtracted: true });
       const tutorThread = (lesson.tutor || []).filter((m) => m.role === 'user').map((m) => m.content);
       postJson('/api/memory/extract', { lessonTitle: lesson.title, quizResults: lesson.quizResults || [], tutorThread, memoryEnabled: true })
-        .then((r) => { if (r.added?.length) setTimeout(() => toast(`Wonder will remember: ${r.added[0].fact}`, 4200), 1400); })
+        .then((r) => { if (r.added?.length) setTimeout(() => toast(`Mull will remember: ${r.added[0].fact}`, 4200), 1400); })
         .catch(() => {});
     }
   } catch (e) {
@@ -1400,7 +1400,7 @@ function route() {
   refreshChrome();
   if (h !== '#/memory' && h !== '#/mastery' && h !== '#/interests') window.scrollTo(0, 0);
   const titles = { home: 'Today', library: 'Library', review: 'Review', teacher: 'Teacher', you: 'You', course: 'Course', lesson: 'Lesson' };
-  document.title = screen === 'home' ? 'Wonder' : `${titles[screen]} · Wonder`;
+  document.title = screen === 'home' ? 'Mull' : `${titles[screen]} · Mull`;
 }
 
 window.addEventListener('hashchange', route);
@@ -1409,23 +1409,34 @@ store.subscribe?.(() => refreshChrome());
 applyFontScale();
 observeMath(document.body);
 refreshChrome();
-loadStatus().then(() => {
-  // A new account onboards first (the topic it brought waits in onboarding's last step); with
-  // accounts on, onboarding only ever runs signed in.
+// A new account onboards first (the topic it brought waits in onboarding's last step); with
+// accounts on, onboarding only ever runs signed in.
+function land() {
   const afterSignIn = takeAfterSignIn();
   const onboard = needsOnboarding(store.data) && (!ACCOUNTS || !!localCache.account);
   if (afterSignIn && !onboard) startLesson(afterSignIn.topic, afterSignIn.level || undefined); // its hashchange routes
   else route();
   if (onboard) openOnboarding(afterSignIn?.topic || '');
+}
+
+loadStatus().then(() => {
+  // The account cache has not had its first sync (the one before sign-in's reload timed out or
+  // failed): an account that already onboarded would look new, and a lesson link kept through
+  // sign-in would not be found. Land once that sync is in, which also redraws the screen; a failed
+  // one shows Today and waits for the retry.
+  let awaitingAccount = accountAwaitsFirstSync();
+  if (awaitingAccount) route();
+  else land();
   // back from Google, startAccount() finishes the sign-in and reloads into the account
   const finishingSignIn = !localCache.account && new URLSearchParams(location.search).has('neon_auth_session_verifier');
-  if (!signingIn && !finishingSignIn) endHandoff();
+  if (!signingIn && !finishingSignIn && !awaitingAccount) endHandoff();
   // account sync: changes from other devices redraw Today / Library when that cannot disturb reading
   onSyncStatus((s) => {
-    if (s.state === 'synced' && s.applied && ['home', 'library'].includes(document.body.dataset.screen) && window.scrollY < 40 && !document.querySelector('.onboard, dialog[open]')) route();
+    if (awaitingAccount && !['syncing', 'error', 'offline'].includes(s.state)) { awaitingAccount = false; land(); }
+    else if (s.state === 'synced' && s.applied && ['home', 'library'].includes(document.body.dataset.screen) && window.scrollY < 40 && !document.querySelector('.onboard, dialog[open]')) route();
     else refreshChrome();
   });
   startAccount({ store, toast })
     .then(() => { if (!signingIn && !accountSwitching()) endHandoff(); })
-    .catch((e) => { endHandoff(); console.warn('[wonder] account sync could not start', e); });
+    .catch((e) => { if (awaitingAccount) { awaitingAccount = false; land(); } endHandoff(); console.warn('[wonder] account sync could not start', e); });
 });

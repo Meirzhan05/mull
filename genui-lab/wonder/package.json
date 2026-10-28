@@ -2,7 +2,7 @@
   "name": "wonder",
   "private": true,
   "type": "module",
-  "description": "Wonder: AI learning app (Next.js) combining Wondering-style lessons/practice/FSRS with ChatGPT-style DIL generative UI, powered by Claude",
+  "description": "Mull: AI learning app (Next.js) combining Wondering-style lessons/practice/FSRS with ChatGPT-style DIL generative UI, powered by Claude",
   "scripts": {
     "dev": "next dev -p 8750",
     "build": "next build",

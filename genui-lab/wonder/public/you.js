@@ -1,78 +1,68 @@
-// You (#/you): profile name, account, totals, what you know, an activity heatmap, and settings
-// (level, interests, theme, reading size, reminder). Memory, material and data export are still
+// You (#/you): profile name, totals, what you know, an activity heatmap, settings (level,
+// interests, theme, reading size, reminder), and the account at the end. Memory, material and data export are still
 // kept and synced; they just have no place on this screen.
 
 import { el, icon, toast } from './ui.js';
 import { learnerTotals, activityGrid, LEVELS, levelOf } from './progress-core.js';
 import { interestGrid } from './onboarding.js';
 import { masteryPanel } from './mastery-screen.js'; // Phase 6
-import { accountInfo, signedInAccount, currentSyncStatus, onSyncStatus, syncEngine, signIn, signOut, switchToSignedIn, accountLabel, pushAvailable, enablePush, disablePush } from './account.js'; // account sync
+import { accountInfo, signedInAccount, currentSyncStatus, onSyncStatus, syncEngine, signIn, signOut, switchToSignedIn, deleteAccount, accountLabel, pushAvailable, enablePush, disablePush } from './account.js'; // account sync
 
 export const TEXT_SIZES = [['0.92', 'Small'], ['1', 'Default'], ['1.1', 'Large'], ['1.2', 'Larger']];
 
-const ago = (t) => {
-  const s = Math.round((Date.now() - t) / 1000);
-  return s < 45 ? 'just now' : s < 3600 ? `${Math.round(s / 60)} min ago` : new Date(t).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
-};
-
 /**
- * Account sync: sign in to keep lessons, cards and progress in an account and on every browser
- * signed in to it. Shown only when the server has accounts configured.
+ * Account, at the end of the page: sign in or out, and delete the account. Shown only when the
+ * server has accounts configured.
  */
 function accountPanel(ctx) {
   const body = el('div', { class: 'card settings' });
-  const sec = el('div', { class: 'account-sync', hidden: true, style: { marginBottom: '12px' } }, body);
-  const btn = (label, cls, onclick) => el('button', { class: `btn ${cls}`, type: 'button', onclick: async (e) => {
+  const sec = el('section', { class: 'you-sec', id: 'you-account', hidden: true }, el('h2', { class: 'rubric' }, 'Account'), body);
+  const btn = (label, cls, onclick, busy = label) => el('button', { class: `btn ${cls}`, type: 'button', onclick: async (e) => {
     const b = e.currentTarget;
     b.disabled = true;
-    try { await onclick(); } catch (err) { toast(err.message || 'That did not work'); } finally { b.disabled = false; }
+    b.textContent = busy;
+    try { await onclick(); } catch (err) { toast(err.message || 'That did not work'); } finally { b.disabled = false; b.textContent = label; }
   } }, label);
-  const row = (title, note, ...actions) => el('div', { class: 'setting' }, el('div', { class: 'setting-text' }, el('strong', null, title), el('p', { class: 'muted small' }, note)), el('div', { style: { display: 'flex', gap: '8px', flexWrap: 'wrap' } }, ...actions));
+  const row = (title, note, ...actions) => el('div', { class: 'setting' }, el('div', { class: 'setting-text' }, el('strong', null, title), note ? el('p', { class: 'muted small' }, note) : null), el('div', { style: { display: 'flex', gap: '8px', flexWrap: 'wrap' } }, ...actions));
+  // redrawn on every sync status change; replaced only when the text changes, so a button
+  // being clicked stays put
+  let drawn = '';
+  const show = (key, ...rows) => { if (key !== drawn) { drawn = key; body.replaceChildren(...rows); } };
   const draw = () => {
     const info = accountInfo();
     sec.hidden = !info?.sync;
+    ctx.onAccountShown?.(!sec.hidden);
     if (!info?.sync) return;
     const acct = signedInAccount();
     const st = currentSyncStatus();
     if (!acct) {
-      body.replaceChildren(row('Sync across your devices', 'Sign in to keep your lessons, cards and progress in an account, on every browser you sign in on. What this browser has comes with you.',
+      show('signedOut', row('Sign in', 'Use Mull with your Google account. What this browser has comes with you.',
         btn('Sign in', 'btn-primary', signIn)));
     } else if (st.state === 'mismatch') {
-      body.replaceChildren(row('Signed in as someone else', 'This browser holds another account’s copy. Switch to the account that is signed in now, or sign out.',
+      show('mismatch', row('Signed in as someone else', 'This browser holds another account’s copy. Switch to the account that is signed in now, or sign out.',
         btn('Use this account', 'btn-secondary', switchToSignedIn), btn('Sign out', 'btn-secondary', signOut)));
     } else if (st.state === 'signedOut') {
-      body.replaceChildren(row('Your session ended', 'Sign in again to keep syncing. Changes made here meanwhile are kept and sync once you are back.',
+      show('ended', row('Your session ended', 'Sign in again to keep syncing. Changes made here meanwhile are kept and sync once you are back.',
         btn('Sign in', 'btn-primary', signIn), btn('Sign out', 'btn-secondary', signOut)));
     } else {
-      const pending = syncEngine()?.pending() || 0;
-      const line = st.state === 'syncing' ? 'Syncing…'
-        : st.state === 'offline' ? `Offline. ${pending ? `${pending} change${pending === 1 ? '' : 's'} will sync when you are back.` : 'Everything here is saved.'}`
-          : st.state === 'error' ? `Could not sync (${st.error || 'error'}). Retrying.`
-            : st.state === 'unavailable' ? 'Sync is unavailable on this server right now; this browser keeps your changes.'
-              : st.at ? `Synced ${ago(st.at)}${pending ? ` · ${pending} waiting` : ''}.` : 'Connecting…';
-      const usageLine = el('p', { class: 'muted small', style: { margin: '4px 0 0' } });
-      body.replaceChildren(row(accountLabel() ? `Signed in as ${accountLabel()}` : 'Signed in', `${line} Lessons, cards and progress are kept in your account.`,
-        btn('Sync now', 'btn-secondary', async () => { await syncEngine()?.syncNow(); toast('Synced'); }),
-        btn('Sign out', 'btn-secondary', async () => { if (await signOut()) toast('Signed out'); })), usageLine);
-      showUsage(usageLine);
+      const title = accountLabel() ? `Signed in as ${accountLabel()}` : 'Signed in';
+      // no "synced" status: only a problem worth knowing about before signing out
+      const pending = st.state === 'offline' ? syncEngine()?.pending() || 0 : 0;
+      const problem = pending ? `Offline. ${pending} change${pending === 1 ? '' : 's'} will sync when you are back.`
+        : st.state === 'error' ? `Could not sync (${st.error || 'error'}). Retrying.`
+          : st.state === 'unavailable' ? 'Sync is unavailable on this server right now; this browser keeps your changes.' : null;
+      show(`in:${title}:${problem}`,
+        row(title, problem, btn('Sign out', 'btn-secondary', async () => { if (await signOut()) toast('Signed out'); })),
+        row('Delete account', 'Deletes your lessons, cards, progress, memory and material for good.',
+          btn('Delete account', 'btn-danger', async () => {
+            if (confirm('Delete your Mull account? Your lessons, cards, progress, memory and material are deleted for good. This cannot be undone.')) await deleteAccount();
+          }, 'Deleting…')));
     }
   };
   draw();
   const off = onSyncStatus(draw);
-  const timer = setInterval(draw, 30_000);
-  ctx.teardown?.push(() => { off(); clearInterval(timer); });
+  ctx.teardown?.push(off);
   return sec;
-}
-
-/** Today's use of the daily caps (server/usage.js), from /api/account; empty when there are none. */
-async function showUsage(line) {
-  let u = null;
-  try { u = (await (await fetch('/api/account', { headers: { Accept: 'application/json' } })).json()).usage; } catch {}
-  const kinds = u?.kinds || {};
-  const part = (k, noun) => (kinds[k]?.max != null ? `${kinds[k].used} of ${kinds[k].max} ${noun}` : null);
-  const parts = [part('lesson', 'lessons'), part('tutor', 'tutor messages'), part('teacher', 'Teacher messages')].filter(Boolean);
-  line.textContent = parts.length ? `Today: ${parts.join(' · ')}. Resets at midnight UTC.` : '';
-  line.hidden = !parts.length;
 }
 
 /** A row with a switch. */
@@ -96,7 +86,7 @@ function reminderSetting(settings, setSetting) {
   const describe = () => {
     note.textContent = !supported ? 'This browser has no notifications. Use “Add to calendar” on your study plan instead.'
       : Notification.permission === 'denied' ? 'Notifications are blocked for this site in your browser settings. “Add to calendar” on your plan still works.'
-        : r().enabled ? `Wonder nudges you at ${r().time} on days you haven’t studied yet, ${pushAvailable() ? 'on this device even when Wonder is closed' : 'while a Wonder tab is open'}. Plan events added to your calendar use this time too.`
+        : r().enabled ? `Mull nudges you at ${r().time} on days you haven’t studied yet, ${pushAvailable() ? 'on this device even when Mull is closed' : 'while a Mull tab is open'}. Plan events added to your calendar use this time too.`
           : 'A nudge at this time on days you haven’t studied yet. Plan events added to your calendar use this time too.';
   };
   sw.addEventListener('click', async () => {
@@ -188,7 +178,7 @@ export function renderYou(ctx) {
       switchSetting('Teacher check-in', 'The first time you open the Teacher each day, it looks at your progress and suggests the best next step.', settings().teacherCheckIn !== false, (on) => setSetting({ teacherCheckIn: on }))));
 
   // settings-style layout: a section nav beside the content; the nav follows your scroll
-  const SECTIONS = [['profile', 'Profile'], ['knowledge', 'What you know'], ['activity', 'Activity'], ['preferences', 'Preferences']];
+  const SECTIONS = [['profile', 'Profile'], ['knowledge', 'What you know'], ['activity', 'Activity'], ['preferences', 'Preferences'], ['account', 'Account']];
   const sec = (id, ...kids) => el('section', { class: 'you-sec', id: `you-${id}` }, ...kids);
   const navLinks = SECTIONS.map(([id, label]) => el('a', { class: 'you-nav-link', href: `#/you`, dataset: { sec: id }, onclick: (e) => {
     e.preventDefault();
@@ -197,18 +187,25 @@ export function renderYou(ctx) {
   const nav = el('nav', { class: 'you-nav', 'aria-label': 'Sections' }, ...navLinks);
   const mark = (id) => { for (const a of navLinks) a.toggleAttribute('aria-current', a.dataset.sec === id); };
   mark('profile');
+  const accountLink = navLinks.find((a) => a.dataset.sec === 'account');
   const content = el('div', { class: 'you-content' },
-    sec('profile', head, accountPanel(ctx), stats),
+    sec('profile', head, stats),
     sec('knowledge', masteryPanel(ctx)), // Phase 6
     sec('activity', heat),
-    sec('preferences', settingsCard));
+    sec('preferences', settingsCard),
+    accountPanel({ ...ctx, onAccountShown: (on) => { accountLink.hidden = !on; } }));
   app.replaceChildren(el('div', { class: 'you' }, el('h1', { class: 'h-xl you-title' }, 'You'), el('div', { class: 'you-layout' }, nav, content)));
+  // scrolled to the end: the last section, which may be too short to reach the band below
+  const atEnd = () => window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 4;
+  const markEnd = () => { if (atEnd()) mark([...content.children].filter((n) => !n.hidden).pop().id.replace('you-', '')); };
   const io = new IntersectionObserver((entries) => {
     const vis = entries.filter((e) => e.isIntersecting).sort((a, b) => a.boundingClientRect.top - b.boundingClientRect.top)[0];
     if (vis) mark(vis.target.id.replace('you-', ''));
+    markEnd();
   }, { rootMargin: '-15% 0px -70% 0px' });
   for (const n of content.children) io.observe(n);
-  ctx.teardown?.push(() => io.disconnect());
+  window.addEventListener('scroll', markEnd, { passive: true });
+  ctx.teardown?.push(() => { io.disconnect(); window.removeEventListener('scroll', markEnd); });
   if (location.hash === '#/mastery') requestAnimationFrame(() => document.getElementById('you-knowledge')?.scrollIntoView({ block: 'start' }));
   if (location.hash === '#/interests') requestAnimationFrame(() => document.getElementById('interests')?.scrollIntoView({ block: 'center' }));
 }

@@ -389,7 +389,7 @@ const sched = [];
 const S0 = sched[0].S;
 const reviews = sched.slice(1).map((s) => s.t).filter((t) => t > 0.5);
 const gaps = sched.slice(1, 5).map((s) => s.gap);
-$('#p4-body').textContent = `When you finish a lesson, its key ideas become cards. Wonder brings each one back just before you'd forget it, and the gaps keep growing: ${gaps[0]} days, then ${gaps[1]}, then ${gaps[2]}, then ${gaps[3]}.`;
+$('#p4-body').textContent = `When you finish a lesson, its key ideas become cards. Mull brings each one back just before you'd forget it, and the gaps keep growing: ${gaps[0]} days, then ${gaps[1]}, then ${gaps[2]}, then ${gaps[3]}.`;
 const TMAX = 190;
 const X0 = 48, X1 = 700, Y0 = 24, Y1 = 330;
 const xOf = (t) => X0 + (X1 - X0) * Math.sqrt(Math.min(t, TMAX) / TMAX);

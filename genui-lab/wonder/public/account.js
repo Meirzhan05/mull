@@ -12,7 +12,7 @@
 // server has it. Sign-out syncs, then deletes the account's cache from this browser.
 
 import { openIdbStorage, prefixedLocalStorage } from './idb-storage.js';
-import { createSyncEngine, BASE_KEY } from './sync-client.js';
+import { createSyncEngine, syncBeforeOpening, awaitsFirstSync, BASE_KEY } from './sync-client.js';
 import { hasLearnerData, diffRecords, toRecords } from './sync-core.js';
 import { emptyState } from './store.js';
 
@@ -20,6 +20,7 @@ export const ACCOUNT_KEY = 'wonder.account';
 export const PUSH_KEY = 'wonder.push'; // this browser's push endpoint while push reminders are on
 const STATE_KEY = 'wonder.v1'; // store.js KEY
 const MIGRATED_KEY = 'wonder.migrate'; // signed-out data waiting to be confirmed on the server
+const DELETED_KEY = 'wonder.accountDeleted'; // sessionStorage: this tab deleted its account
 
 const ls = () => { try { return globalThis.localStorage; } catch { return null; } };
 const readJson = (k) => { try { return JSON.parse(ls()?.getItem(k) || 'null'); } catch { return null; } };
@@ -40,6 +41,9 @@ async function getJson(url, init) {
   return body;
 }
 const postJson = (url, body, method = 'POST') => getJson(url, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+const postSync = (body) => postJson('/api/sync', body);
+// one sync at a time per account, across this browser's tabs
+const syncLock = (userId) => (fn) => (globalThis.navigator?.locks ? navigator.locks.request(`wonder-sync-${userId}`, fn) : fn());
 
 /**
  * Before the store is created: the storage this page should use. Signed in last time -> that
@@ -117,7 +121,10 @@ export async function startAccount({ store, toast = () => {}, onChange = () => {
     // (not twice in a row: if the switch did not stick, e.g. storage is full, stay signed out)
     let recent = false;
     try { recent = Date.now() - Number(sessionStorage.getItem('wonder.beginAccount') || 0) < 15000; } catch {}
-    if (sessionUser && info.signedIn && info.userId === sessionUser.id && !recent) await beginAccount(sessionUser.id, { store });
+    // (nor right after deleting the account here, if signing out failed: that would make a new one)
+    let deleted = false;
+    try { deleted = sessionStorage.getItem(DELETED_KEY) === sessionUser?.id; } catch {}
+    if (sessionUser && info.signedIn && info.userId === sessionUser.id && !recent && !deleted) await beginAccount(sessionUser.id, { store });
     setStatus({ state: 'signedOut' });
     return info;
   }
@@ -128,9 +135,13 @@ export async function startAccount({ store, toast = () => {}, onChange = () => {
     store,
     storage: cache,
     userId: current.userId,
-    post: (body) => postJson('/api/sync', body),
-    lock: (fn) => (globalThis.navigator?.locks ? navigator.locks.request(`wonder-sync-${current.userId}`, fn) : fn()),
-    onStatus: (s) => { setStatus(s); onChange(); },
+    post: postSync,
+    lock: syncLock(current.userId),
+    onStatus: (s) => {
+      setStatus(s);
+      onChange();
+      if (s.state === 'deleted') leaveAccount().catch(() => location.reload()); // deleted on another device
+    },
     onFirstSync: (mode) => {
       if (mode === 'merge' && migrating) {
         try { ls()?.removeItem(STATE_KEY); ls()?.removeItem(MIGRATED_KEY); } catch {}
@@ -177,6 +188,9 @@ export async function beginAccount(userId, { store } = {}) {
   try { target = await openIdbStorage(userId); } catch { target = prefixedLocalStorage(userId); }
   target.setItem(STATE_KEY, mode === 'merge' ? anonRaw : JSON.stringify(emptyState()));
   target.setItem(BASE_KEY, JSON.stringify({ userId, since: 0, base: [], first: mode }));
+  // a returning account: its first sync now, behind the hand-off note, so the reloaded page opens
+  // on its lessons and settings (not an empty start that looks like a new learner)
+  if (mode === 'pull') await syncBeforeOpening({ storage: target, userId, post: postSync, lock: syncLock(userId) });
   await target.flushNow();
   try {
     sessionStorage.setItem('wonder.beginAccount', String(Date.now()));
@@ -243,6 +257,33 @@ export async function signOut() {
   return true;
 }
 
+/**
+ * Delete this account. The server deletes everything it keeps for it and, in the same request,
+ * the Neon Auth user; then this browser leaves it. Nothing here changes until the server is done,
+ * so a failed request leaves syncing and reminders as they were.
+ */
+export async function deleteAccount() {
+  await postJson('/api/account', {}, 'DELETE');
+  await leaveAccount();
+}
+
+let leaving = null;
+/** The account is gone (deleted here or elsewhere): sign out and drop this browser's copy. */
+function leaveAccount() {
+  return (leaving ??= (async () => {
+    engine?.stop();
+    try { if (current) sessionStorage.setItem(DELETED_KEY, current.userId); } catch {}
+    await disablePush({ server: false }).catch(() => {}); // the server dropped the subscriptions
+    // clears this origin's session cookies; when it fails, DELETED_KEY keeps the reload signed out
+    const a = await authClient(5000);
+    await a?.signOut().catch(() => {});
+    sessionUser = null;
+    try { ls()?.removeItem(ACCOUNT_KEY); ls()?.removeItem(MIGRATED_KEY); } catch {}
+    await cache?.destroy?.();
+    location.reload();
+  })());
+}
+
 /** The browser holds another account's cache than the one signed in: drop it, take the new one. */
 export async function switchToSignedIn() {
   if (!confirmLoss('Switch accounts')) return;
@@ -262,6 +303,15 @@ export async function accountFirstName() {
 
 export function accountLabel() {
   return sessionUser?.email || sessionUser?.name || null;
+}
+
+/**
+ * This page's account cache was just seeded (beginAccount) and its first sync has not finished
+ * (it timed out or failed before the reload), so it does not hold the account's lessons or
+ * settings yet: the store looks like a new learner's until startAccount() syncs.
+ */
+export function accountAwaitsFirstSync() {
+  return !!current && !!cache && awaitsFirstSync(cache, current.userId);
 }
 
 export const accountInfo = () => info;
@@ -298,11 +348,12 @@ export async function enablePush() {
   return true;
 }
 
-export async function disablePush() {
+/** @param {{server?: boolean}} [opts]  server: false skips telling the server (it already forgot it) */
+export async function disablePush({ server = true } = {}) {
   const endpoint = ls()?.getItem(PUSH_KEY);
   ls()?.removeItem(PUSH_KEY);
   const reg = await navigator.serviceWorker?.getRegistration?.('/sw.js');
   const sub = await reg?.pushManager?.getSubscription();
   if (sub) await sub.unsubscribe().catch(() => {});
-  if (endpoint && current) await postJson('/api/push/subscribe', { endpoint }, 'DELETE').catch(() => {});
+  if (server && endpoint && current) await postJson('/api/push/subscribe', { endpoint }, 'DELETE').catch(() => {});
 }
