@@ -1,18 +1,17 @@
 // Today (#/): input first. The hero is one large composer (a question as the headline, an
 // auto-growing field, and a footer with the mode, the level and send), with quick-start chips
-// under it. Below it, secondary: the "Up next" queue and recent reading on the left, and a rail of
-// panels (the streak, the deck, the study plan) on the right.
+// under it. Below it, a short "Up next" queue (the three most pressing items). The streak, the deck
+// and recent reading live in the sidebar and the nav badges, so Today does not repeat them.
 // Phases 9-10: the header carries the Teacher's brief when a deadline or the streak is at stake,
-// Up next has "Refresh" rows for fading lessons and dated plan rows, the plan panel follows the
-// calendar, the command bar takes the learner's own material, and reading rows show recall.
+// Up next has "Refresh" rows for fading lessons and dated plan rows, and the command bar takes the
+// learner's own material.
 
 import { el, icon, toast, relTime } from './ui.js';
-import { currentStreak, deckStats, formatDue } from './deck.js';
-import { studiedToday, weekStrip, upNext, suggestedTopics, greeting, courseProgress, learnerTotals, topicInterest, readingMinutes, recentLessons, LEVELS, levelOf } from './progress-core.js';
+import { currentStreak, deckStats } from './deck.js';
+import { studiedToday, upNext, suggestedTopics, greeting, courseProgress, topicInterest, readingMinutes, LEVELS, levelOf } from './progress-core.js';
 import { pageCount } from './steering-core.js';
 import { practiceConcepts } from './mastery-screen.js'; // Phase 6
-import { lessonOutcome, outcomeLabel } from './outcomes-core.js'; // Phase 9
-import { planStatus, dayLabel, countdownLabel } from './plan-core.js'; // Phase 10
+import { dayLabel } from './plan-core.js'; // Phase 10
 import { dailyBrief } from './brief-core.js'; // Phase 10
 import { postJson } from './stream-client.js';
 
@@ -22,6 +21,7 @@ const MODES = [
   { id: 'teacher', label: 'Teacher', icon: 'teacher', title: 'What do you need help with?', placeholder: 'A goal, a question, or a plan you need', action: 'Send' },
   { id: 'material', label: 'Material', icon: 'download', title: 'What should Mull teach from?', placeholder: 'A title for your notes (optional)', action: 'Begin' },
 ];
+const UP_NEXT_ROWS = 3; // upNext() lists the most pressing first
 const TEACHER_CHIPS = ['What should I study today?', 'Make me a 5-day plan for a goal', 'Quiz me on my last lesson', 'How am I doing?'];
 const MATERIAL_ACCEPT = '.txt,.md,.markdown,.pdf,text/plain,text/markdown,application/pdf';
 
@@ -67,7 +67,6 @@ export function renderToday(ctx) {
   const now = new Date();
   const studied = studiedToday(d.stats, now);
   const streak = currentStreak(d.stats, now);
-  const totals = learnerTotals(d, now);
   const name = String(settings.name || '').trim();
 
   // -- header (Phase 10: the brief's headline when a deadline or the streak is at stake)
@@ -79,7 +78,6 @@ export function renderToday(ctx) {
   const head = el('div', { class: 'hero-top' },
     el('p', { class: 'hero-greet' }, `${greeting(now)}${name ? `, ${name}` : ''}`, el('span', { class: 'hero-dot', 'aria-hidden': 'true' }, '·'), el('span', { class: brief.urgent ? 'hero-urgent' : '' }, sub)),
     heroTitle);
-  void totals;
 
   // -- command bar
   let mode = 'lesson';
@@ -184,40 +182,14 @@ export function renderToday(ctx) {
   const cmd = el('section', { class: 'hero', 'aria-label': 'Start something' }, head, composer, chips);
   if (window.matchMedia?.('(min-width: 900px)').matches) setTimeout(() => input.focus({ preventScroll: true }), 50);
 
-  // -- left column: queue, suggestions, recent
-  const next = upNext(d, now);
+  // -- Up next
+  const next = upNext(d, now).slice(0, UP_NEXT_ROWS);
   const queue = el('section', { class: 'panel-section' },
     sectionHead('Up next', next[0]?.kind === 'start' ? null : `${next.length}`, el('button', { class: 'link-btn', type: 'button', onclick: () => actions.teacherCheckIn?.() }, 'Ask your Teacher', icon('arrow-right'))),
     el('ol', { class: 'queue' }, ...next.map((n, i) => queueRow(n, i, ctx)), ...(next[0]?.kind === 'start' ? quickRows(ctx) : [])));
 
 
-  const recent = recentLessons(d, 5);
-  const recentSec = recent.length ? el('section', { class: 'panel-section' },
-    sectionHead('Recent', null, el('a', { class: 'link-btn', href: '#/library' }, 'Library', icon('arrow-right'))),
-    el('ul', { class: 'rows' }, ...recent.map((l) => el('li', null, readRow(l, d))))) : null;
-
-  // -- right rail
-  const week = weekStrip(d.stats, now);
-  const deck = deckStats(d.deck, now);
-  const rail = el('aside', { class: 't-rail', 'aria-label': 'Your progress' },
-    el('a', { class: 'stat-panel', href: '#/you' },
-      el('span', { class: 'stat-label' }, 'Streak'),
-      el('span', { class: 'stat-big' }, String(streak), el('small', null, streak === 1 ? ' day' : ' days')),
-      el('span', { class: 'week7', 'aria-label': `Last seven days: ${week.filter((w) => w.active).length} active` },
-        ...week.map((w) => el('span', { class: `w ${w.active ? 'on' : ''} ${w.today ? 'today' : ''}`, title: `${w.key}${w.active ? ': studied' : ''}` }, el('i'), el('b', null, w.label))))),
-    el('a', { class: 'stat-panel', href: '#/review' },
-      el('span', { class: 'stat-label' }, 'Deck'),
-      el('span', { class: 'stat-big' }, String(deck.due), el('small', null, ' due')),
-      el('span', { class: 'stat-lines' },
-        el('span', null, el('b', null, String(deck.total)), ' cards'),
-        el('span', null, el('b', null, String(deck.review)), ' mastered'),
-        el('span', null, deck.due ? 'Review now' : deck.nextDue ? `Next ${formatDue(deck.nextDue)}` : 'No cards yet'))),
-    planPanel(d, actions));
-
-  app.replaceChildren(el('div', { class: 'today' }, cmd,
-    el('div', { class: 't-below' },
-      el('h2', { class: 't-below-title' }, 'Your learning'),
-      el('div', { class: 't-grid' }, el('div', { class: 't-main' }, queue, recentSec), rail))));
+  app.replaceChildren(el('div', { class: 'today' }, cmd, el('div', { class: 't-below' }, queue)));
 }
 
 function sectionHead(title, count, extra) {
@@ -290,39 +262,6 @@ function quickRows(ctx) {
     r(2, 'Teacher', 'Plan a week of study around a goal', 'Plan', null, '#/teacher'),
     r(3, 'Teacher', 'Ask what to study today', 'Ask', () => actions.askTeacher('What should I study today?')),
   ];
-}
-
-const PACE = { ahead: 'Ahead of plan', 'on-track': 'On track', behind: 'Behind', done: 'Complete', 'not-started': 'Starts soon' };
-
-function planPanel(d, actions) {
-  const plan = (d.plans || [])[0];
-  if (!plan) return null;
-  // Phase 10: every item sits on a calendar day; today's are marked, earlier unopened ones are late
-  const ps = planStatus(plan, new Date());
-  const items = (plan.days || []).flatMap((day, di) => (day.items || []).map((it, ii) => ({ ...it, di, ii, day: day.day || di + 1 })));
-  const done = items.filter((x) => x.opened).length;
-  const dayTag = (di) => (di === ps.dayIndex ? 'Today' : dayLabel(ps.dates[di]).slice(0, 3));
-  return el('section', { class: 'stat-panel plan-panel' },
-    el('span', { class: 'stat-label' }, 'Study plan', el('span', { class: 'count' }, `${done}/${items.length}`)),
-    el('span', { class: 'plan-goal' }, plan.goal),
-    el('span', { class: `plan-pace pace-${ps.pace}` }, PACE[ps.pace], ps.overdue.length ? ` · ${ps.overdue.length} overdue` : '', ps.deadline ? ` · ${countdownLabel(ps.daysToDeadline)}` : ''),
-    el('ul', { class: 'checklist' }, ...items.slice(0, 8).map((it) => el('li', null, el('button', { type: 'button', class: `check ${it.opened ? 'done' : ''} ${it.di === ps.dayIndex ? 'is-today' : ''} ${it.di < ps.dayIndex && !it.opened ? 'is-late' : ''}`, title: dayLabel(ps.dates[it.di]), onclick: () => actions.openPlanItem(plan.id, it.di, it.ii) },
-      el('span', { class: 'box', 'aria-hidden': 'true' }, it.opened ? icon('check') : null),
-      el('span', { class: 'check-day' }, dayTag(it.di)),
-      el('span', { class: 'check-title' }, it.title))))),
-    el('div', { class: 'plan-links' },
-      el('button', { class: 'link-btn', type: 'button', onclick: () => actions.exportPlan?.(plan.id) }, 'Add to calendar'),
-      plan.threadId ? el('a', { class: 'link-btn', href: `#/teacher/${plan.threadId}` }, 'Open the conversation', icon('arrow-right')) : null));
-}
-
-/** One line of reading history: status, title, metadata. */
-export function readRow(l, data) {
-  const course = l.courseId ? data.courses.find((c) => c.id === l.courseId) : null;
-  const state = l.finished ? 'Finished' : l.status === 'complete' ? (l.readPage > 1 ? `Page ${l.readPage}` : 'In progress') : l.status === 'failed' ? 'Failed' : l.status === 'new' ? 'Not started' : 'Unfinished';
-  return el('a', { class: 'row', href: `#/lesson/${l.id}` },
-    el('span', { class: `dotmark ${l.finished ? 'done' : l.status === 'complete' ? 'ready' : ''}`, 'aria-hidden': 'true' }),
-    el('span', { class: 'row-title' }, l.title || l.topic),
-    el('span', { class: 'row-meta' }, [state, l.finished ? outcomeLabel(lessonOutcome(data, l.id)) : null, readingMinutes(l.markdown) ? `${readingMinutes(l.markdown)} min` : null, course?.title || (l.materialTitle ? `from ${l.materialTitle}` : null), relTime(l.updatedAt)].filter(Boolean).join(' · ')));
 }
 
 export { courseProgress, deckStats };

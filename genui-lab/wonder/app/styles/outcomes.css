@@ -23,14 +23,6 @@
 .file-chip > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 220px; }
 .file-chip .icon-btn { width: 22px; height: 22px; }
 
-/* -- Today: the study plan follows the calendar */
-.plan-pace { font-size: 0.75rem; color: var(--ink-3); }
-.plan-pace.pace-behind { color: var(--warning); }
-.plan-pace.pace-ahead, .plan-pace.pace-done { color: var(--success); }
-.check.is-today .check-day { color: var(--accent); font-weight: 600; }
-.check.is-late .check-day { color: var(--warning); }
-.plan-links { display: flex; flex-wrap: wrap; gap: 6px 16px; }
-
 /* -- Lesson end: how well it stuck (sits with the quality note) */
 .stuck { width: 100%; max-width: 520px; display: grid; gap: 6px; text-align: left; font-size: 0.8125rem; color: var(--ink-2); border: 1px solid var(--line); border-radius: var(--r-md); padding: 10px 12px; background: var(--surface); }
 .stuck p { margin: 0; }
