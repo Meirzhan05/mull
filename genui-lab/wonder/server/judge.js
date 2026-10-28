@@ -113,7 +113,7 @@ const cell = (v, digits = 2) => (v == null ? '–' : typeof v === 'number' ? Str
 export function reportMarkdown(report) {
   const { meta, summary, runs } = report;
   const lines = [
-    `# Wonder lesson eval · ${meta.startedAt}`,
+    `# Mull lesson eval · ${meta.startedAt}`,
     '',
     `Mode: **${meta.mode}** · model \`${meta.model}\` · ${summary.ok}/${summary.runs} lessons generated · web search ${meta.webSearch ? 'on' : 'off'} · critic ${meta.verify ? 'on' : 'off'} · judge ${meta.judge ? 'on' : 'off'}`,
     '',

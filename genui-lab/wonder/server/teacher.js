@@ -33,7 +33,7 @@ const S = (description) => ({ type: 'string', description });
 export const TEACHER_TOOLS = Object.freeze([
   {
     name: 'create_lesson',
-    description: 'Propose one Wonder lesson to the learner. Shows an approval card with Start / Not now; the lesson is only generated if they tap Start. Call this when the learner wants to learn something now, or to kick off the first lesson of a plan.',
+    description: 'Propose one Mull lesson to the learner. Shows an approval card with Start / Not now; the lesson is only generated if they tap Start. Call this when the learner wants to learn something now, or to kick off the first lesson of a plan.',
     input_schema: {
       type: 'object',
       additionalProperties: false,

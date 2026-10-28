@@ -6,7 +6,7 @@
 // store.settings: name, interests, dailyGoal. Only what the learner actually set is
 // written, so settings that arrive meanwhile (account sync on a new device) are not reset.
 
-import { el, icon } from './ui.js';
+import { el, icon, brandMark } from './ui.js';
 import { INTERESTS, DAILY_GOALS, suggestedTopics, topicInterest, goalOf, levelOf } from './progress-core.js';
 
 const STEPS = ['Interests', 'Pace', 'First lesson'];
@@ -44,7 +44,7 @@ export function showOnboarding({ store, onDone, startLesson, firstTopic = '', ac
   const progress = el('ol', { class: 'onboard-progress', 'aria-label': 'Steps' });
   const root = el('div', { class: 'onboard', role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': 'onboard-title' },
     el('header', { class: 'onboard-top' },
-      el('p', { class: 'brand', 'aria-hidden': 'true' }, el('span', { class: 'brand-name' }, 'Wonder'), el('span', { class: 'brand-dot' }, '.')),
+      el('p', { class: 'brand', 'aria-hidden': 'true' }, brandMark(), el('span', { class: 'brand-name' }, 'Mull')),
       progress,
       el('button', { class: 'btn btn-ghost btn-sm onboard-skip', type: 'button', onclick: () => finish() }, 'Skip')),
     body);
@@ -109,7 +109,7 @@ export function showOnboarding({ store, onDone, startLesson, firstTopic = '', ac
     drawPreview();
     const form = el('form', { class: 'onboard-step', onsubmit: (e) => { e.preventDefault(); go(1); } },
       heading('What are you curious about?',
-        'Wonder writes a short lesson on anything you name, with working diagrams and a tutor beside the text. Pick a few subjects and it will suggest where to start.'),
+        'Mull writes a short lesson on anything you name, with working diagrams and a tutor beside the text. Pick a few subjects and it will suggest where to start.'),
       el('label', { class: 'onboard-field' }, el('span', null, 'What should we call you? ', el('span', { class: 'muted' }, '(optional)')), nameInput),
       el('div', { class: 'onboard-field' }, el('span', { class: 'onboard-field-row' }, el('span', null, 'Subjects'), count), grid),
       el('aside', { class: 'onboard-preview', 'aria-live': 'polite' }, el('p', { class: 'onboard-preview-title' }, icon('sparkles'), 'Your front page will suggest'), preview),

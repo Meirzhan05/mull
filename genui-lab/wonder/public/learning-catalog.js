@@ -118,7 +118,7 @@ export function learningCatalog(__dil, DIL, GenUI, useSavedImpl) {
 
   // ------------------------------------------------------------------ Callout (wondering-lens)
   const TONE = {
-    insight: ['lightbulb', 'Wonder lens'], tip: ['sparkles', 'Tip'], info: ['info', 'Note'], warning: ['alert-triangle', 'Watch out'], example: ['book', 'Example'],
+    insight: ['lightbulb', 'Mull it over'], tip: ['sparkles', 'Tip'], info: ['info', 'Note'], warning: ['alert-triangle', 'Watch out'], example: ['book', 'Example'],
   };
   function Callout(props) {
     const tone = TONE[props.tone] ? props.tone : 'insight';

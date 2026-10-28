@@ -226,7 +226,7 @@ const WIDGETS = {
       <textarea class="w-explain__field" rows="3" placeholder="Your answer, in your own words"></textarea>
       <div class="w-steps__nav"><button type="button" class="is-primary" data-show>Show a model answer</button></div>
       <div class="w-explain__answer" hidden>
-        <p class="w-steps__label">In Wonder, your answer is checked for these points:</p>
+        <p class="w-steps__label">In Mull, your answer is checked for these points:</p>
         <ul class="w-compare__list">${(p.rubric || []).map((r) => `<li>${md(r)}</li>`).join('')}</ul>
         <p class="w-steps__label">A model answer</p><p>${md(p.sampleAnswer || '')}</p>
       </div>`;

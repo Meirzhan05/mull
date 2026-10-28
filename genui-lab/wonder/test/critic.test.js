@@ -158,7 +158,7 @@ test('eval harness: args, a demo run end to end, and a fake-Claude run with crit
   assert.equal(demoReport.meta.judge, false);
   assert.ok(demoReport.runs.every((r) => r.lint && r.critic.skipped));
   const files = writeReport(demoReport, path.join(dir, 'out'));
-  assert.match(fs.readFileSync(files.md, 'utf8'), /# Wonder lesson eval/);
+  assert.match(fs.readFileSync(files.md, 'utf8'), /# Mull lesson eval/);
 
   const structured = { verdict: 'pass', summary: 'fine', issues: [], quizFixes: [], scores: Object.fromEntries(RUBRIC_KEYS.map((k) => [k, { score: 4, rationale: 'r' }])), overall: 'Solid.' };
   const client = fakeClient({ text: demo('transformers.md'), structured });

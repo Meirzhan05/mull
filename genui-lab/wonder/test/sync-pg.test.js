@@ -91,7 +91,7 @@ test('postgres: memory, material files, push subscriptions and reminder claims a
     const sent = [];
     const r = await sendDueReminders({ sync: svc, send: async (s, p) => sent.push([s.endpoint, JSON.parse(p).title]), now: new Date('2026-10-22T10:00:00Z'), logger: quiet });
     assert.equal(r.sent, 1);
-    assert.deepEqual(sent, [['https://push.example.test/2', 'Wonder']]);
+    assert.deepEqual(sent, [['https://push.example.test/2', 'Mull']]);
     await (await import('../server/sync/import-local.js')); // loads without a database connection
   } finally { await db.close(); }
 });

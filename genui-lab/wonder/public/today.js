@@ -20,7 +20,7 @@ const MODES = [
   { id: 'lesson', label: 'Lesson', icon: 'book', title: 'What do you want to learn?', placeholder: 'Ask about anything: how vaccines work, Bayes’ theorem, the French Revolution…', action: 'Begin' },
   { id: 'course', label: 'Course', icon: 'layers', title: 'What do you want to study?', placeholder: 'A subject to learn over several lessons, e.g. statistics from scratch', action: 'Plan' },
   { id: 'teacher', label: 'Teacher', icon: 'teacher', title: 'What do you need help with?', placeholder: 'A goal, a question, or a plan you need', action: 'Send' },
-  { id: 'material', label: 'Material', icon: 'download', title: 'What should Wonder teach from?', placeholder: 'A title for your notes (optional)', action: 'Begin' },
+  { id: 'material', label: 'Material', icon: 'download', title: 'What should Mull teach from?', placeholder: 'A title for your notes (optional)', action: 'Begin' },
 ];
 const TEACHER_CHIPS = ['What should I study today?', 'Make me a 5-day plan for a goal', 'Quiz me on my last lesson', 'How am I doing?'];
 const MATERIAL_ACCEPT = '.txt,.md,.markdown,.pdf,text/plain,text/markdown,application/pdf';
@@ -80,7 +80,7 @@ export function renderToday(ctx) {
   const levelSel = el('select', { class: 'cmd-level', 'aria-label': 'Level', onchange: (e) => { level = e.target.value; } }, ...LEVELS.map((lv) => el('option', { value: lv.id, selected: lv.id === level }, lv.label)));
   // -- Phase 10: "Material": paste notes or attach a file; Begin writes a lesson from it, or a course
   let file = null;
-  const notes = el('textarea', { class: 'cmd-notes', rows: '5', maxlength: '200000', placeholder: 'Paste your notes, a chapter or a syllabus. Wonder teaches from it and cites it.', 'aria-label': 'Your material' });
+  const notes = el('textarea', { class: 'cmd-notes', rows: '5', maxlength: '200000', placeholder: 'Paste your notes, a chapter or a syllabus. Mull teaches from it and cites it.', 'aria-label': 'Your material' });
   const fileInput = el('input', { type: 'file', accept: MATERIAL_ACCEPT, hidden: true });
   const fileChip = el('span', { class: 'file-chip', hidden: true });
   const courseBtn = el('button', { class: 'btn btn-secondary btn-sm', type: 'button', onclick: () => submit('course') }, 'Make a course');
@@ -89,7 +89,7 @@ export function renderToday(ctx) {
     el('div', { class: 'cmd-material-foot' },
       el('button', { class: 'btn btn-ghost btn-sm', type: 'button', onclick: () => fileInput.click() }, icon('plus'), 'Attach .txt, .md or .pdf'),
       fileChip,
-      el('span', { class: 'cmd-material-note' }, 'Stored on this Wonder server'),
+      el('span', { class: 'cmd-material-note' }, 'Stored on this Mull server'),
       courseBtn),
     fileInput);
   fileInput.addEventListener('change', () => {

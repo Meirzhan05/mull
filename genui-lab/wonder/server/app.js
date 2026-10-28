@@ -747,7 +747,7 @@ export function createWonderCore(opts = {}) {
     // routes that call Claude: signed in only, and within the user's daily caps (server/usage.js)
     const spend = usageKind(method, pathname, body);
     if (spend) {
-      if (!userId) return t.json(401, { ok: false, error: 'Sign in to use Wonder: lessons, the tutor and the Teacher need an account.', signedOut: true });
+      if (!userId) return t.json(401, { ok: false, error: 'Sign in to use Mull: lessons, the tutor and the Teacher need an account.', signedOut: true });
       if (state.mode === 'claude') {
         usage ??= createUsageGate({ db: sync.db, limits: usageLimits(env), logger });
         const r = await usage.charge(userId, spend, { retryKey: cleanKey(body?.streamKey) || cleanKey(body?.turnId) });

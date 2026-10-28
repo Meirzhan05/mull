@@ -22,14 +22,14 @@ function materialsPanel(ctx) {
   const draw = (items) => {
     count.hidden = !items.length;
     count.textContent = String(items.length);
-    if (!items.length) { card.replaceChildren(el('p', { class: 'muted small materials-empty' }, 'Nothing yet. On Today, choose Material to paste notes or attach a PDF. Wonder teaches from it and cites it.')); return; }
+    if (!items.length) { card.replaceChildren(el('p', { class: 'muted small materials-empty' }, 'Nothing yet. On Today, choose Material to paste notes or attach a PDF. Mull teaches from it and cites it.')); return; }
     card.replaceChildren(el('ul', { class: 'materials-list' }, ...items.map((m) => el('li', { class: 'material-row' },
       el('div', { class: 'mastery-text' }, el('strong', null, m.title), el('span', { class: 'muted small' }, `${size(m)} · added ${new Date(m.createdAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}`)),
       el('div', { class: 'works-actions' },
         el('a', { class: 'btn btn-ghost btn-sm', href: `/api/materials/file?id=${m.id}`, target: '_blank', rel: 'noopener' }, 'Open'),
         el('button', { class: 'btn btn-secondary btn-sm', type: 'button', onclick: () => ctx.actions?.startMaterialLesson?.(m) }, 'New lesson'),
         el('button', { class: 'icon-btn plain', type: 'button', 'aria-label': `Delete ${m.title}`, title: 'Delete', onclick: async () => {
-          if (!confirm(`Delete “${m.title}” from the Wonder server? Lessons already written from it stay.`)) return;
+          if (!confirm(`Delete “${m.title}” from the Mull server? Lessons already written from it stay.`)) return;
           try {
             const r = await fetch(`/api/materials?id=${encodeURIComponent(m.id)}`, { method: 'DELETE' }).then((x) => x.json());
             if (!r.ok) throw new Error(r.error);
@@ -40,7 +40,7 @@ function materialsPanel(ctx) {
   };
   fetch('/api/materials').then((r) => r.json()).then((r) => draw(r.items || [])).catch(() => card.replaceChildren(el('p', { class: 'muted small materials-empty' }, 'Could not load your materials.')));
   return el('div', { class: 'mastery', id: 'materials' },
-    el('div', { class: 'section-head' }, el('h2', { class: 'rubric' }, 'Your material', count), el('span', { class: 'muted small' }, signedInAccount() ? 'Stored in your account' : 'Stored on this Wonder server')),
+    el('div', { class: 'section-head' }, el('h2', { class: 'rubric' }, 'Your material', count), el('span', { class: 'muted small' }, signedInAccount() ? 'Stored in your account' : 'Stored on this Mull server')),
     card);
 }
 
@@ -130,7 +130,7 @@ function reminderSetting(settings, setSetting) {
   const describe = () => {
     note.textContent = !supported ? 'This browser has no notifications. Use “Add to calendar” on your study plan instead.'
       : Notification.permission === 'denied' ? 'Notifications are blocked for this site in your browser settings. “Add to calendar” on your plan still works.'
-        : r().enabled ? `Wonder nudges you at ${r().time} on days you haven’t met your goal, ${pushAvailable() ? 'on this device even when Wonder is closed' : 'while a Wonder tab is open'}. Plan events added to your calendar use this time too.`
+        : r().enabled ? `Mull nudges you at ${r().time} on days you haven’t met your goal, ${pushAvailable() ? 'on this device even when Mull is closed' : 'while a Mull tab is open'}. Plan events added to your calendar use this time too.`
           : 'A nudge at this time on days you haven’t met your goal. Plan events added to your calendar use this time too.';
   };
   sw.addEventListener('click', async () => {

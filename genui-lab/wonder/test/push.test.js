@@ -50,7 +50,7 @@ test('push reminders: due after the learner\'s local time, once a day, with the 
   r = await sendDueReminders({ sync: svc, send, now: new Date('2026-10-22T22:30:00Z'), logger: quiet });
   assert.equal(r.sent, 1);
   assert.equal(sent[0].endpoint, 'https://push.example.test/ny');
-  assert.equal(sent[0].title, 'Wonder');
+  assert.equal(sent[0].title, 'Mull');
   assert.match(sent[0].body, /Next: Review 3 cards\./);
   assert.equal(sent[0].tag, 'wonder-daily', 'replaces an in-tab reminder instead of stacking');
   // the cron runs again later that evening: already sent today
