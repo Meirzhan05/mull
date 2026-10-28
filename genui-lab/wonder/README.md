@@ -59,7 +59,7 @@ Five sections, in a sidebar on desktop and a bottom tab bar on phones, plus a �
 - **Review (`#/review`).** FSRS review with keyboard shortcuts: 1–5 or A–E to choose, T/F, Space to show an answer, 1–4 to grade, Enter to continue.
 - **Teacher (`#/teacher`).** The agent chat with tool cards (below).
 - **You (`#/you`).** Name, totals, a 22-week activity heatmap, settings (daily goal, theme, lesson text size), learner memory, and data export or erase.
-- **Onboarding.** A full-screen welcome in three steps: interests (with the name filled from the Google account), pace (starting level and daily goal), and a first lesson. With accounts on it runs only after sign-in. A topic brought from the landing page leads the last step as **Your first lesson**, one press from starting. All of it is skippable.
+- **Onboarding.** A full-screen welcome in three steps: interests (with the name filled from the Google account), pace (a daily goal), and a first lesson. With accounts on it runs only after sign-in. A topic brought from the landing page leads the last step as **Your first lesson**, one press from starting. All of it is skippable.
 - **Landing page (`/welcome`).** A scroll page that replays a recorded lesson. Its composers and topic cards say **Continue with Google** and open `#/start/<topic>` in the app. The home page `/` opens on it instead of Today (a pre-paint script, `app/landing-script.js`, run by `app/layout.js`):
   - **Account sync on:** for any browser without an account, every time and on any hash, because everything in Wonder needs a signed-in user. A deep link (`#/lesson/<id>`, `#/library`) is saved as `wonder.signInReturn`, so the visitor lands back on it after signing in. A browser that has signed in before (`wonder.account` is set) stays in the app, where **Sign in again** is if its session ended. A page coming back from Google sign-in (`?neon_auth_session_verifier=`) stays too, so the app can finish the sign-in, and so do the hashes that lead into sign-in (`#/start…`, `#/signin`, `#/learn/…`). Neon Auth's cookies are HttpOnly, so the script goes by the account marker, not cookies.
   - **Accounts off:** for a first-time visitor, once (`wonder.welcomed`), when this browser has no Wonder data (`wonder.v1`, `wonder.account`).
@@ -244,7 +244,7 @@ Memory holds free-text facts. The learner model tracks what the learner actually
   - It checks answer keys, facts, arithmetic and cited claims (shown the cited text), plus level fit and widget sense.
   - It also checks the words inside Diagrams and Figures. The props are long JSON, so after the lesson the message lists, by page, each valid Diagram's title, labels, part texts, step labels and texts, and caption, and each Figure's query, caption, alt, question and answer (`mediaDigest`). A false claim there is a `factual` issue. A mislabeled part, steps out of order, or a Figure question its answer does not answer is a `widget` issue. The critic cannot see Figure images; that is the vision check's job.
   - It returns issues and `quizFixes`. A fix is applied to the Quiz props only if the rewritten Quiz still validates, and the lesson is then updated with one `replace` record.
-  - A `quality-report` control record carries the lint result, the critic verdict, the issues and the fixes. The lesson's end panel shows it as a collapsible note.
+  - A `quality-report` control record carries the lint result, the critic verdict, the issues and the fixes. The client does not show or keep it; when the critic corrected quiz answers it says so in a toast ("1 quiz answer corrected.").
   - Demo mode runs the lint only. `verify: false` on the request skips both checks.
 - **Eval harness (`npm run eval`).**
   - Generates a lesson per topic in `evals/topics.json` through an in-process server, so it runs the real prompts, compile, lint and critic. It uses an empty in-memory learner memory, and web search is off unless `--web` is passed.
@@ -631,7 +631,7 @@ A lesson's quiz says what the learner knew a minute after reading it. Wonder als
   - A finding needs ≥ 2 lessons and ≥ 8 delayed reviews on each side, and a 10-point gap.
   - Findings go into the lesson request as `learnerInsights`. The server bounds them and places them after the cache breakpoint, and leaves them out when memory is off.
 - **Where outcomes show up.**
-  - "How well it stuck" next to the quality note at the end of a finished lesson.
+  - "How well it stuck" at the end of a finished lesson.
   - A "Refresh" row in Today's Up next for the worst-fading lesson, after Phase 6's "Strengthen".
   - "92% recall" in reading rows (Today's Recent, the Library).
   - "What works for you" on You, next to Phase 6's "What you know", with the same layout. Its "Fading lessons" group has **Refresh** (`#/review/lesson/<id>`: that lesson's cards, weakest first) and **Relearn** (the same topic in the best-measured other style).

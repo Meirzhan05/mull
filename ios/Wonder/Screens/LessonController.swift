@@ -23,7 +23,6 @@ final class LessonController {
     private(set) var error: String? = nil
     private(set) var status = "new"
     private(set) var finished = false
-    private(set) var quality: JSON = .null
     var steerMode: SteerMode = .hidden
     var steerStatus: String? = nil
     var steerBusy = false
@@ -62,7 +61,6 @@ final class LessonController {
         finished = lesson["finished"].bool == true
         dil = lesson["dil"]
         widgetAppData = lesson["appData"]
-        quality = lesson["quality"]
         surface.onAction = { [weak self] a in self?.handleAction(a) }
         surface.onViewState = { [weak self] vs in
             guard let self else { return }
@@ -181,6 +179,7 @@ final class LessonController {
         var latest: (markdown: String, dil: JSON) = (continueFrom == nil ? "" : (l["markdown"].string ?? ""), continueFrom == nil ? .null : dil)
         var lastSave = Date.distantPast
         var failureCode: String? = nil
+        var quality: JSON = .null // the server's quality-report control
         let persist = { [self] (status: String) in
             core.saveLesson(lessonId, [
                 "status": .string(status), "streamOwner": status == "streaming" ? .string(pageId) : .null, "markdown": .string(latest.markdown),
@@ -245,13 +244,14 @@ final class LessonController {
             title = newTitle
             core.saveLesson(lessonId, [
                 "status": "complete", "streamOwner": .null, "markdown": .string(markdown), "dil": final, "appData": widgetAppData, "messageId": messageId,
-                "title": .string(newTitle), "truncated": .bool(r.final["debug"]["truncated"].bool == true), "interruptedReason": .null, "quality": quality,
+                "title": .string(newTitle), "truncated": .bool(r.final["debug"]["truncated"].bool == true), "interruptedReason": .null,
             ])
             status = "complete"
             core.flush()
             if !final.isNull { surface.pruneViewState(keep: core.get("resolutionIdsOf", ["dil": final]).array.compactMap(\.string)) }
             if r.final["debug"]["truncated"].bool == true { app.show("The lesson was cut short (length limit).") }
-            if let qs = core.get("quality", ["report": quality]).object["tone"]?.string, qs == "fixed", let head = core.get("quality", ["report": quality])["headline"].string { app.show(head, seconds: 4) }
+            let fixed = quality["critic"]["fixed"].array.count
+            if fixed > 0 { app.show("\(fixed) quiz answer\(fixed == 1 ? "" : "s") corrected.", seconds: 4) }
             steerMode = .revise
             steerBusy = false
             steerStatus = nil

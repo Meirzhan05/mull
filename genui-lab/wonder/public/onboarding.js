@@ -1,13 +1,13 @@
 // First-run welcome, a full-screen flow in three steps that ends in the learner's first lesson:
 // 1. what they're curious about (interests, with a live preview of the topics they unlock),
-// 2. their pace (the level lessons start at and a daily goal),
+// 2. their pace (a daily goal),
 // 3. a first lesson, picked from those topics or typed in.
 // Skippable at any point (Esc or Skip keeps what was chosen so far); the choices live in
-// store.settings: name, interests, level, dailyGoal. Only what the learner actually set is
+// store.settings: name, interests, dailyGoal. Only what the learner actually set is
 // written, so settings that arrive meanwhile (account sync on a new device) are not reset.
 
 import { el, icon } from './ui.js';
-import { INTERESTS, DAILY_GOALS, LEVELS, suggestedTopics, topicInterest, goalOf, levelOf } from './progress-core.js';
+import { INTERESTS, DAILY_GOALS, suggestedTopics, topicInterest, goalOf, levelOf } from './progress-core.js';
 
 const STEPS = ['Interests', 'Pace', 'First lesson'];
 
@@ -59,7 +59,6 @@ export function showOnboarding({ store, onDone, startLesson, firstTopic = '', ac
   function finish(topic) {
     const patch = { onboarded: true };
     if (touched.has('interests')) patch.interests = [...pick.interests];
-    if (touched.has('level')) patch.level = pick.level;
     if (touched.has('dailyGoal')) patch.dailyGoal = pick.dailyGoal;
     const name = pick.name.trim();
     store.update((d) => {
@@ -120,8 +119,10 @@ export function showOnboarding({ store, onDone, startLesson, firstTopic = '', ac
 
   function paceStep() {
     const choice = (label, items, current, onPick) => {
+      // a saved value that is not one of the options (a custom goal) leaves the first one tabbable
+      const tabStop = items.some((it) => it.value === current) ? current : items[0]?.value;
       const group = el('div', { class: 'goal-options', role: 'radiogroup', 'aria-label': label }, ...items.map((it) => el('button', {
-        class: 'goal-option', type: 'button', role: 'radio', 'aria-checked': String(it.value === current), tabindex: it.value === current ? '0' : '-1',
+        class: 'goal-option', type: 'button', role: 'radio', 'aria-checked': String(it.value === current), tabindex: it.value === tabStop ? '0' : '-1',
         onclick: (e) => { onPick(it.value); for (const b of group.children) { const on = b === e.currentTarget; b.setAttribute('aria-checked', String(on)); b.tabIndex = on ? 0 : -1; } },
       }, el('span', { class: 'goal-option-text' }, el('strong', null, it.label), el('span', { class: 'muted small' }, it.hint)), it.tag ? el('b', null, it.tag) : null, el('i', { class: 'goal-option-dot', 'aria-hidden': 'true' }))));
       // arrow keys move within a radio group, as they do in a native one
@@ -136,15 +137,13 @@ export function showOnboarding({ store, onDone, startLesson, firstTopic = '', ac
       });
       return group;
     };
-    const level = choice('Level', LEVELS.map((l) => ({ value: l.id, label: l.label, hint: l.hint })), pick.level, (v) => { pick.level = v; touched.add('level'); });
     const goal = choice('Daily goal', DAILY_GOALS.map((g) => ({ value: g.xp, label: g.label, hint: g.hint, tag: `${g.xp} XP` })), pick.dailyGoal, (v) => { pick.dailyGoal = v; touched.add('dailyGoal'); });
     const node = el('div', { class: 'onboard-step' },
-      heading(`How should lessons feel${pick.name.trim() ? `, ${pick.name.trim()}` : ''}?`, 'Both are a starting point. You can change the level on any lesson, and the goal in You.'),
+      heading(`How much each day${pick.name.trim() ? `, ${pick.name.trim()}` : ''}?`, 'A starting point. You can change it any time in You.'),
       el('div', { class: 'onboard-pace' },
-        el('div', { class: 'onboard-field' }, el('span', null, 'Start lessons at'), level),
         el('div', { class: 'onboard-field' }, el('span', null, 'Daily goal'), goal)),
       actions(el('button', { class: 'btn btn-lg', type: 'button', onclick: () => go(2) }, 'Continue', icon('arrow-right'))));
-    return [node, level.querySelector('[aria-checked="true"]')];
+    return [node, goal.querySelector('[tabindex="0"]')];
   }
 
   function firstLessonStep() {
