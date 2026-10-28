@@ -668,7 +668,7 @@ body[data-screen="lesson"] main { padding-top: 0; }
 
 /* the lesson reads as a page, not a card: text on the background, widgets carry the surfaces */
 .lesson-card.card { padding: 8px 0 8px; min-height: 220px; background: none; border: 0; border-radius: 0; box-shadow: none; }
-.skeleton { display: grid; gap: 12px; }
+.skeleton { display: grid; gap: 12px; max-width: 680px; margin: 0 auto; } /* the reading column */
 .skeleton i { display: block; height: 12px; border-radius: var(--r-xs); background: linear-gradient(90deg, var(--surface-3) 0%, var(--surface-2) 50%, var(--surface-3) 100%); background-size: 200% 100%; animation: shimmer 1.4s linear infinite; }
 .skeleton i.t { height: 32px; width: 60%; margin-bottom: 12px; border-radius: var(--r-sm); }
 .skeleton i:nth-child(3) { width: 92%; }
@@ -818,8 +818,6 @@ body[data-screen="lesson"] main { padding-top: 0; }
 .composer-box textarea::placeholder { color: var(--ink-3); }
 .tutor-form { padding: 10px 12px 12px; padding-bottom: max(12px, env(safe-area-inset-bottom)); }
 .send-btn { width: 32px; height: 32px; padding: 0; border-radius: 50%; flex: 0 0 auto; }
-@media (min-width: 561px) { .tutor-fab { display: none; } }
-.tutor-fab { position: fixed; right: 16px; bottom: max(16px, env(safe-area-inset-bottom)); z-index: 40; border-radius: 999px; height: 40px; box-shadow: var(--shadow-pop); }
 @media (min-width: 561px) and (max-width: 1239px) {
   .tutor { inset: 8px 8px 8px auto; width: min(420px, 92vw); height: auto; border-radius: var(--r-xl); transform: translateX(110%); }
 }
@@ -829,7 +827,7 @@ body[data-screen="lesson"] main { padding-top: 0; }
   .lesson-layout:not(.tutor-open) .lesson-main { max-width: 780px; width: 100%; justify-self: center; }
   .tutor { position: sticky; inset: auto; top: 16px; height: calc(100vh - 32px); border: 1px solid var(--line); border-radius: var(--r-xl); transform: none; box-shadow: var(--shadow-card); align-self: start; display: none; visibility: visible; transition: none; }
   .lesson-layout.tutor-open .tutor { display: grid; }
-  .tutor-fab, .tutor-scrim { display: none; }
+  .tutor-scrim { display: none; }
 }
 
 /* ---------------------------------------------------------------- pack opening */
@@ -1206,8 +1204,10 @@ body[data-screen="lesson"] .toast { bottom: 80px; }
   .stat-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .grade-row { grid-template-columns: repeat(2, 1fr); }
   .lesson-card.card { padding: 4px 6px 16px; }
-  body[data-screen="lesson"] .lesson-dil.dil-root > [data-dil-catalog] { width: calc(100% + 40px); margin-inline: -20px; border-radius: 0 !important; border-left: 0; border-right: 0; }
+  /* edge to edge: widgets with their own surface; a Figure or Video keeps the gutter for its caption */
+  body[data-screen="lesson"] .lesson-dil.dil-root > [data-dil-catalog]:not([data-dil-catalog="Figure"]):not([data-dil-catalog="Video"]) { width: calc(100% + 40px); margin-inline: -20px; border-radius: 0 !important; border-left: 0; border-right: 0; }
   .lesson-bar .tutor-toggle { display: none; }
+  body[data-screen="lesson"] .toast { bottom: calc(68px + env(safe-area-inset-bottom)); } /* above the dock */
   .teacher-head .mem-chip { padding: 0 8px; }
   .starter-grid { grid-template-columns: 1fr; }
   .mem-add .btn { flex: 1; }

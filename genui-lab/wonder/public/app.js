@@ -366,12 +366,14 @@ function renderLesson(lessonId) {
   const errorBox = el('div', { class: 'card error-card', hidden: true });
   const finishBtn = el('button', { class: 'btn btn-lg', type: 'button', disabled: true }, 'Collect the cards');
   const endPanel = el('section', { class: 'card lesson-end pending', 'aria-label': 'End of lesson' });
-  // phones: one bar docked at the bottom holds Revise and the tutor, instead of pills over the text
-  const phone = window.matchMedia('(max-width: 560px)');
+  // phones: one bar docked at the bottom holds Revise and the tutor, instead of pills over the text.
+  // Whether it is shown is the stylesheet's call (.lesson-dock, extras.css), so there is one breakpoint.
   const dockSteer = el('div', { class: 'lesson-dock-steer' });
-  const dock = el('div', { class: 'lesson-dock' }, dockSteer,
-    el('button', { class: 'btn btn-secondary lesson-dock-tutor', type: 'button', onclick: () => setTutorOpen(true) }, icon('chat'), el('span', null, 'Tutor')));
-  const placeRevise = (node) => { if (phone.matches) dockSteer.append(node); else errorBox.before(node); };
+  const dockTutor = el('button', { class: 'btn btn-secondary lesson-dock-tutor', type: 'button', 'aria-expanded': 'false', onclick: () => setTutorOpen(true) }, icon('chat'), el('span', null, 'Tutor'));
+  const dock = el('div', { class: 'lesson-dock' }, dockSteer, dockTutor);
+  let docked = false; // the dock is displayed (kept current on resize)
+  const readDocked = () => { docked = dock.isConnected && getComputedStyle(dock).display !== 'none'; return docked; };
+  const placeRevise = (node) => { if (readDocked()) dockSteer.append(node); else errorBox.before(node); };
   // Phase 4: live steer (a pill beside the status line), resume (open, top) and revise (sticky, after the lesson; in the dock on phones)
   let steerNode = null;
   const steerBar = createSteerBar({
@@ -379,16 +381,28 @@ function renderLesson(lessonId) {
     onOpen: () => onPageScroll(),
     onMode: (mode, node) => { steerNode = node; if (mode === 'revise') placeRevise(node); else writingRow.append(node); },
   });
-  const onPhoneChange = () => { if (steerNode && steerBar.mode === 'revise') placeRevise(steerNode); };
-  phone.addEventListener('change', onPhoneChange);
-  teardown.push(() => phone.removeEventListener('change', onPhoneChange));
+  const setDockAway = (away) => { dock.classList.toggle('away', away); dock.inert = away; };
+  // the on-screen keyboard covers fixed-bottom elements: lift the dock (and an open Revise) above it
+  const vv = window.visualViewport;
+  const onViewport = () => {
+    const was = docked;
+    if (readDocked() !== was && steerNode && steerBar.mode === 'revise') placeRevise(steerNode);
+    if (!docked) { setDockAway(false); dock.style.removeProperty('--kb'); return; }
+    const kb = vv ? Math.max(0, window.innerHeight - vv.height - vv.offsetTop) : 0;
+    dock.style.setProperty('--kb', `${Math.round(kb)}px`);
+  };
+  window.addEventListener('resize', onViewport);
+  vv?.addEventListener('resize', onViewport);
+  vv?.addEventListener('scroll', onViewport);
+  teardown.push(() => { window.removeEventListener('resize', onViewport); vv?.removeEventListener('resize', onViewport); vv?.removeEventListener('scroll', onViewport); });
   // the dock steps aside while reading down, and comes back on any scroll up or at the end
   let dockY = window.scrollY;
   const onDockScroll = () => {
+    if (!docked) return;
     const y = window.scrollY;
     if (Math.abs(y - dockY) < 8) return;
     const atEnd = y + window.innerHeight > document.documentElement.scrollHeight - 120;
-    dock.classList.toggle('away', y > dockY && y > 160 && !atEnd && !dock.querySelector('.steer-bar.is-open'));
+    setDockAway(y > dockY && y > 160 && !atEnd && !dock.querySelector('.steer-bar.is-open'));
     dockY = y;
   };
   window.addEventListener('scroll', onDockScroll, { passive: true });
@@ -471,13 +485,14 @@ function renderLesson(lessonId) {
     dock);
 
   const tutor = createTutor(lessonId);
-  const layout = el('div', { class: 'lesson-layout' }, lessonMain, tutor.scrim, tutor.panel); // the dock's Tutor replaces tutor.fab
+  const layout = el('div', { class: 'lesson-layout' }, lessonMain, tutor.scrim, tutor.panel);
   app.replaceChildren(layout);
+  onViewport(); // now in the page: is the dock shown at this width?
   teardown.push(() => tutor.destroy());
   const setTutorOpen = (open) => {
     layout.classList.toggle('tutor-open', open);
     tutorToggle.setAttribute('aria-expanded', String(open));
-    tutor.fab.hidden = open;
+    dockTutor.setAttribute('aria-expanded', String(open));
     if (open) tutor.focus();
   };
   tutor.onOpenChange = setTutorOpen;
@@ -1056,7 +1071,6 @@ function createTutor(lessonId) {
     el('div', { class: 'tutor-scroll' }, empty, log, followups),
     form);
   const scrim = el('div', { class: 'tutor-scrim', 'aria-hidden': 'true', onclick: () => api.onOpenChange?.(false) });
-  const fab = el('button', { class: 'tutor-fab btn', type: 'button', onclick: () => api.onOpenChange?.(true) }, icon('chat'), 'Ask tutor');
   const surfaces = [];
   let busy = false;
   let failed = null; // {rc, bot}: the reply waiting for a Retry (recoverable streams)
@@ -1150,7 +1164,6 @@ function createTutor(lessonId) {
       return graded;
     },
     panel,
-    fab,
     scrim,
     onOpenChange: null,
     focus() { setTimeout(() => input.focus(), 50); },

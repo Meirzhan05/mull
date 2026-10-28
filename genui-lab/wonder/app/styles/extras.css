@@ -69,13 +69,12 @@
 .steer-open .ui-icon { width: 14px; height: 14px; color: var(--accent); }
 .steer-open:hover { background: var(--hover); }
 @media (min-width: 1240px) { .steer-bar[data-mode="revise"]:not(.is-open) { justify-self: center; } }
-@media (max-width: 1239px) { .steer-bar[data-mode="revise"].is-open { bottom: calc(max(18px, env(safe-area-inset-bottom)) + 58px); } }
 
 /* ---- Phones: one bar docked at the bottom (Revise + Tutor), instead of pills floating over the text */
 .lesson-dock { display: none; }
 @media (max-width: 560px) {
   .lesson-dock {
-    display: flex; align-items: center; gap: 8px; position: fixed; left: 0; right: 0; bottom: 0; z-index: 40;
+    display: flex; align-items: center; gap: 8px; position: fixed; left: 0; right: 0; bottom: var(--kb, 0px); z-index: 40; /* --kb: the on-screen keyboard (app.js) */
     padding: 8px 12px; padding-bottom: max(8px, env(safe-area-inset-bottom)); border-top: 1px solid var(--line);
     background: color-mix(in srgb, var(--bg) 88%, transparent); backdrop-filter: saturate(1.8) blur(14px); -webkit-backdrop-filter: saturate(1.8) blur(14px);
     transition: transform 220ms cubic-bezier(.2,.8,.2,1);
