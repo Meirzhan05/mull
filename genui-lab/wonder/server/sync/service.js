@@ -117,6 +117,8 @@ export function createSyncService({ db, now = () => Date.now() }) {
     list,
     /** How many browser-side records the account holds (the first sign-in asks before merging). */
     async count(userId) { requireUser(userId); return db.count(userId, CLIENT_KINDS); },
+    /** Delete account: everything the server keeps for this user. */
+    async deleteAccount(userId) { requireUser(userId); await db.deleteUser(userId); },
     db,
   };
 }

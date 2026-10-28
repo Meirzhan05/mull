@@ -101,6 +101,11 @@ export function createMemoryDb() {
     async putFile(userId, id, { bytes, contentType }) { user(userId).files.set(id, { bytes: Buffer.from(bytes), contentType }); },
     async getFile(userId, id) { const f = users.get(userId)?.files.get(id); return f ? { bytes: Buffer.from(f.bytes), contentType: f.contentType } : null; },
     async deleteFile(userId, id) { users.get(userId)?.files.delete(id); },
+    /** Delete account: everything kept for the user except today's usage counts (server/usage.js). */
+    async deleteUser(userId) {
+      const u = users.get(userId);
+      if (u) users.set(userId, { rev: 0, records: new Map(), subs: new Map(), reminders: new Set(), files: new Map(), usage: u.usage });
+    },
     async close() {},
   };
 }

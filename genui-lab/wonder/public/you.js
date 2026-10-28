@@ -1,34 +1,29 @@
-// You (#/you): profile name, account, totals, what you know, an activity heatmap, and settings
-// (level, interests, theme, reading size, reminder). Memory, material and data export are still
+// You (#/you): profile name, totals, what you know, an activity heatmap, settings (level,
+// interests, theme, reading size, reminder), and the account at the end. Memory, material and data export are still
 // kept and synced; they just have no place on this screen.
 
 import { el, icon, toast } from './ui.js';
 import { learnerTotals, activityGrid, LEVELS, levelOf } from './progress-core.js';
 import { interestGrid } from './onboarding.js';
 import { masteryPanel } from './mastery-screen.js'; // Phase 6
-import { accountInfo, signedInAccount, currentSyncStatus, onSyncStatus, syncEngine, signIn, signOut, switchToSignedIn, accountLabel, pushAvailable, enablePush, disablePush } from './account.js'; // account sync
+import { accountInfo, signedInAccount, currentSyncStatus, onSyncStatus, signIn, signOut, switchToSignedIn, deleteAccount, accountLabel, pushAvailable, enablePush, disablePush } from './account.js'; // account sync
 
 export const TEXT_SIZES = [['0.92', 'Small'], ['1', 'Default'], ['1.1', 'Large'], ['1.2', 'Larger']];
 
-const ago = (t) => {
-  const s = Math.round((Date.now() - t) / 1000);
-  return s < 45 ? 'just now' : s < 3600 ? `${Math.round(s / 60)} min ago` : new Date(t).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
-};
-
 /**
- * Account sync: sign in to keep lessons, cards and progress in an account and on every browser
- * signed in to it. Shown only when the server has accounts configured.
+ * Account, at the end of the page: sign in or out, and delete the account. Shown only when the
+ * server has accounts configured.
  */
 function accountPanel(ctx) {
   const body = el('div', { class: 'card settings' });
-  const sec = el('div', { class: 'account-sync', hidden: true, style: { marginBottom: '12px' } }, body);
+  const sec = el('section', { class: 'you-sec', id: 'you-account', hidden: true }, el('h2', { class: 'rubric' }, 'Account'), body);
   const btn = (label, cls, onclick, busy = label) => el('button', { class: `btn ${cls}`, type: 'button', onclick: async (e) => {
     const b = e.currentTarget;
     b.disabled = true;
     b.textContent = busy;
     try { await onclick(); } catch (err) { toast(err.message || 'That did not work'); } finally { b.disabled = false; b.textContent = label; }
   } }, label);
-  const row = (title, note, ...actions) => el('div', { class: 'setting' }, el('div', { class: 'setting-text' }, el('strong', null, title), el('p', { class: 'muted small' }, note)), el('div', { style: { display: 'flex', gap: '8px', flexWrap: 'wrap' } }, ...actions));
+  const row = (title, note, ...actions) => el('div', { class: 'setting' }, el('div', { class: 'setting-text' }, el('strong', null, title), note ? el('p', { class: 'muted small' }, note) : null), el('div', { style: { display: 'flex', gap: '8px', flexWrap: 'wrap' } }, ...actions));
   // redrawn on every sync status change; replaced only when the text changes, so a button
   // being clicked stays put
   let drawn = '';
@@ -36,11 +31,12 @@ function accountPanel(ctx) {
   const draw = () => {
     const info = accountInfo();
     sec.hidden = !info?.sync;
+    ctx.onAccountShown?.(!sec.hidden);
     if (!info?.sync) return;
     const acct = signedInAccount();
     const st = currentSyncStatus();
     if (!acct) {
-      show('signedOut', row('Sync across your devices', 'Sign in to keep your lessons, cards and progress in an account, on every browser you sign in on. What this browser has comes with you.',
+      show('signedOut', row('Sign in', 'Use Mull with your Google account. What this browser has comes with you.',
         btn('Sign in', 'btn-primary', signIn)));
     } else if (st.state === 'mismatch') {
       show('mismatch', row('Signed in as someone else', 'This browser holds another account’s copy. Switch to the account that is signed in now, or sign out.',
@@ -49,23 +45,18 @@ function accountPanel(ctx) {
       show('ended', row('Your session ended', 'Sign in again to keep syncing. Changes made here meanwhile are kept and sync once you are back.',
         btn('Sign in', 'btn-primary', signIn), btn('Sign out', 'btn-secondary', signOut)));
     } else {
-      const pending = syncEngine()?.pending() || 0;
-      // a sync runs every minute and on returning to the tab: while one is in flight, keep showing
-      // the last one rather than flashing "Syncing…"
-      const line = st.state === 'offline' ? `Offline. ${pending ? `${pending} change${pending === 1 ? '' : 's'} will sync when you are back.` : 'Everything here is saved.'}`
-        : st.state === 'error' ? `Could not sync (${st.error || 'error'}). Retrying.`
-          : st.state === 'unavailable' ? 'Sync is unavailable on this server right now; this browser keeps your changes.'
-            : st.at ? `Synced ${ago(st.at)}${pending ? ` · ${pending} waiting` : ''}.` : st.state === 'syncing' ? 'Syncing…' : 'Connecting…';
       const title = accountLabel() ? `Signed in as ${accountLabel()}` : 'Signed in';
-      show(`in:${title}:${line}`, row(title, `${line} Lessons, cards and progress are kept in your account.`,
-        btn('Sync now', 'btn-secondary', async () => { toast((await syncEngine()?.syncNow()) ? 'Synced' : 'Could not sync'); }, 'Syncing…'),
-        btn('Sign out', 'btn-secondary', async () => { if (await signOut()) toast('Signed out'); })));
+      show(`in:${title}`,
+        row(title, null, btn('Sign out', 'btn-secondary', async () => { if (await signOut()) toast('Signed out'); })),
+        row('Delete account', 'Deletes your lessons, cards, progress, memory and material for good.',
+          btn('Delete account', 'btn-danger', async () => {
+            if (confirm('Delete your Mull account? Your lessons, cards, progress, memory and material are deleted for good. This cannot be undone.')) await deleteAccount();
+          }, 'Deleting…')));
     }
   };
   draw();
   const off = onSyncStatus(draw);
-  const timer = setInterval(draw, 30_000);
-  ctx.teardown?.push(() => { off(); clearInterval(timer); });
+  ctx.teardown?.push(off);
   return sec;
 }
 
@@ -182,7 +173,7 @@ export function renderYou(ctx) {
       switchSetting('Teacher check-in', 'The first time you open the Teacher each day, it looks at your progress and suggests the best next step.', settings().teacherCheckIn !== false, (on) => setSetting({ teacherCheckIn: on }))));
 
   // settings-style layout: a section nav beside the content; the nav follows your scroll
-  const SECTIONS = [['profile', 'Profile'], ['knowledge', 'What you know'], ['activity', 'Activity'], ['preferences', 'Preferences']];
+  const SECTIONS = [['profile', 'Profile'], ['knowledge', 'What you know'], ['activity', 'Activity'], ['preferences', 'Preferences'], ['account', 'Account']];
   const sec = (id, ...kids) => el('section', { class: 'you-sec', id: `you-${id}` }, ...kids);
   const navLinks = SECTIONS.map(([id, label]) => el('a', { class: 'you-nav-link', href: `#/you`, dataset: { sec: id }, onclick: (e) => {
     e.preventDefault();
@@ -191,11 +182,13 @@ export function renderYou(ctx) {
   const nav = el('nav', { class: 'you-nav', 'aria-label': 'Sections' }, ...navLinks);
   const mark = (id) => { for (const a of navLinks) a.toggleAttribute('aria-current', a.dataset.sec === id); };
   mark('profile');
+  const accountLink = navLinks[navLinks.length - 1];
   const content = el('div', { class: 'you-content' },
-    sec('profile', head, accountPanel(ctx), stats),
+    sec('profile', head, stats),
     sec('knowledge', masteryPanel(ctx)), // Phase 6
     sec('activity', heat),
-    sec('preferences', settingsCard));
+    sec('preferences', settingsCard),
+    accountPanel({ ...ctx, onAccountShown: (on) => { accountLink.hidden = !on; } }));
   app.replaceChildren(el('div', { class: 'you' }, el('h1', { class: 'h-xl you-title' }, 'You'), el('div', { class: 'you-layout' }, nav, content)));
   const io = new IntersectionObserver((entries) => {
     const vis = entries.filter((e) => e.isIntersecting).sort((a, b) => a.boundingClientRect.top - b.boundingClientRect.top)[0];

@@ -13,6 +13,7 @@
 //   GET/POST/DELETE /api/memory -> learner memory items
 //   POST /api/memory/extract    -> 0-3 new memory facts from a finished lesson
 //   GET  /api/account           -> {sync, signedIn, push} (account sync: server/sync/)
+//   DELETE /api/account         -> delete everything kept for the signed-in user
 //   POST /api/sync              -> push changed records, pull newer ones (signed in)
 //   POST/DELETE /api/push/subscribe -> this browser's Web Push subscription (signed in)
 //   GET  /api/cron/reminders    -> daily reminders over Web Push (Vercel Cron, CRON_SECRET)
@@ -71,7 +72,7 @@ export const MAX_BODY = 2 * 1024 * 1024;
 const DEFAULT_TUTOR_FOLLOWUPS = ['Quiz me on this lesson', 'Give me a real-world example', 'What should I learn next?'];
 const DEFAULT_TEACHER_FOLLOWUPS = ['What should I study today?', 'Make me a study plan', 'Quiz me'];
 // with account sync on: routes that need a signed-in user, and routes that read learner memory
-const SIGNED_IN_ONLY = new Set(['POST /api/sync', 'POST /api/push/subscribe', 'DELETE /api/push/subscribe', 'POST /api/memory', 'DELETE /api/memory', 'POST /api/materials', 'DELETE /api/materials', 'GET /api/materials/file']);
+const SIGNED_IN_ONLY = new Set(['DELETE /api/account', 'POST /api/sync', 'POST /api/push/subscribe', 'DELETE /api/push/subscribe', 'POST /api/memory', 'DELETE /api/memory', 'POST /api/materials', 'DELETE /api/materials', 'GET /api/materials/file']);
 const MEMORY_PATHS = /^\/api\/(lesson|tutor|teacher|memory|widget_action)(\/|$)/;
 const MEMORY_OFF_CONTEXT = 'The learner turned memory off for this conversation: do not save or forget memory items, and do not assume anything about them beyond this conversation.';
 
@@ -726,6 +727,7 @@ export function createWonderCore(opts = {}) {
     },
     // account sync + Web Push
     'GET /api/account': account,
+    'DELETE /api/account': deleteAccount,
     'POST /api/sync': syncRoute,
     'POST /api/push/subscribe': pushSubscribe,
     'DELETE /api/push/subscribe': pushUnsubscribe,
@@ -788,6 +790,14 @@ export function createWonderCore(opts = {}) {
       ...(userId && state.mode === 'claude' ? { usage: await (usage ??= createUsageGate({ db: sync.db, limits: usageLimits(env), logger })).today(userId) } : {}),
       push: sync && push ? { publicKey: push.publicKey } : null,
     });
+  }
+
+  async function deleteAccount(t) {
+    const { userId, sync } = scopes.getStore() || {};
+    if (!sync) return t.json(404, { ok: false, error: 'Accounts are not configured on this server' });
+    await sync.deleteAccount(userId);
+    logger.info?.('[wonder] account deleted');
+    t.json(200, { ok: true });
   }
 
   async function syncRoute(t, body) {

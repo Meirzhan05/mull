@@ -1025,6 +1025,7 @@ body[data-screen="lesson"] main { padding-top: 0; }
 .you-nav-link { display: block; padding: 6px 10px; border-radius: var(--r-sm); text-decoration: none; font-size: 0.875rem; font-weight: 500; color: var(--ink-2); white-space: nowrap; }
 .you-nav-link:hover { color: var(--ink); background: var(--hover); }
 .you-nav-link[aria-current] { color: var(--ink); background: var(--surface-3); }
+.you-nav-link[hidden], .you-sec[hidden] { display: none; }
 @media (max-width: 899px) { .you-nav { position: sticky; top: 52px; z-index: 5; background: var(--bg); padding: 8px 0; border-bottom: 1px solid var(--line); } }
 .you-content { display: grid; gap: 28px; min-width: 0; }
 .you-sec { display: grid; gap: 14px; scroll-margin-top: 90px; }

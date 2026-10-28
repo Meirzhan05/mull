@@ -123,6 +123,25 @@ test('push subscriptions are per user, validated, and move with the browser', as
   });
 });
 
+test('delete account: removes only the signed-in user\'s records, material and push subscriptions', async () => {
+  const push = { publicKey: 'BPUB', privateKey: 'secret', subject: 'mailto:a@b.c' };
+  await withServer({ push }, async ({ alice, bob, anon, sync }) => {
+    const lesson = (id) => ({ since: 0, changes: [{ kind: 'lesson', id, data: { id }, baseRev: 0, updatedAt: 1 }] });
+    await alice('POST', '/api/sync', lesson('a1'));
+    await bob('POST', '/api/sync', lesson('b1'));
+    const m = (await alice('POST', '/api/materials', { kind: 'text', text: NOTES })).body.item;
+    await alice('POST', '/api/push/subscribe', { subscription: { endpoint: 'https://push.example.test/send/a', keys: { p256dh: 'p', auth: 'a' } } });
+    assert.equal((await anon('DELETE', '/api/account')).status, 401);
+    assert.equal((await alice('DELETE', '/api/account')).status, 200);
+    assert.equal((await alice('GET', '/api/account')).body.records, 0);
+    assert.deepEqual((await alice('POST', '/api/sync', { since: 0, changes: [] })).body.records, []);
+    assert.deepEqual((await alice('GET', '/api/materials')).body.items, []);
+    assert.equal(await sync.db.getFile('alice', m.id), null);
+    assert.equal((await sync.db.listSubscriptions('alice')).length, 0);
+    assert.equal((await bob('GET', '/api/account')).body.records, 1, 'Bob keeps his');
+  });
+});
+
 test('without account sync the server behaves exactly as before (no accounts, local memory)', async () => {
   const memory = createMemoryStore({ file: null });
   const server = createWonderServer({ demoDelayMs: 0, logger: quiet, memory, getUserId: () => 'ignored' });

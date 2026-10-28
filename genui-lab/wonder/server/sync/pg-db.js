@@ -204,6 +204,29 @@ export function createPgDb({ pool, blob = null }) {
       const { rows: [r] } = await q('DELETE FROM wonder_files WHERE user_id = $1 AND id = $2 RETURNING blob_path', [userId, id]);
       if (r?.blob_path && blob) { try { await blob.del(r.blob_path); } catch { /* orphaned blob: harmless */ } }
     },
+    /**
+     * Delete account: the user's records, files, push subscriptions and reminder log. Usage
+     * counts stay, so deleting and signing in again does not reset the day's caps.
+     */
+    async deleteUser(userId) {
+      await ensure();
+      const client = await pool.connect();
+      let paths;
+      try {
+        await client.query('BEGIN');
+        ({ rows: paths } = await client.query('DELETE FROM wonder_files WHERE user_id = $1 RETURNING blob_path', [userId]));
+        await client.query('DELETE FROM wonder_push_subscriptions WHERE user_id = $1', [userId]);
+        await client.query('DELETE FROM wonder_reminders_sent WHERE user_id = $1', [userId]);
+        await client.query('DELETE FROM wonder_users WHERE id = $1', [userId]); // wonder_records: ON DELETE CASCADE
+        await client.query('COMMIT');
+      } catch (e) {
+        try { await client.query('ROLLBACK'); } catch {}
+        throw e;
+      } finally {
+        client.release();
+      }
+      for (const { blob_path: p } of paths) if (p && blob) { try { await blob.del(p); } catch { /* orphaned blob: harmless */ } }
+    },
     async close() { await pool.end(); },
   };
 }

@@ -243,6 +243,25 @@ export async function signOut() {
   return true;
 }
 
+/**
+ * Delete this account: everything the server keeps for it, then the Neon Auth user (signed out
+ * instead when Neon Auth refuses, e.g. an old session), then this browser's copy.
+ */
+export async function deleteAccount() {
+  engine?.stop();
+  await disablePush().catch(() => {});
+  await postJson('/api/account', {}, 'DELETE');
+  const a = await authClient(5000);
+  if (a) {
+    const { error } = await a.deleteUser({}).catch((e) => ({ error: e }));
+    if (error) await a.signOut().catch(() => {});
+  }
+  sessionUser = null;
+  try { ls()?.removeItem(ACCOUNT_KEY); ls()?.removeItem(MIGRATED_KEY); } catch {}
+  await cache?.destroy?.();
+  location.reload();
+}
+
 /** The browser holds another account's cache than the one signed in: drop it, take the new one. */
 export async function switchToSignedIn() {
   if (!confirmLoss('Switch accounts')) return;
