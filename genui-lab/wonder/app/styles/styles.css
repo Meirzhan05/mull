@@ -345,6 +345,7 @@ main { display: block; padding: 20px 16px calc(var(--tabbar-h) + 32px + env(safe
 .goal-mini-note { font-size: 0.75rem; color: var(--ink-3); }
 .side-profile { display: flex; align-items: center; gap: 10px; min-height: 44px; padding: 6px 8px; border-radius: var(--r-sm); color: var(--ink-2); text-decoration: none; }
 .side-profile:hover { background: var(--hover); color: var(--ink); }
+.side-profile[aria-current="page"] { background: var(--surface-3); color: var(--ink); }
 .side-avatar { width: 28px; height: 28px; display: grid; place-items: center; flex: 0 0 auto; border-radius: 50%; background: var(--ink); color: var(--bg); font-size: 0.8125rem; font-weight: 600; }
 .side-profile-text { display: grid; min-width: 0; line-height: 1.25; }
 .side-profile-text strong { font-size: 0.8125rem; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
