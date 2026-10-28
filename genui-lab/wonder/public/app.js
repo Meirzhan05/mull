@@ -1411,20 +1411,20 @@ observeMath(document.body);
 refreshChrome();
 // A new account onboards first (the topic it brought waits in onboarding's last step); with
 // accounts on, onboarding only ever runs signed in.
-function land({ routed = false } = {}) {
+function land() {
   const afterSignIn = takeAfterSignIn();
   const onboard = needsOnboarding(store.data) && (!ACCOUNTS || !!localCache.account);
   if (afterSignIn && !onboard) startLesson(afterSignIn.topic, afterSignIn.level || undefined); // its hashchange routes
-  else if (!routed) route();
+  else route();
   if (onboard) openOnboarding(afterSignIn?.topic || '');
 }
 
 loadStatus().then(() => {
-  // Just signed in, the account cache is empty until its first sync: an account that already
-  // onboarded (on another device, or before signing out here) would look new. Land once that sync
-  // has finished (or failed), behind the hand-off note.
+  // The account cache has not had its first sync (the one before sign-in's reload timed out or
+  // failed): an account that already onboarded would look new, and a lesson link kept through
+  // sign-in would not be found. Land once that sync is in, which also redraws the screen; a failed
+  // one shows Today and waits for the retry.
   let awaitingAccount = accountAwaitsFirstSync();
-  const landAfterSync = () => { if (!awaitingAccount) return; awaitingAccount = false; land({ routed: true }); if (!signingIn && !accountSwitching()) endHandoff(); };
   if (awaitingAccount) route();
   else land();
   // back from Google, startAccount() finishes the sign-in and reloads into the account
@@ -1432,11 +1432,11 @@ loadStatus().then(() => {
   if (!signingIn && !finishingSignIn && !awaitingAccount) endHandoff();
   // account sync: changes from other devices redraw Today / Library when that cannot disturb reading
   onSyncStatus((s) => {
-    if (s.state === 'synced' && s.applied && ['home', 'library'].includes(document.body.dataset.screen) && window.scrollY < 40 && !document.querySelector('.onboard, dialog[open]')) route();
+    if (awaitingAccount && !['syncing', 'error', 'offline'].includes(s.state)) { awaitingAccount = false; land(); }
+    else if (s.state === 'synced' && s.applied && ['home', 'library'].includes(document.body.dataset.screen) && window.scrollY < 40 && !document.querySelector('.onboard, dialog[open]')) route();
     else refreshChrome();
-    if (s.state !== 'syncing') landAfterSync();
   });
   startAccount({ store, toast })
-    .then(() => { landAfterSync(); if (!signingIn && !accountSwitching()) endHandoff(); })
-    .catch((e) => { landAfterSync(); endHandoff(); console.warn('[wonder] account sync could not start', e); });
+    .then(() => { if (!signingIn && !accountSwitching()) endHandoff(); })
+    .catch((e) => { if (awaitingAccount) { awaitingAccount = false; land(); } endHandoff(); console.warn('[wonder] account sync could not start', e); });
 });
