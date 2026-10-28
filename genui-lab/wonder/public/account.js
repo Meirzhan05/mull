@@ -12,7 +12,7 @@
 // server has it. Sign-out syncs, then deletes the account's cache from this browser.
 
 import { openIdbStorage, prefixedLocalStorage } from './idb-storage.js';
-import { createSyncEngine, BASE_KEY } from './sync-client.js';
+import { createSyncEngine, syncBeforeOpening, awaitsFirstSync, BASE_KEY } from './sync-client.js';
 import { hasLearnerData, diffRecords, toRecords } from './sync-core.js';
 import { emptyState } from './store.js';
 
@@ -40,6 +40,9 @@ async function getJson(url, init) {
   return body;
 }
 const postJson = (url, body, method = 'POST') => getJson(url, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+const postSync = (body) => postJson('/api/sync', body);
+// one sync at a time per account, across this browser's tabs
+const syncLock = (userId) => (fn) => (globalThis.navigator?.locks ? navigator.locks.request(`wonder-sync-${userId}`, fn) : fn());
 
 /**
  * Before the store is created: the storage this page should use. Signed in last time -> that
@@ -128,8 +131,8 @@ export async function startAccount({ store, toast = () => {}, onChange = () => {
     store,
     storage: cache,
     userId: current.userId,
-    post: (body) => postJson('/api/sync', body),
-    lock: (fn) => (globalThis.navigator?.locks ? navigator.locks.request(`wonder-sync-${current.userId}`, fn) : fn()),
+    post: postSync,
+    lock: syncLock(current.userId),
     onStatus: (s) => { setStatus(s); onChange(); },
     onFirstSync: (mode) => {
       if (mode === 'merge' && migrating) {
@@ -177,6 +180,9 @@ export async function beginAccount(userId, { store } = {}) {
   try { target = await openIdbStorage(userId); } catch { target = prefixedLocalStorage(userId); }
   target.setItem(STATE_KEY, mode === 'merge' ? anonRaw : JSON.stringify(emptyState()));
   target.setItem(BASE_KEY, JSON.stringify({ userId, since: 0, base: [], first: mode }));
+  // a returning account: its first sync now, behind the hand-off note, so the reloaded page opens
+  // on its lessons and settings (not an empty start that looks like a new learner)
+  if (mode === 'pull') await syncBeforeOpening({ storage: target, userId, post: postSync, lock: syncLock(userId) });
   await target.flushNow();
   try {
     sessionStorage.setItem('wonder.beginAccount', String(Date.now()));
@@ -262,6 +268,15 @@ export async function accountFirstName() {
 
 export function accountLabel() {
   return sessionUser?.email || sessionUser?.name || null;
+}
+
+/**
+ * This page's account cache was just seeded (beginAccount) and its first sync has not finished
+ * (it timed out or failed before the reload), so it does not hold the account's lessons or
+ * settings yet: the store looks like a new learner's until startAccount() syncs.
+ */
+export function accountAwaitsFirstSync() {
+  return !!current && !!cache && awaitsFirstSync(cache, current.userId);
 }
 
 export const accountInfo = () => info;
