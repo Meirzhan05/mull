@@ -33,8 +33,9 @@ const nextConfig = {
     '/vendor/katex/*': ['./node_modules/katex/dist/**/*', './server/demo/**/*'],
     '/api/*': ['./server/demo/**/*'],
   },
-  // the Anthropic SDK, pg and web-push stay plain Node dependencies of the route handlers
-  serverExternalPackages: ['@anthropic-ai/sdk', 'pg', 'web-push'],
+  // the Anthropic SDK, pg, web-push and unpdf (a PDF's text layer, server/materials.js) stay plain
+  // Node dependencies of the route handlers
+  serverExternalPackages: ['@anthropic-ai/sdk', 'pg', 'web-push', 'unpdf'],
   poweredByHeader: false,
   devIndicators: false, // the badge sits on the mobile tab bar; build errors still show the overlay
   // the landing page (public/welcome) at /welcome; first-time visitors land there (app/layout.js)

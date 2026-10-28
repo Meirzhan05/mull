@@ -37,10 +37,17 @@ export const MAX_MATERIAL_TOKENS = 800_000;
 // (about $1 of uncached input), so the daily caps still bound what one user spends
 export const MATERIAL_TOKENS_PER_CHARGE = 250_000;
 
+// A PDF Claude refuses ("Could not process PDF": e.g. a scan whose page images use formats it
+// can't decode) is taught from its text layer instead; below this many characters it has none
+export const MIN_FALLBACK_CHARS = 500;
+
 export const isBase64 = (s) => /^[A-Za-z0-9+/]+=*$/.test(s);
 export const pdfTooLarge = (bytes) => `That PDF is ${(bytes / 1048576).toFixed(1)} MB; the limit is ${MAX_PDF_BYTES / 1048576} MB.`;
-/** How many requests a lesson or course plan from this material counts as against the daily caps. */
-export const materialCharge = (meta) => 1 + Math.floor((Number(meta?.tokens) || 0) / MATERIAL_TOKENS_PER_CHARGE);
+/**
+ * How many requests a lesson or course plan from this material counts as against the daily caps
+ * (a PDF taught from its text layer: about 4 characters a token).
+ */
+export const materialCharge = (meta) => 1 + Math.floor((meta?.textFallback ? meta.textFallback.chars / 4 : Number(meta?.tokens) || 0) / MATERIAL_TOKENS_PER_CHARGE);
 
 const clean = (s, n) => String(s ?? '').replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, n);
 
@@ -92,6 +99,8 @@ export function createMaterialStore({ dir = DEFAULT_MATERIALS_DIR } = {}) {
   let index = [];
   const indexFile = dir ? path.join(/* turbopackIgnore: true */ dir, 'index.json') : null;
   const fileOf = (meta) => path.join(/* turbopackIgnore: true */ dir, `${meta.id}.${meta.kind === 'pdf' ? 'pdf' : 'txt'}`);
+  const textFileOf = (id) => path.join(/* turbopackIgnore: true */ dir, `${id}.text.txt`);
+  const texts = new Map(); // id -> text layer of a PDF Claude could not read (dir: null)
   if (dir) {
     try {
       const parsed = JSON.parse(fs.readFileSync(/* turbopackIgnore: true */ indexFile, 'utf8'));
@@ -129,11 +138,25 @@ export function createMaterialStore({ dir = DEFAULT_MATERIALS_DIR } = {}) {
       if (!dir) return mem.has(id) ? mem.get(id) : null;
       try { return meta.kind === 'pdf' ? fs.readFileSync(/* turbopackIgnore: true */ fileOf(meta)) : fs.readFileSync(/* turbopackIgnore: true */ fileOf(meta), 'utf8'); } catch { return null; }
     },
+    /** Keep a PDF's text layer to teach from instead (meta.textFallback: {chars, pages}). */
+    setTextFallback(id, text, info) {
+      const meta = store.meta(id);
+      if (!meta) return null;
+      if (dir) fs.writeFileSync(/* turbopackIgnore: true */ textFileOf(id), text); else texts.set(id, text);
+      meta.textFallback = info;
+      saveIndex();
+      return { ...meta };
+    },
+    readText(id) {
+      if (!store.meta(id)?.textFallback) return null;
+      if (!dir) return texts.get(id) ?? null;
+      try { return fs.readFileSync(/* turbopackIgnore: true */ textFileOf(id), 'utf8'); } catch { return null; }
+    },
     remove(id) {
       const meta = store.meta(id);
       if (!meta) return null;
       index = index.filter((m) => m.id !== id);
-      if (dir) { try { fs.unlinkSync(/* turbopackIgnore: true */ fileOf(meta)); } catch {} } else mem.delete(id);
+      if (dir) { for (const f of [fileOf(meta), textFileOf(id)]) { try { fs.unlinkSync(/* turbopackIgnore: true */ f); } catch {} } } else { mem.delete(id); texts.delete(id); }
       saveIndex();
       return meta;
     },
@@ -194,6 +217,21 @@ export async function takeUpload(parts, upload, count) {
   const bufs = complete ? await Promise.all(indices.map((_, i) => parts.get(upload, i))) : [];
   await Promise.all(indices.map((i) => parts.remove(upload, i)));
   return complete && bufs.every(Boolean) ? Buffer.concat(bufs) : null;
+}
+
+/**
+ * A PDF's text layer (what text recognition put behind a scan's page images), page by page with
+ * a "[Page N]" line before each page that has text. '' when it has none.
+ */
+export async function extractPdfText(bytes) {
+  const { getDocumentProxy, extractText } = await import('unpdf');
+  const pdf = await getDocumentProxy(new Uint8Array(bytes));
+  try {
+    const { text } = await extractText(pdf, { mergePages: false });
+    return text.map((t, i) => [i + 1, String(t).replace(/\s+/g, ' ').trim()]).filter(([, t]) => t).map(([n, t]) => `[Page ${n}]\n${t}`).join('\n\n');
+  } finally {
+    await pdf.destroy?.();
+  }
 }
 
 /**
