@@ -25,15 +25,34 @@ const MODES = [
 const TEACHER_CHIPS = ['What should I study today?', 'Make me a 5-day plan for a goal', 'Quiz me on my last lesson', 'How am I doing?'];
 const MATERIAL_ACCEPT = '.txt,.md,.markdown,.pdf,text/plain,text/markdown,application/pdf';
 
-/** Phase 10: read an attached file into a /api/materials body. */
-function readMaterialFile(file) {
+// PDFs larger than one part go up in parts, so no request passes the host's body cap (4.5 MB on
+// Vercel, which answers 413). The sizes come from /api/status (server/materials.js); these are
+// only for when it could not be read.
+const MATERIAL_LIMITS = { maxPdfBytes: 20 * 1024 * 1024, partBytes: 2 * 1024 * 1024 };
+
+function readAs(blob, how) {
   return new Promise((resolve, reject) => {
     const r = new FileReader();
-    const pdf = /\.pdf$/i.test(file.name) || file.type === 'application/pdf';
     r.onerror = () => reject(new Error('Could not read that file'));
-    r.onload = () => resolve(pdf ? { kind: 'pdf', base64: String(r.result).replace(/^data:[^,]*,/, ''), filename: file.name } : { kind: 'text', text: String(r.result), filename: file.name });
-    if (pdf) r.readAsDataURL(file); else r.readAsText(file);
+    r.onload = () => resolve(String(r.result));
+    if (how === 'base64') r.readAsDataURL(blob); else r.readAsText(blob);
   });
+}
+const base64Of = async (blob) => (await readAs(blob, 'base64')).replace(/^data:[^,]*,/, '');
+
+/** Phase 10: read an attached file into a /api/materials body (a large PDF is uploaded in parts first). */
+async function readMaterialFile(file, { maxPdfBytes, partBytes } = MATERIAL_LIMITS) {
+  const pdf = /\.pdf$/i.test(file.name) || file.type === 'application/pdf';
+  if (!pdf) return { kind: 'text', text: await readAs(file, 'text'), filename: file.name };
+  if (file.size > maxPdfBytes) throw new Error(`That PDF is ${(file.size / 1048576).toFixed(1)} MB; the limit is ${maxPdfBytes / 1048576} MB.`);
+  if (file.size <= partBytes) return { kind: 'pdf', base64: await base64Of(file), filename: file.name };
+  const total = Math.ceil(file.size / partBytes);
+  let upload = null;
+  for (let index = 0; index < total; index++) {
+    const base64 = await base64Of(file.slice(index * partBytes, (index + 1) * partBytes));
+    ({ upload } = await postJson('/api/materials/part', { upload, index, total, base64 }));
+  }
+  return { kind: 'pdf', upload, parts: total, filename: file.name };
 }
 
 /**
@@ -97,7 +116,7 @@ export function renderToday(ctx) {
     fileChip.replaceChildren(...(file ? [el('span', null, file.name), el('button', { class: 'icon-btn', type: 'button', 'aria-label': 'Remove file', onclick: () => { file = null; fileChip.hidden = true; } }, icon('x'))] : []));
   });
   async function uploadMaterial() {
-    const body = file ? await readMaterialFile(file) : { kind: 'text', text: notes.value };
+    const body = file ? await readMaterialFile(file, ctx.status?.materials || MATERIAL_LIMITS) : { kind: 'text', text: notes.value };
     if (input.value.trim()) body.title = input.value.trim();
     return (await postJson('/api/materials', body)).item;
   }

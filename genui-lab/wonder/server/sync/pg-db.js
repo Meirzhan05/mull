@@ -173,10 +173,11 @@ export function createPgDb({ pool, blob = null }) {
     },
     // -- daily usage caps (server/usage.js)
     /** Count one use of `kind` today unless `max` is reached: one atomic upsert. */
-    async useQuota(userId, day, kind, max) {
+    async useQuota(userId, day, kind, max, units = 1) {
+      if (units > max) return { ok: false, used: null };
       const { rows } = await q(
-        'INSERT INTO wonder_usage (user_id, day, kind, count) VALUES ($1, $2, $3, 1) ON CONFLICT (user_id, day, kind) DO UPDATE SET count = wonder_usage.count + 1 WHERE wonder_usage.count < $4 RETURNING count',
-        [userId, day, kind, max],
+        'INSERT INTO wonder_usage (user_id, day, kind, count) VALUES ($1, $2, $3, $5) ON CONFLICT (user_id, day, kind) DO UPDATE SET count = wonder_usage.count + $5 WHERE wonder_usage.count + $5 <= $4 RETURNING count',
+        [userId, day, kind, max, units],
       );
       return rows.length ? { ok: true, used: Number(rows[0].count) } : { ok: false, used: max };
     },
@@ -199,6 +200,10 @@ export function createPgDb({ pool, blob = null }) {
       const got = blob ? await blob.get(r.blob_path, { access: 'private' }) : null;
       if (!got || got.statusCode !== 200) return null;
       return { bytes: Buffer.from(await new Response(got.stream).arrayBuffer()), contentType: r.content_type };
+    },
+    async listFiles(userId, prefix = '') {
+      const { rows } = await q('SELECT id FROM wonder_files WHERE user_id = $1 AND left(id, length($2::text)) = $2::text', [userId, prefix]);
+      return rows.map((r) => r.id);
     },
     async deleteFile(userId, id) {
       const { rows: [r] } = await q('DELETE FROM wonder_files WHERE user_id = $1 AND id = $2 RETURNING blob_path', [userId, id]);
