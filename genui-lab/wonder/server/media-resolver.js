@@ -43,7 +43,10 @@ export function createLookupResolver({ component, refOf, keyOf, lookup, label = 
     if (!lookup || signal?.aborted) { failed.add(k); return; }
     const p = Promise.resolve()
       .then(() => lookup(ref, { signal }))
-      .then((state) => remember(cache, k, state || null, now()), (err) => {
+      .then((state) => {
+        if (!state) logger.info?.(`[wonder] ${component.toLowerCase()} not found (${ref.file || ref.query})`);
+        remember(cache, k, state || null, now());
+      }, (err) => {
         if (!signal?.aborted) logger.warn?.(`[wonder] ${component.toLowerCase()} lookup failed (${ref.file || ref.query}): ${err?.message || err}`);
         failed.add(k);
       })
