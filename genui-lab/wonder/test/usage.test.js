@@ -9,6 +9,7 @@ import { createMemoryDb } from '../server/sync/memory-db.js';
 import { usageKind, usageLimits, usageDay, limitBody, createUsageGate, DEFAULT_LIMITS, RETRY_FREE, RETRY_WINDOW_MS } from '../server/usage.js';
 import { streamTurn, classifyFailure, postJson } from '../public/stream-client.js';
 import { fakeClient } from './helpers.js';
+import { materialCharge } from '../server/materials.js';
 
 const quiet = { warn() {}, error() {}, log() {}, info() {} };
 
@@ -110,6 +111,22 @@ test('accounts on, Claude mode: signed out gets 401 on every Claude route; caps 
     // widget actions that are not Claude stay open; only explain_grade is capped and signed-in
     assert.notEqual((await anon('POST', '/api/widget_action', { componentName: 'Quiz', action_type: 'quiz_answer', resolutionId: 'r1', payload: {} })).status, 401);
     assert.equal((await anon('POST', '/api/widget_action', { componentName: 'ExplainBack', action_type: 'explain_grade', resolutionId: 'r2', payload: {} })).status, 401);
+  });
+});
+
+test('a lesson from a long material counts as several against the cap', async () => {
+  const fake = fakeClient({ text: '# T\n\nBody.' });
+  const client = { ...fake, messages: { ...fake.messages, countTokens: async () => ({ input_tokens: 600_000 }) } };
+  await withServer({ mode: 'claude', client, env: { WONDER_LIMIT_LESSON: '5' } }, async ({ alice }) => {
+    const { item } = (await alice('POST', '/api/materials', { kind: 'text', text: 'Plants turn light, water and carbon dioxide into glucose and oxygen. '.repeat(3) })).body;
+    assert.equal(item.tokens, 600_000);
+    assert.equal(materialCharge(item), 3);
+    assert.equal((await alice('POST', '/api/lesson/stream', { ...LESSON, materialId: item.id })).status, 200);
+    assert.deepEqual((await alice('GET', '/api/account')).body.usage.kinds.lesson, { used: 3, max: 5 });
+    const second = await alice('POST', '/api/lesson/stream', { ...LESSON, materialId: item.id });
+    assert.equal(second.status, 429);
+    assert.match(second.body.error, /counts as 3 of today's 5 lessons/);
+    assert.equal((await alice('POST', '/api/lesson/stream', LESSON)).status, 200, 'a lesson without the material still fits');
   });
 });
 

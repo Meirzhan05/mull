@@ -28,6 +28,19 @@ export const PART_BYTES = 2 * 1024 * 1024;
 export const MAX_PARTS = Math.ceil(MAX_PDF_BYTES / PART_BYTES);
 export const PART_BODY_LIMIT = Math.ceil((PART_BYTES * 4) / 3) + 16 * 1024;
 export const UPLOAD_ID_RE = /^up-[0-9a-f]{16}$/;
+export const UPLOAD_MAX_AGE_MS = 60 * 60 * 1000;
+export const MAX_OPEN_UPLOADS = 2; // per user, besides the one starting
+// Claude reads a material as tokens (each PDF page is its text plus an image of the page): above
+// this a lesson's request no longer fits the 1M context, and Claude reads at most 600 PDF pages
+export const MAX_MATERIAL_TOKENS = 800_000;
+// a lesson or course plan from a long material counts as one more request per this many tokens
+// (about $1 of uncached input), so the daily caps still bound what one user spends
+export const MATERIAL_TOKENS_PER_CHARGE = 250_000;
+
+export const isBase64 = (s) => /^[A-Za-z0-9+/]+=*$/.test(s);
+export const pdfTooLarge = (bytes) => `That PDF is ${(bytes / 1048576).toFixed(1)} MB; the limit is ${MAX_PDF_BYTES / 1048576} MB.`;
+/** How many requests a lesson or course plan from this material counts as against the daily caps. */
+export const materialCharge = (meta) => 1 + Math.floor((Number(meta?.tokens) || 0) / MATERIAL_TOKENS_PER_CHARGE);
 
 const clean = (s, n) => String(s ?? '').replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, n);
 
@@ -62,10 +75,10 @@ export function prepareMaterial(input) {
     let buf = Buffer.isBuffer(input?.bytes) ? input.bytes : null;
     if (!buf) {
       const b64 = String(input?.base64 || '').replace(/^data:[^,]*,/, '');
-      if (!/^[A-Za-z0-9+/]+=*$/.test(b64)) return { ok: false, error: 'The PDF could not be read.' };
+      if (!isBase64(b64)) return { ok: false, error: 'The PDF could not be read.' };
       buf = Buffer.from(b64, 'base64');
     }
-    if (buf.length > MAX_PDF_BYTES) return { ok: false, error: `That PDF is ${(buf.length / 1048576).toFixed(1)} MB; the limit is ${MAX_PDF_BYTES / 1048576} MB.` };
+    if (buf.length > MAX_PDF_BYTES) return { ok: false, error: pdfTooLarge(buf.length) };
     if (buf.subarray(0, 5).toString('latin1') !== '%PDF-') return { ok: false, error: 'That file is not a PDF.' };
     data = buf;
     meta = { id, kind, title: materialTitle({ title: input?.title, filename: input?.filename }), bytes: buf.length };
@@ -99,10 +112,9 @@ export function createMaterialStore({ dir = DEFAULT_MATERIALS_DIR } = {}) {
      * Add one material: {title?, kind:'text', text} or {title?, kind:'pdf', base64, filename?}.
      * Returns {ok, item} or {ok:false, error}.
      */
-    add(input) {
-      const prepared = prepareMaterial(input);
-      if (!prepared.ok) return prepared;
-      const { meta, data } = prepared;
+    add: (input) => { const prepared = prepareMaterial(input); return prepared.ok ? store.save(prepared) : prepared; },
+    /** Store a material prepareMaterial() accepted. */
+    save({ meta, data }) {
       const id = meta.id;
       if (dir) { fs.mkdirSync(/* turbopackIgnore: true */ dir, { recursive: true }); fs.writeFileSync(/* turbopackIgnore: true */ fileOf(meta), data); } else mem.set(id, data);
       index = [meta, ...index];
@@ -130,29 +142,58 @@ export function createMaterialStore({ dir = DEFAULT_MATERIALS_DIR } = {}) {
   return store;
 }
 
-export const newUploadId = () => `up-${randomUUID().replace(/-/g, '').slice(0, 16)}`;
+// Upload ids start with the time they were made (11 hex digits of ms), so old ones can be found.
+export const newUploadId = (now = Date.now()) => `up-${now.toString(16).padStart(11, '0').slice(-11)}${randomUUID().replace(/-/g, '').slice(0, 5)}`;
+const uploadTime = (upload) => parseInt(upload.slice(3, 14), 16);
 
-/** Upload parts held in this process (no account sync: one server, one process). */
-export function createPartStore({ max = MAX_PARTS * 8 } = {}) {
-  const parts = new Map(); // `${upload}.${index}` -> Buffer, oldest first
+/**
+ * Upload parts held in this process (no account sync: one server, one process). Every part store
+ * (this one, server/sync/user-stores.js userUploadParts) has put / get / remove by upload and
+ * index, and list() of its `${upload}.${index}` keys.
+ */
+export function createPartStore() {
+  const parts = new Map(); // `${upload}.${index}` -> Buffer
   return {
-    async put(upload, index, bytes) {
-      parts.set(`${upload}.${index}`, bytes);
-      for (const k of parts.keys()) { if (parts.size <= max) break; parts.delete(k); } // abandoned uploads
-    },
+    put: async (upload, index, bytes) => { parts.set(`${upload}.${index}`, bytes); },
     get: async (upload, index) => parts.get(`${upload}.${index}`) ?? null,
     remove: async (upload, index) => { parts.delete(`${upload}.${index}`); },
+    list: async () => [...parts.keys()],
   };
 }
 
-/** The stored parts of one upload as one Buffer (and removed), or null when one is missing. */
+/** The part indices stored for each upload: Map upload -> [index]. */
+async function storedParts(parts) {
+  const out = new Map();
+  for (const key of await parts.list()) {
+    const [upload, index] = key.split('.');
+    if (!UPLOAD_ID_RE.test(upload) || !/^\d+$/.test(index ?? '')) continue;
+    out.set(upload, [...(out.get(upload) || []), Number(index)]);
+  }
+  return out;
+}
+
+/**
+ * Before a new upload starts: remove parts of uploads that were never finished, those older than
+ * UPLOAD_MAX_AGE_MS and all but the newest MAX_OPEN_UPLOADS, so abandoned uploads can't pile up.
+ */
+export async function pruneUploads(parts, now = Date.now()) {
+  const open = [...(await storedParts(parts))].sort(([a], [b]) => uploadTime(b) - uploadTime(a));
+  const stale = open.filter(([upload], i) => i >= MAX_OPEN_UPLOADS || now - uploadTime(upload) > UPLOAD_MAX_AGE_MS);
+  await Promise.all(stale.flatMap(([upload, indices]) => indices.map((i) => parts.remove(upload, i))));
+}
+
+/**
+ * The parts of one upload as one Buffer, or null unless exactly parts 0..count-1 are stored.
+ * The parts are removed either way.
+ */
 export async function takeUpload(parts, upload, count) {
   const n = Number(count);
   if (!UPLOAD_ID_RE.test(String(upload)) || !Number.isInteger(n) || n < 1 || n > MAX_PARTS) return null;
-  const bufs = [];
-  for (let i = 0; i < n; i++) bufs.push(await parts.get(upload, i));
-  for (let i = 0; i < n; i++) await parts.remove(upload, i);
-  return bufs.every(Boolean) ? Buffer.concat(bufs) : null;
+  const indices = (await storedParts(parts)).get(upload) || [];
+  const complete = indices.length === n && indices.every((i) => i < n);
+  const bufs = complete ? await Promise.all(indices.map((_, i) => parts.get(upload, i))) : [];
+  await Promise.all(indices.map((i) => parts.remove(upload, i)));
+  return complete && bufs.every(Boolean) ? Buffer.concat(bufs) : null;
 }
 
 /**

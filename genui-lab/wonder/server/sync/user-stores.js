@@ -36,7 +36,7 @@ export function signedOutMemory() {
 }
 
 export function signedOutMaterials() {
-  return { list: async () => [], meta: async () => null, add: async () => ({ ok: false, error: 'Sign in to add material.' }), read: async () => null, remove: async () => null };
+  return { list: async () => [], meta: async () => null, add: async () => ({ ok: false, error: 'Sign in to add material.' }), save: async () => ({ ok: false, error: 'Sign in to add material.' }), read: async () => null, remove: async () => null };
 }
 
 /** Uploaded material for one user. */
@@ -46,10 +46,9 @@ export function userMaterials(sync, userId) {
   const store = {
     list: async () => (await load()).map((m) => ({ ...m })),
     meta: async (id) => (MATERIAL_ID_RE.test(String(id)) ? (await load()).find((m) => m.id === id) || null : null),
-    async add(input) {
-      const prepared = prepareMaterial(input);
-      if (!prepared.ok) return prepared;
-      const { meta, data } = prepared;
+    async add(input) { const prepared = prepareMaterial(input); return prepared.ok ? store.save(prepared) : prepared; },
+    /** Store a material prepareMaterial() accepted. */
+    async save({ meta, data }) {
       const before = await load(); // read the index before this item is stored
       const bytes = Buffer.isBuffer(data) ? data : Buffer.from(data, 'utf8');
       await sync.db.putFile(userId, meta.id, { bytes, contentType: meta.kind === 'pdf' ? 'application/pdf' : 'text/plain; charset=utf-8' });
@@ -84,5 +83,6 @@ export function userUploadParts(sync, userId) {
     put: (upload, index, bytes) => sync.db.putFile(userId, `${upload}.${index}`, { bytes, contentType: 'application/octet-stream' }),
     get: async (upload, index) => { const f = await sync.db.getFile(userId, `${upload}.${index}`); return f ? Buffer.from(f.bytes) : null; },
     remove: (upload, index) => sync.db.deleteFile(userId, `${upload}.${index}`),
+    list: () => sync.db.listFiles(userId, 'up-'),
   };
 }

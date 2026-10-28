@@ -27,9 +27,9 @@ import { WONDER_ROOT, LAB_ROOT } from './paths.js';
 import { CONTENT_TYPE, createTurnWriter } from './ndjson.js';
 import {
   MODEL, detectMode, createClaudeClient, buildStreamParams, buildStructuredParams, streamText, createStructured,
-  isCredentialError, friendlyError, REFUSAL_MESSAGE,
+  isCredentialError, friendlyError, badRequestMessage, REFUSAL_MESSAGE,
 } from './claude.js';
-import { createMaterialStore, DEFAULT_MATERIALS_DIR, MATERIAL_BODY_LIMIT, PART_BODY_LIMIT, PART_BYTES, MAX_PARTS, MAX_PDF_BYTES, UPLOAD_ID_RE, newUploadId, createPartStore, takeUpload, documentBlock, materialCitation, demoMaterialLesson, demoMaterialCourse } from './materials.js'; // Phase 10
+import { createMaterialStore, DEFAULT_MATERIALS_DIR, MATERIAL_BODY_LIMIT, PART_BODY_LIMIT, PART_BYTES, MAX_PARTS, MAX_PDF_BYTES, MAX_MATERIAL_TOKENS, UPLOAD_ID_RE, isBase64, pdfTooLarge, materialCharge, prepareMaterial, newUploadId, createPartStore, pruneUploads, takeUpload, documentBlock, materialCitation, demoMaterialLesson, demoMaterialCourse } from './materials.js'; // Phase 10
 import { TEACHER_OPENER } from '../public/teacher-core.js'; // Phase 10
 import { LESSON_SYSTEM_PROMPT, TUTOR_SYSTEM_PROMPT, TEACHER_SYSTEM_PROMPT, COURSE_SYSTEM_PROMPT, COURSE_PLAN_SCHEMA, lessonUserMessage, tutorLessonContext, joinContext, insightsContext } from './prompts.js';
 import { pickDemoLesson, streamDemoText, buildDemoTutorReply, demoCoursePlan } from './demo.js';
@@ -231,6 +231,27 @@ export function createWonderCore(opts = {}) {
   // keep materials in-process too unless they pass materialsDir.
   const localMaterials = opts.materials ?? createMaterialStore({ dir: 'materialsDir' in opts ? opts.materialsDir : opts.memoryFile === null ? null : (env.WONDER_MATERIALS_DIR || DEFAULT_MATERIALS_DIR) });
   const localParts = createPartStore();
+  /**
+   * How many tokens Claude reads for a new material (count_tokens is free), so a document too long
+   * for a lesson's request (over MAX_MATERIAL_TOKENS, or over 600 PDF pages) is refused at upload
+   * rather than when a course is planned. {error} when Claude can't take it; null when it can't be
+   * counted (demo mode, a network error), and the material is kept anyway.
+   */
+  async function materialTokens(meta, data) {
+    if (state.mode !== 'claude') return null;
+    let tokens;
+    try {
+      ({ input_tokens: tokens } = await state.client.messages.countTokens({ model: MODEL, messages: [{ role: 'user', content: [documentBlock(meta, data, { citations: false, cache: false }), { type: 'text', text: 'Read this.' }] }] }));
+    } catch (err) {
+      const refused = badRequestMessage(err);
+      if (refused) return { error: `Claude can't read that file: ${refused}` };
+      logger.warn?.(`[wonder] could not count material tokens: ${err?.message}`);
+      return null;
+    }
+    if (tokens > MAX_MATERIAL_TOKENS) return { error: `That ${meta.kind === 'pdf' ? 'PDF' : 'text'} is too long for one lesson (about ${Math.round(tokens / 1000)}k tokens; the limit is ${MAX_MATERIAL_TOKENS / 1000}k). Split it and add the part you need.` };
+    return tokens;
+  }
+
   /** {meta, data} for a client-sent material id, or null. */
   const loadMaterial = async (id) => {
     if (id == null || id === '') return null;
@@ -713,8 +734,12 @@ export function createWonderCore(opts = {}) {
         bytes = await takeUpload(uploadParts, body.upload, body.parts);
         if (!bytes) return t.json(400, { ok: false, error: 'Part of that upload is missing. Attach the file again.' });
       }
-      const r = await materials.add({ title: body.title, kind: body.kind, text: body.text, base64: body.base64, bytes, filename: body.filename });
-      if (!r.ok) return t.json(400, r);
+      const prepared = prepareMaterial({ title: body.title, kind: body.kind, text: body.text, base64: body.base64, bytes, filename: body.filename });
+      if (!prepared.ok) return t.json(400, prepared);
+      const tokens = await materialTokens(prepared.meta, prepared.data);
+      if (tokens?.error) return t.json(400, { ok: false, error: tokens.error });
+      if (tokens) prepared.meta.tokens = tokens;
+      const r = await materials.save(prepared);
       logger.info?.(`[wonder] material added: ${r.item.kind}, ${r.item.chars ?? r.item.bytes} ${r.item.kind === 'pdf' ? 'bytes' : 'chars'}`);
       t.json(200, { ok: true, item: r.item, items: await materials.list() });
     },
@@ -722,12 +747,13 @@ export function createWonderCore(opts = {}) {
       const index = Number(body.index);
       const total = Number(body.total);
       if (!Number.isInteger(total) || total < 1 || !Number.isInteger(index) || index < 0 || index >= total) return t.json(400, { ok: false, error: 'Bad upload part' });
-      if (total > MAX_PARTS) return t.json(400, { ok: false, error: `That PDF is too large; the limit is ${MAX_PDF_BYTES / 1048576} MB.` });
+      if (total > MAX_PARTS) return t.json(400, { ok: false, error: pdfTooLarge(total * PART_BYTES) });
       const upload = index === 0 ? newUploadId() : String(body.upload ?? '');
       const b64 = String(body.base64 ?? '');
-      if (!UPLOAD_ID_RE.test(upload) || !/^[A-Za-z0-9+/]+=*$/.test(b64)) return t.json(400, { ok: false, error: 'Bad upload part' });
+      if (!UPLOAD_ID_RE.test(upload) || !isBase64(b64)) return t.json(400, { ok: false, error: 'Bad upload part' });
       const bytes = Buffer.from(b64, 'base64');
       if (bytes.length > PART_BYTES) return t.json(413, { ok: false, error: 'Upload part too large' });
+      if (index === 0) await pruneUploads(uploadParts); // a new upload: drop abandoned ones first
       await uploadParts.put(upload, index, bytes);
       t.json(200, { ok: true, upload });
     },
@@ -753,7 +779,8 @@ export function createWonderCore(opts = {}) {
     'GET /api/cron/reminders': cronReminders,
   };
 
-  const status = () => ({ mode: state.mode, model: MODEL, videos: videoSource(), ...(state.mode === 'demo' ? { demoReason: state.demoReason } : {}) });
+  // materials: the upload limits public/today.js checks before sending a file
+  const status = () => ({ mode: state.mode, model: MODEL, videos: videoSource(), materials: { maxPdfBytes: MAX_PDF_BYTES, partBytes: PART_BYTES }, ...(state.mode === 'demo' ? { demoReason: state.demoReason } : {}) });
 
   /** Run one API request. Resolves when the response has ended; a 404 for unknown API paths. */
   async function handle(method, pathname, body, t) {
@@ -765,19 +792,22 @@ export function createWonderCore(opts = {}) {
     // account sync on: memory and material are the signed-in user's, and nobody else's
     const userId = typeof t.userId === 'string' && t.userId ? t.userId : null;
     if (!userId && SIGNED_IN_ONLY.has(`${method} ${pathname}`)) return t.json(401, { ok: false, error: 'Sign in first', signedOut: true });
-    // routes that call Claude: signed in only, and within the user's daily caps (server/usage.js)
+    const userMats = userId ? userMaterials(sync, userId) : null;
+    // routes that call Claude: signed in only, and within the user's daily caps (server/usage.js).
+    // A lesson or course plan taught from a long material counts as more than one.
     const spend = usageKind(method, pathname, body);
     if (spend) {
       if (!userId) return t.json(401, { ok: false, error: 'Sign in to use Mull: lessons, the tutor and the Teacher need an account.', signedOut: true });
       if (state.mode === 'claude') {
         usage ??= createUsageGate({ db: sync.db, limits: usageLimits(env), logger });
-        const r = await usage.charge(userId, spend, { retryKey: cleanKey(body?.streamKey) || cleanKey(body?.turnId) });
+        const units = body?.materialId ? materialCharge(await userMats.meta(body.materialId)) : 1;
+        const r = await usage.charge(userId, spend, { retryKey: cleanKey(body?.streamKey) || cleanKey(body?.turnId), units });
         if (!r.ok) return t.json(429, r.body);
       }
     }
     const scope = { userId, sync, memory: signedOutMemory(), materials: signedOutMaterials() };
     if (userId) {
-      scope.materials = userMaterials(sync, userId);
+      scope.materials = userMats;
       scope.parts = userUploadParts(sync, userId);
       if (MEMORY_PATHS.test(pathname)) scope.memory = await loadUserMemory(sync, userId, { logger });
     }
