@@ -297,12 +297,12 @@ main { display: block; padding: 20px 16px calc(var(--tabbar-h) + 32px + env(safe
   body[data-screen="lesson"] .sidebar .search-trigger kbd,
   body[data-screen="lesson"] .sidebar .goal-mini,
   body[data-screen="lesson"] .sidebar .side-recent,
-  body[data-screen="lesson"] .sidebar .side-theme-label { display: none; }
+  body[data-screen="lesson"] .sidebar .side-profile-text { display: none; }
   body[data-screen="lesson"] .sidebar .brand { padding: 6px 0 14px; }
   body[data-screen="lesson"] .sidebar .nav-link { justify-content: center; padding: 0; width: 36px; }
   body[data-screen="lesson"] .sidebar .nav-link .badge { position: absolute; top: -2px; right: -4px; }
   body[data-screen="lesson"] .sidebar .search-trigger { width: 36px; justify-content: center; padding: 0; }
-  body[data-screen="lesson"] .sidebar .side-theme { width: 36px; justify-content: center; padding: 0; }
+  body[data-screen="lesson"] .sidebar .side-profile { width: 36px; justify-content: center; padding: 0; }
 }
 .search-trigger {
   display: flex; align-items: center; gap: 8px; height: 32px; padding: 0 6px 0 10px; margin-bottom: 10px; border-radius: var(--r-md); border: 1px solid var(--control-border);
@@ -343,8 +343,12 @@ main { display: block; padding: 20px 16px calc(var(--tabbar-h) + 32px + env(safe
 .goal-mini-text small { font-size: 0.75rem; color: var(--ink-3); font-family: var(--font); letter-spacing: 0; }
 .goal-mini-label { font-size: 0.8125rem; font-weight: 500; color: var(--ink-2); }
 .goal-mini-note { font-size: 0.75rem; color: var(--ink-3); }
-.side-theme { display: flex; align-items: center; gap: 10px; height: 32px; padding: 0 8px; border-radius: var(--r-sm); border: 0; background: none; color: var(--ink-3); cursor: pointer; font-size: 0.8125rem; font-weight: 500; }
-.side-theme:hover { background: var(--hover); color: var(--ink); }
+.side-profile { display: flex; align-items: center; gap: 10px; min-height: 44px; padding: 6px 8px; border-radius: var(--r-sm); color: var(--ink-2); text-decoration: none; }
+.side-profile:hover { background: var(--hover); color: var(--ink); }
+.side-avatar { width: 28px; height: 28px; display: grid; place-items: center; flex: 0 0 auto; border-radius: 50%; background: var(--ink); color: var(--bg); font-size: 0.8125rem; font-weight: 600; }
+.side-profile-text { display: grid; min-width: 0; line-height: 1.25; }
+.side-profile-text strong { font-size: 0.8125rem; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.side-profile-text small { font-size: 0.75rem; color: var(--ink-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* progress bars */
 .ledger-bar, .progress { position: relative; display: block; height: 6px; border-radius: 999px; background: var(--surface-3); overflow: hidden; }

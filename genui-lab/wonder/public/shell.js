@@ -1,13 +1,14 @@
 // App shell: the desktop sidebar (sections, then recent lessons and courses to jump back into),
-// the mobile top bar and bottom tabs, the streak mini card, the theme switch, the demo
+// the mobile top bar and bottom tabs, the streak mini card, the profile link, the demo
 // notice and the ⌘K (or /) command palette, which also searches the learner's lessons,
 // courses, cards and Teacher chats (search-core.js). Screens render into #app; the shell only
 // reflects the current route and the learner's stats.
 
-import { el, icon, toast, brandMark } from './ui.js';
+import { el, icon, brandMark } from './ui.js';
 import { deckStats, currentStreak } from './deck.js';
 import { studiedToday, matchScore, courseProgress, recentLessons, lessonState } from './progress-core.js';
 import { searchStoreGroups, openResult, resultBody, hasTitleHit, TYPE_ICON, resultCount } from './search-ui.js';
+import { accountLabel } from './account.js';
 
 const NAV = [
   { id: 'today', label: 'Today', icon: 'home', href: '#/' },
@@ -36,7 +37,7 @@ export function createShell({ store, getStatus, actions }) {
   const brand = () => el('a', { class: 'brand', href: '#/', 'aria-label': 'Mull, today' },
     brandMark(), el('span', { class: 'brand-name' }, 'Mull'));
 
-  // -- theme
+  // -- theme (picked in You > Preferences or the palette)
   let theme = 'system';
   try { theme = localStorage.getItem('wonder.theme') || 'system'; } catch {}
   const applyTheme = () => {
@@ -44,19 +45,11 @@ export function createShell({ store, getStatus, actions }) {
     else document.documentElement.setAttribute('data-theme', theme);
   };
   applyTheme();
-  const themeBtn = el('button', { class: 'side-theme', type: 'button' });
   const setTheme = (t) => {
     theme = THEMES.includes(t) ? t : 'system';
     applyTheme();
     try { localStorage.setItem('wonder.theme', theme); } catch {}
-    drawThemeBtn();
   };
-  const drawThemeBtn = () => {
-    themeBtn.replaceChildren(icon(THEME_ICON[theme]), el('span', { class: 'side-theme-label' }, theme === 'dark' ? 'Night reading' : theme === 'light' ? 'Day reading' : 'Match system'));
-    themeBtn.setAttribute('aria-label', `Color theme: ${theme}. Switch theme`);
-  };
-  themeBtn.addEventListener('click', () => { setTheme(THEMES[(THEMES.indexOf(theme) + 1) % THEMES.length]); toast(`Theme: ${theme}`); });
-  drawThemeBtn();
 
   // -- sidebar (desktop)
   const navLinks = {};
@@ -70,7 +63,22 @@ export function createShell({ store, getStatus, actions }) {
     icon('search'), el('span', { class: 'search-trigger-text' }, 'Search or begin…'), el('kbd', null, isMac() ? '⌘K' : 'Ctrl K'));
   const goalMini = el('a', { class: 'goal-mini', href: '#/you', title: 'Streak' });
   const recent = el('nav', { class: 'side-recent', 'aria-label': 'Recent lessons and courses' });
-  sidebar.replaceChildren(brand(), searchBtn, nav, recent, el('div', { class: 'sidebar-foot' }, goalMini, themeBtn));
+  const profile = el('a', { class: 'side-profile', href: '#/you' });
+  sidebar.replaceChildren(brand(), searchBtn, nav, recent, el('div', { class: 'sidebar-foot' }, goalMini, profile));
+
+  let profileKey = '';
+  function drawProfile(d) {
+    const name = String(d.settings?.name || '').trim();
+    const sub = accountLabel() || 'Profile and settings';
+    const key = `${name}\n${sub}`;
+    if (key === profileKey) return;
+    profileKey = key;
+    profile.title = name || 'Profile';
+    profile.setAttribute('aria-label', `Profile${name ? `: ${name}` : ''}`);
+    profile.replaceChildren(
+      el('span', { class: 'side-avatar', 'aria-hidden': 'true' }, (name || 'You')[0].toUpperCase()),
+      el('span', { class: 'side-profile-text' }, el('strong', null, name || 'Profile'), el('small', null, sub)));
+  }
 
   // Rebuilt only when what it shows changes: refresh() runs on every store write (a streaming
   // lesson saves each second), and replacing the links would drop focus and in-flight clicks.
@@ -132,6 +140,7 @@ export function createShell({ store, getStatus, actions }) {
     const today = studiedToday(d.stats);
     const due = deckStats(d.deck).due;
     drawRecent(d);
+    drawProfile(d);
     for (const b of [navBadges.review, tabBadges.review]) { b.hidden = !due; b.textContent = due > 99 ? '99+' : String(due); }
     streakChip.classList.toggle('lit', streak > 0);
     streakChip.replaceChildren(el('span', { class: 'chip-unit' }, 'Day'), ` ${streak}`);
