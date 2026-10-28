@@ -70,7 +70,19 @@ export function createShell({ store, getStatus, actions }) {
     icon('search'), el('span', { class: 'search-trigger-text' }, 'Search or begin…'), el('kbd', null, isMac() ? '⌘K' : 'Ctrl K'));
   const goalMini = el('a', { class: 'goal-mini', href: '#/you', title: 'Streak' });
   const recent = el('nav', { class: 'side-recent', 'aria-label': 'Recent lessons and courses' });
-  sidebar.replaceChildren(brand(), searchBtn, nav, recent, el('div', { class: 'sidebar-foot' }, goalMini, themeBtn));
+  // lessons fold the sidebar to a rail (styles.css); this unfolds it, and the choice is remembered
+  const sideToggle = el('button', { class: 'side-toggle', type: 'button', onclick: () => setSideOpen(!document.body.classList.contains('side-open')) }, icon('chevron'));
+  const setSideOpen = (open) => {
+    document.body.classList.toggle('side-open', open);
+    sideToggle.setAttribute('aria-expanded', String(open));
+    sideToggle.setAttribute('aria-label', open ? 'Collapse sidebar' : 'Expand sidebar');
+    sideToggle.title = open ? 'Collapse sidebar' : 'Expand sidebar';
+    try { localStorage.setItem('wonder.sidebar', open ? 'open' : 'rail'); } catch {}
+  };
+  let sideOpen = false;
+  try { sideOpen = localStorage.getItem('wonder.sidebar') === 'open'; } catch {}
+  setSideOpen(sideOpen);
+  sidebar.replaceChildren(brand(), sideToggle, searchBtn, nav, recent, el('div', { class: 'sidebar-foot' }, goalMini, themeBtn));
 
   // Rebuilt only when what it shows changes: refresh() runs on every store write (a streaming
   // lesson saves each second), and replacing the links would drop focus and in-flight clicks.
