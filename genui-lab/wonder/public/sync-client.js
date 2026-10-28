@@ -18,10 +18,29 @@
 //           what is missing, settings / stats / awarded merge, local records stay and are pushed
 
 import { toRecords, recordData, applyRecords, diffRecords, hashData, recordKey, mergeRecord, byteLength, DELETED_HASH } from './sync-core.js';
+import { createStore } from './store.js';
 
 export const BASE_KEY = 'wonder.sync';
 export const CHUNK_BYTES = 2.5 * 1024 * 1024; // UTF-8 bytes per request (server limit 4 MB)
 export const MAX_RECORD_BYTES = 3 * 1024 * 1024;
+const STATE_KEY = 'wonder.v1'; // store.js KEY
+
+/** `userId`'s sync base in `storage`: the cursor, what the server last sent, and a pending first round. */
+function readBase(storage, userId) {
+  try {
+    const p = JSON.parse(storage.getItem(BASE_KEY) || 'null');
+    if (p && p.userId === userId) return { since: Number(p.since) || 0, base: new Map(p.base || []), first: p.first || null };
+  } catch { /* corrupt: start over (a full pull, then re-push whatever differs) */ }
+  return { since: 0, base: new Map(), first: null };
+}
+
+/**
+ * The cache was seeded for `userId` (beginAccount in account.js) and its first round has not
+ * finished: it does not hold the account's lessons or settings yet.
+ */
+export function awaitsFirstSync(storage, userId) {
+  return !!readBase(storage, userId).first;
+}
 
 /**
  * @param {{store: object, storage: {getItem, setItem}, userId: string,
@@ -35,15 +54,10 @@ export function createSyncEngine({ store, storage, userId, post, now = () => Dat
   let running = null;
   let again = false;
   let timer = null;
+  let stopped = false;
   let status = { state: 'idle', at: null, error: null };
 
-  function load() {
-    try {
-      const p = JSON.parse(storage.getItem(BASE_KEY) || 'null');
-      if (p && p.userId === userId) return { since: Number(p.since) || 0, base: new Map(p.base || []), first: p.first || null };
-    } catch { /* corrupt: start over (a full pull, then re-push whatever differs) */ }
-    return { since: 0, base: new Map(), first: null };
-  }
+  function load() { return readBase(storage, userId); }
   function save() {
     storage.setItem(BASE_KEY, JSON.stringify({ userId, since: state.since, base: [...state.base], first: state.first }));
   }
@@ -145,7 +159,7 @@ export function createSyncEngine({ store, storage, userId, post, now = () => Dat
 
   function schedule(ms = 2000) {
     clearTimeout(timer);
-    timer = setTimeout(syncNow, ms);
+    if (!stopped) timer = setTimeout(syncNow, ms);
   }
 
   const unsubscribe = store.subscribe?.(() => { if (!applying) schedule(); });
@@ -156,6 +170,36 @@ export function createSyncEngine({ store, storage, userId, post, now = () => Dat
     get status() { return status; },
     /** Local changes not yet on the server. */
     pending() { return diffRecords(load().base, toRecords(store.data)).length; },
-    stop() { clearTimeout(timer); unsubscribe?.(); },
+    stop() { stopped = true; clearTimeout(timer); unsubscribe?.(); },
   };
+}
+
+/**
+ * The first round of a cache just seeded for `userId`, run before the page reloads into it
+ * (beginAccount), so the page opens on the account's lessons and settings instead of an empty
+ * start. Gives up after `timeoutMs` and puts the cache back as seeded (the page's own engine then
+ * does the first round); writes from a round still in flight are dropped, so the base never
+ * gets ahead of the data.
+ * @returns {Promise<boolean>} whether the round finished
+ */
+export async function syncBeforeOpening({ storage, userId, post, lock, timeoutMs = 10_000, logger = console }) {
+  const seeded = [STATE_KEY, BASE_KEY].map((k) => [k, storage.getItem(k)]);
+  let open = true;
+  const guarded = {
+    getItem: (k) => storage.getItem(k),
+    setItem: (k, v) => { if (open) storage.setItem(k, v); },
+    removeItem: (k) => { if (open) storage.removeItem?.(k); },
+  };
+  const store = createStore({ storage: guarded });
+  let state = null;
+  const engine = createSyncEngine({ store, storage: guarded, userId, post, lock, logger, onStatus: (s) => { state = s.state; } });
+  let timer;
+  await Promise.race([engine.syncNow(), new Promise((r) => { timer = setTimeout(r, timeoutMs); })]);
+  clearTimeout(timer);
+  engine.stop();
+  const done = state === 'synced';
+  if (done) store.flush();
+  open = false;
+  if (!done) for (const [k, v] of seeded) { if (v == null) storage.removeItem?.(k); else storage.setItem(k, v); }
+  return done;
 }

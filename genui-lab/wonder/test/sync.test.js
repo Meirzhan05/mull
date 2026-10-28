@@ -7,7 +7,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createStore, emptyState } from '../public/store.js';
 import { toRecords, applyRecords, recordsToState, mergeRecord, diffRecords, hashData, recordKey, hasLearnerData } from '../public/sync-core.js';
-import { createSyncEngine, BASE_KEY } from '../public/sync-client.js';
+import { createSyncEngine, syncBeforeOpening, awaitsFirstSync, BASE_KEY } from '../public/sync-client.js';
 import { createSyncService } from '../server/sync/service.js';
 import { createMemoryDb } from '../server/sync/memory-db.js';
 
@@ -294,6 +294,57 @@ test('migration: declining the merge starts this browser from the account only',
     assert.deepEqual(Object.keys(b.store.data.lessons), ['acct']);
     assert.equal(b.engine.pending(), 0);
   } finally { a.engine.stop(); b.engine.stop(); }
+});
+
+/** A cache seeded the way beginAccount does for a returning account ('pull'). */
+function seededCache(userId) {
+  return mapStorage({ 'wonder.v1': JSON.stringify(emptyState()), [BASE_KEY]: JSON.stringify({ userId, since: 0, base: [], first: 'pull' }) });
+}
+
+test('sign-in: a returning account is synced before the page opens, so it is not new', async () => {
+  const svc = service();
+  const a = browser(svc, 'u');
+  a.edit((d) => { d.lessons.acct = lesson('acct', 'Account lesson'); d.settings = { ...d.settings, onboarded: true }; });
+  await a.sync();
+  try {
+    const cache = seededCache('u');
+    assert.equal(awaitsFirstSync(cache, 'u'), true);
+    assert.equal(awaitsFirstSync(cache, 'someone-else'), false, 'another account\'s base');
+    const done = await syncBeforeOpening({ storage: cache, userId: 'u', logger: quiet, post: async (body) => JSON.parse(JSON.stringify(await svc.sync('u', JSON.parse(JSON.stringify(body))))) });
+    assert.equal(done, true);
+    assert.equal(awaitsFirstSync(cache, 'u'), false);
+    // the page that opens on this cache sees the account's lessons and settings
+    const opened = createStore({ storage: cache });
+    assert.deepEqual(Object.keys(opened.data.lessons), ['acct']);
+    assert.equal(opened.data.settings.onboarded, true);
+  } finally { a.engine.stop(); }
+});
+
+test('sign-in: a first sync that times out leaves the cache as seeded, and a late answer writes nothing', async () => {
+  const svc = service();
+  const a = browser(svc, 'u');
+  a.edit((d) => { d.lessons.acct = lesson('acct', 'Account lesson'); });
+  await a.sync();
+  try {
+    const cache = seededCache('u');
+    const before = new Map(cache.map);
+    let answer;
+    const late = new Promise((r) => { answer = r; });
+    const done = await syncBeforeOpening({ storage: cache, userId: 'u', timeoutMs: 20, logger: quiet, post: async (body) => { await late; return JSON.parse(JSON.stringify(await svc.sync('u', body))); } });
+    assert.equal(done, false);
+    answer();
+    await new Promise((r) => setTimeout(r, 20));
+    assert.deepEqual(cache.map, before);
+    assert.equal(awaitsFirstSync(cache, 'u'), true, 'the page\'s own engine does the first round');
+  } finally { a.engine.stop(); }
+});
+
+test('sign-in: a failed first sync leaves the cache as seeded', async () => {
+  const cache = seededCache('u');
+  const before = new Map(cache.map);
+  const done = await syncBeforeOpening({ storage: cache, userId: 'u', logger: quiet, post: async () => { throw Object.assign(new Error('HTTP 502'), { status: 502 }); } });
+  assert.equal(done, false);
+  assert.deepEqual(cache.map, before);
 });
 
 test('sync service: one user never reads or overwrites another user\'s records', async () => {
