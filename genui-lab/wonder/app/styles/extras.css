@@ -104,8 +104,6 @@
   .mastery-bar { grid-column: 1 / -1; grid-row: 2; }
 }
 
-/* Lesson quality check, last child of the end panel */
-
 /* Free-response review cards */
 .explain-form { display: grid; gap: 10px; }
 .explain-input {

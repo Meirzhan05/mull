@@ -16,7 +16,7 @@ export const DAILY_GOALS = Object.freeze([
 ]);
 export const DEFAULT_GOAL = 30;
 
-/** The level a new lesson starts at (settings.level), offered at onboarding and in You. */
+/** The level a new lesson starts at (settings.level), set in You. */
 export const LEVELS = Object.freeze([
   { id: 'beginner', label: 'Beginner', hint: 'Start from the ground up' },
   { id: 'intermediate', label: 'Intermediate', hint: 'I know the basics' },

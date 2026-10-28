@@ -119,8 +119,10 @@ export function showOnboarding({ store, onDone, startLesson, firstTopic = '', ac
 
   function paceStep() {
     const choice = (label, items, current, onPick) => {
+      // a saved value that is not one of the options (a custom goal) leaves the first one tabbable
+      const tabStop = items.some((it) => it.value === current) ? current : items[0]?.value;
       const group = el('div', { class: 'goal-options', role: 'radiogroup', 'aria-label': label }, ...items.map((it) => el('button', {
-        class: 'goal-option', type: 'button', role: 'radio', 'aria-checked': String(it.value === current), tabindex: it.value === current ? '0' : '-1',
+        class: 'goal-option', type: 'button', role: 'radio', 'aria-checked': String(it.value === current), tabindex: it.value === tabStop ? '0' : '-1',
         onclick: (e) => { onPick(it.value); for (const b of group.children) { const on = b === e.currentTarget; b.setAttribute('aria-checked', String(on)); b.tabIndex = on ? 0 : -1; } },
       }, el('span', { class: 'goal-option-text' }, el('strong', null, it.label), el('span', { class: 'muted small' }, it.hint)), it.tag ? el('b', null, it.tag) : null, el('i', { class: 'goal-option-dot', 'aria-hidden': 'true' }))));
       // arrow keys move within a radio group, as they do in a native one
@@ -141,7 +143,7 @@ export function showOnboarding({ store, onDone, startLesson, firstTopic = '', ac
       el('div', { class: 'onboard-pace' },
         el('div', { class: 'onboard-field' }, el('span', null, 'Daily goal'), goal)),
       actions(el('button', { class: 'btn btn-lg', type: 'button', onclick: () => go(2) }, 'Continue', icon('arrow-right'))));
-    return [node, goal.querySelector('[aria-checked="true"]')];
+    return [node, goal.querySelector('[tabindex="0"]')];
   }
 
   function firstLessonStep() {

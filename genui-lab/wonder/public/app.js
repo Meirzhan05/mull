@@ -819,7 +819,7 @@ function renderLesson(lessonId) {
     drawEnd();
     steerBar.setMode('live');
     let r = null;
-    let quality = null; // Phase 7: the server's quality-report control
+    let quality = null; // Phase 7: the server's quality-report control (its quiz fixes are announced, not kept)
     let instruction = continueFrom?.instruction || ''; // the steer in force, carried into a retry
     try {
       r = await streamTurn('/api/lesson/stream', {
@@ -869,7 +869,9 @@ function renderLesson(lessonId) {
       latest = { markdown: msg.markdown, dil };
       streaming = false;
       autoRetried = false;
-      saveLesson(lessonId, { status: 'complete', streamOwner: null, markdown: msg.markdown, dil, appData: current.appData, messageId, title: lessonTitleFrom(msg.markdown, l.title), truncated: !!r.final?.debug?.truncated, interruptedReason: null, quality });
+      saveLesson(lessonId, { status: 'complete', streamOwner: null, markdown: msg.markdown, dil, appData: current.appData, messageId, title: lessonTitleFrom(msg.markdown, l.title), truncated: !!r.final?.debug?.truncated, interruptedReason: null });
+      const fixed = quality?.critic?.fixed?.length || 0;
+      if (fixed) toast(`${fixed} quiz answer${fixed === 1 ? '' : 's'} corrected.`, 4200);
       store.flush();
       if (dil) surface.pruneViewState(resolutionIdsOf(dil)); // widget state: drop widgets a revision removed or rewrote
       if (r.final?.debug?.truncated) toast('The lesson was cut short (length limit).');

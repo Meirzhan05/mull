@@ -10,7 +10,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { createWonderServer } from '../server/app.js';
 import { createMemoryStore } from '../server/memory.js';
-import { lintLesson, lessonParts, applyQuizFixes, normalizeCritique, criticUserMessage, citesAsText, critiqueLesson, qualityReport, CRITIC_SYSTEM_PROMPT } from '../server/critic.js';
+import { lintLesson, lessonParts, applyQuizFixes, normalizeCritique, criticUserMessage, citesAsText, critiqueLesson, CRITIC_SYSTEM_PROMPT } from '../server/critic.js';
 import { normalizeJudgement, summarizeRuns, reportMarkdown, RUBRIC_KEYS, JUDGE_SYSTEM_PROMPT } from '../server/judge.js';
 import { componentsOf } from '../server/practice.js';
 import { parseArgs, runEval, writeReport } from '../evals/run.js';
