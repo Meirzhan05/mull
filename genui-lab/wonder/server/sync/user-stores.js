@@ -36,7 +36,7 @@ export function signedOutMemory() {
 }
 
 export function signedOutMaterials() {
-  return { list: async () => [], meta: async () => null, add: async () => ({ ok: false, error: 'Sign in to add material.' }), save: async () => ({ ok: false, error: 'Sign in to add material.' }), read: async () => null, remove: async () => null };
+  return { list: async () => [], meta: async () => null, add: async () => ({ ok: false, error: 'Sign in to add material.' }), save: async () => ({ ok: false, error: 'Sign in to add material.' }), read: async () => null, readText: async () => null, setTextFallback: async () => null, remove: async () => null };
 }
 
 /** Uploaded material for one user. */
@@ -57,6 +57,21 @@ export function userMaterials(sync, userId) {
       while (index.length > MAX_MATERIALS) await store.remove(index[index.length - 1].id);
       return { ok: true, item: { ...meta } };
     },
+    /** Keep a PDF's text layer to teach from instead (meta.textFallback: {chars, pages}). */
+    async setTextFallback(id, text, info) {
+      const meta = await store.meta(id);
+      if (!meta) return null;
+      await sync.db.putFile(userId, `${id}.text`, { bytes: Buffer.from(text, 'utf8'), contentType: 'text/plain; charset=utf-8' });
+      const next = { ...meta, textFallback: info };
+      await sync.writeServer(userId, [{ kind: 'material', id, data: next }]);
+      index = (await load()).map((m) => (m.id === id ? next : m));
+      return { ...next };
+    },
+    async readText(id) {
+      if (!(await store.meta(id))?.textFallback) return null;
+      const f = await sync.db.getFile(userId, `${id}.text`);
+      return f ? Buffer.from(f.bytes).toString('utf8') : null;
+    },
     /** A string for text, a Buffer for a PDF; null when unknown or not this user's. */
     async read(id) {
       const meta = await store.meta(id);
@@ -70,6 +85,7 @@ export function userMaterials(sync, userId) {
       if (!meta) return null;
       await sync.writeServer(userId, [{ kind: 'material', id, deleted: true }]);
       await sync.db.deleteFile(userId, id);
+      if (meta.textFallback) await sync.db.deleteFile(userId, `${id}.text`);
       index = (await load()).filter((m) => m.id !== id);
       return meta;
     },

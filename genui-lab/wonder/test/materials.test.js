@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { createMaterialStore, documentBlock, materialCitation, materialTitle, demoMaterialLesson, demoMaterialCourse, isMaterialUrl, MAX_TEXT_CHARS, PART_BYTES, MAX_PDF_BYTES, MAX_MATERIAL_TOKENS, MAX_OPEN_UPLOADS, UPLOAD_MAX_AGE_MS, newUploadId, createPartStore, pruneUploads, takeUpload } from '../server/materials.js';
+import { createMaterialStore, documentBlock, materialCitation, materialTitle, demoMaterialLesson, demoMaterialCourse, isMaterialUrl, MAX_TEXT_CHARS, PART_BYTES, MAX_PDF_BYTES, MAX_MATERIAL_TOKENS, MAX_OPEN_UPLOADS, UPLOAD_MAX_AGE_MS, newUploadId, createPartStore, pruneUploads, takeUpload, extractPdfText, materialCharge } from '../server/materials.js';
 import { createSourceRegistry } from '../server/grounding.js';
 import Anthropic from '@anthropic-ai/sdk';
 import { createWonderServer } from '../server/app.js';
@@ -277,4 +277,101 @@ test('Claude mode: a material too long for a lesson is refused at upload, with C
   assert.equal(kept.item.tokens, undefined);
   answer = { input_tokens: 120_000 };
   assert.equal((await add()).item.tokens, 120_000);
+});
+
+/** A small real PDF whose pages carry text (like the text layer behind a scanned book's images). */
+function textPdf(pages) {
+  const objs = ['<< /Type /Catalog /Pages 2 0 R >>', null, '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>'];
+  const kids = [];
+  for (const text of pages) {
+    const lines = text.replace(/[()\\]/g, '').match(/.{1,70}(\s|$)/g) || [];
+    const content = `BT /F1 11 Tf 40 760 Td ${lines.map((l) => `(${l.trim()}) Tj 0 -14 Td`).join(' ')} ET`;
+    objs.push(`<< /Length ${content.length} >>\nstream\n${content}\nendstream`);
+    objs.push(`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents ${objs.length} 0 R /Resources << /Font << /F1 3 0 R >> >> >>`);
+    kids.push(`${objs.length} 0 R`);
+  }
+  objs[1] = `<< /Type /Pages /Kids [${kids.join(' ')}] /Count ${kids.length} >>`;
+  let out = '%PDF-1.4\n';
+  const offsets = objs.map((o, i) => { const at = out.length; out += `${i + 1} 0 obj\n${o}\nendobj\n`; return at; });
+  const xref = out.length;
+  out += `xref\n0 ${objs.length + 1}\n0000000000 65535 f \n${offsets.map((o) => `${String(o).padStart(10, '0')} 00000 n \n`).join('')}`;
+  out += `trailer\n<< /Size ${objs.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
+  return Buffer.from(out, 'latin1');
+}
+
+const BOOK_PAGES = [
+  'Chapter 1. Ethical decisions start with noticing the ethical content of a choice. '.repeat(4),
+  'Chapter 2. Moral intensity rises with the size and likelihood of the harm involved. '.repeat(4),
+  'Chapter 3. Leaders set the tone: what they reward is what the organization learns. '.repeat(4),
+];
+
+test('extractPdfText: a PDF\'s text layer, page by page', async () => {
+  const text = await extractPdfText(textPdf(BOOK_PAGES));
+  assert.match(text, /^\[Page 1\]\nChapter 1\. Ethical decisions/);
+  assert.match(text, /\[Page 3\]\nChapter 3\. Leaders set the tone/);
+  assert.equal(await extractPdfText(textPdf(['', ''])), '', 'no text layer');
+});
+
+/** Claude that refuses PDF documents ("Could not process PDF") and reads text documents. */
+function pdfRefusingClient() {
+  const calls = [];
+  const refuse = (params) => {
+    const docs = params.messages.flatMap((m) => (Array.isArray(m.content) ? m.content : [])).filter((b) => b.type === 'document');
+    calls.push(docs.map((d) => d.source.type));
+    if (docs.some((d) => d.source.media_type === 'application/pdf')) throw new Anthropic.BadRequestError(400, { type: 'error', error: { type: 'invalid_request_error', message: 'Could not process PDF' } }, undefined, new Headers());
+  };
+  const plan = { title: 'Business ethics', description: 'From the book', sections: [{ title: 'Basics', lessons: [{ title: 'Noticing ethics', summary: 'Spot the ethical content' }] }] };
+  return {
+    calls,
+    messages: {
+      countTokens: async () => ({ input_tokens: 5000 }),
+      create: async (params) => { refuse(params); return { stop_reason: 'end_turn', content: [{ type: 'text', text: JSON.stringify(plan) }] }; },
+    },
+    beta: {
+      messages: {
+        stream(params) {
+          return {
+            async *[Symbol.asyncIterator]() {
+              refuse(params);
+              yield { type: 'message_start', message: { id: 'msg_fake' } };
+              yield { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } };
+              yield { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: '# Noticing ethics\n\nEvery choice has ethical content.' } };
+              yield { type: 'message_delta', delta: { stop_reason: 'end_turn' } };
+            },
+            async finalMessage() { return { id: 'msg_fake', stop_reason: 'end_turn', content: [{ type: 'text', text: '# Noticing ethics\n\nEvery choice has ethical content.' }] }; },
+          };
+        },
+      },
+    },
+  };
+}
+
+test('Claude mode: a PDF Claude refuses is taught from its text layer, and stays that way', async () => {
+  const client = pdfRefusingClient();
+  const core = createWonderCore({ mode: 'claude', client, demoDelayMs: 0, logger: quiet, memoryFile: null });
+  const post = async (path, body) => handleWebRequest(core, new Request(`http://localhost${path}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }), { logger: quiet });
+  const { item } = await (await post('/api/materials', { kind: 'pdf', base64: textPdf(BOOK_PAGES).toString('base64'), filename: 'Field guide.pdf' })).json();
+  const lesson = await (await post('/api/lesson/stream', { topic: 'Noticing ethics', materialId: item.id, verify: false })).text();
+  assert.match(lesson, /Every choice has ethical content/);
+  assert.doesNotMatch(lesson, /"kind":"failed"/);
+  assert.deepEqual(client.calls, [['base64'], ['text']], 'the PDF first, then its text');
+  // later requests go straight to the text; the course plan too
+  const course = await (await post('/api/course/plan', { topic: 'Field guide', materialId: item.id })).json();
+  assert.equal(course.ok, true);
+  assert.equal(course.plan.title, 'Business ethics');
+  assert.deepEqual(client.calls.slice(2), [['text']]);
+  const list = await (await handleWebRequest(core, new Request('http://localhost/api/materials'), { logger: quiet })).json();
+  assert.deepEqual(list.items[0].textFallback, { chars: list.items[0].textFallback.chars, pages: 3 });
+  assert.equal(materialCharge(list.items[0]), 1);
+});
+
+test('Claude mode: a refused PDF without a text layer fails with what to do; other errors show Claude\'s reason', async () => {
+  const client = pdfRefusingClient();
+  const core = createWonderCore({ mode: 'claude', client, demoDelayMs: 0, logger: quiet, memoryFile: null });
+  const post = async (path, body) => handleWebRequest(core, new Request(`http://localhost${path}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }), { logger: quiet });
+  const { item } = await (await post('/api/materials', { kind: 'pdf', base64: textPdf(['', '']).toString('base64'), filename: 'Scan.pdf' })).json();
+  const lesson = await (await post('/api/lesson/stream', { topic: 'Scan', materialId: item.id, verify: false })).text();
+  assert.match(lesson, /no text layer to teach from/);
+  const course = await (await post('/api/course/plan', { topic: 'Scan', materialId: item.id })).json();
+  assert.match(course.error, /no text layer to teach from/);
 });

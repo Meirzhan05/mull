@@ -30,7 +30,7 @@ import {
   MODEL, detectMode, createClaudeClient, buildStreamParams, buildStructuredParams, streamText, createStructured,
   isCredentialError, friendlyError, badRequestMessage, REFUSAL_MESSAGE,
 } from './claude.js';
-import { createMaterialStore, DEFAULT_MATERIALS_DIR, MATERIAL_BODY_LIMIT, PART_BODY_LIMIT, PART_BYTES, MAX_PARTS, MAX_PDF_BYTES, MAX_MATERIAL_TOKENS, UPLOAD_ID_RE, isBase64, pdfTooLarge, materialCharge, prepareMaterial, newUploadId, createPartStore, pruneUploads, takeUpload, documentBlock, materialCitation, demoMaterialLesson, demoMaterialCourse } from './materials.js'; // Phase 10
+import { createMaterialStore, DEFAULT_MATERIALS_DIR, MATERIAL_BODY_LIMIT, PART_BODY_LIMIT, PART_BYTES, MAX_PARTS, MAX_PDF_BYTES, MAX_MATERIAL_TOKENS, UPLOAD_ID_RE, isBase64, pdfTooLarge, materialCharge, prepareMaterial, extractPdfText, MIN_FALLBACK_CHARS, newUploadId, createPartStore, pruneUploads, takeUpload, documentBlock, materialCitation, demoMaterialLesson, demoMaterialCourse } from './materials.js'; // Phase 10
 import { TEACHER_OPENER } from '../public/teacher-core.js'; // Phase 10
 import { LESSON_SYSTEM_PROMPT, TUTOR_SYSTEM_PROMPT, TEACHER_SYSTEM_PROMPT, COURSE_SYSTEM_PROMPT, COURSE_PLAN_SCHEMA, lessonUserMessage, tutorLessonContext, joinContext, insightsContext } from './prompts.js';
 import { pickDemoLesson, streamDemoText, buildDemoTutorReply, demoCoursePlan } from './demo.js';
@@ -253,13 +253,31 @@ export function createWonderCore(opts = {}) {
     return tokens;
   }
 
+  /** A PDF taught from its text layer: the same material, as text. */
+  const asText = (meta, text) => ({ meta: { ...meta, kind: 'text' }, data: text });
   /** {meta, data} for a client-sent material id, or null. */
   const loadMaterial = async (id) => {
     if (id == null || id === '') return null;
     const meta = await materials.meta(id);
+    if (meta?.textFallback) { const text = await materials.readText(id); if (text != null) return asText(meta, text); }
     const data = meta ? await materials.read(id) : null;
     return meta && data != null ? { meta, data } : { missing: true };
   };
+  /** Claude refused this PDF itself ("Could not process PDF", too many pages): its text layer may still do. */
+  const unreadablePdf = (err, material) => material?.meta.kind === 'pdf' && /\bPDF\b/i.test(badRequestMessage(err) || '');
+  /**
+   * The material Claude could not read as a PDF, as its text layer from now on (kept with the
+   * material, so later lessons go straight to it), or {error} when it has no usable text.
+   */
+  async function pdfAsText(material) {
+    let text = '';
+    try { text = await extractPdfText(material.data); } catch (e) { logger.warn?.(`[wonder] could not read the PDF's text layer: ${e.message}`); }
+    if (text.length < MIN_FALLBACK_CHARS) return { error: "Claude can't read this PDF, and it has no text layer to teach from. Export it again as a PDF (for example with Preview's Export as PDF) and add that, or paste its text." };
+    const pages = (text.match(/^\[Page \d+\]$/gm) || []).length;
+    const meta = await materials.setTextFallback(material.meta.id, text, { chars: text.length, pages });
+    logger.info?.(`[wonder] material ${material.meta.id}: Claude could not read the PDF; teaching from its text layer (${pages} pages, ${text.length} chars)`);
+    return asText(meta || material.meta, text);
+  }
 
   // <Figure/> images come from Wikimedia Commons; WONDER_FIGURES=off (or figureLookup: null) skips the network
   const figureLookup = opts.figureLookup !== undefined ? opts.figureLookup : env.WONDER_FIGURES === 'off' ? null : createCommonsLookup();
@@ -338,7 +356,8 @@ export function createWonderCore(opts = {}) {
   }
 
   /** Run Claude, falling back to demo on missing credentials. Returns 'done' | 'demo' | 'failed'. */
-  async function runClaude(writer, params, onText, signal, stream = (p, o) => streamText(state.client, p, o)) {
+  /** `retryable(err)`: an error the caller recovers from itself ({status: 'retry', err}, nothing shown). */
+  async function runClaude(writer, params, onText, signal, stream = (p, o) => streamText(state.client, p, o), { retryable } = {}) {
     try {
       const { stopReason } = await stream(params, { onText, signal });
       if (stopReason === 'refusal') {
@@ -353,6 +372,7 @@ export function createWonderCore(opts = {}) {
         writer.reasoning('Claude credentials were not accepted. Showing demo content…');
         return { status: 'demo' };
       }
+      if (retryable?.(err)) return { status: 'retry', err };
       const f = friendlyError(err);
       // The API error body (type + message) never contains credentials; log it for diagnosis.
       const detail = err?.status ? ` (HTTP ${err.status}: ${err?.error?.error?.message || err.message})` : '';
@@ -399,7 +419,7 @@ export function createWonderCore(opts = {}) {
     const cont = normalizeContinueFrom(body.continueFrom);
     if (cont?.error) return t.json(cont.status, { ok: false, error: cont.error });
     const level = ['beginner', 'intermediate', 'advanced'].includes(body.level) ? body.level : 'beginner';
-    const material = await loadMaterial(body.materialId); // Phase 10
+    let material = await loadMaterial(body.materialId); // Phase 10
     if (material?.missing) return t.json(404, { ok: false, error: 'That material is no longer stored on this server. Add it again from Today.' });
     // Phase 3: web search on by default for lessons; a lesson taught from the learner's own
     // material stays faithful to it unless search is asked for explicitly
@@ -436,13 +456,22 @@ export function createWonderCore(opts = {}) {
           learnerKnows(body, 'lesson'),
           body.memoryEnabled !== false ? insightsContext(body.learnerInsights) : '', // Phase 9
         );
-        let messages = cont
+        const firstMessages = () => (cont
           ? [{ role: 'user', content: userTurn(steeringUserContent(request, cont.kept, cont.instruction, { mode: cont.mode, fromPage: cont.fromPage })) }]
-          : [{ role: 'user', content: userTurn(request) }];
+          : [{ role: 'user', content: userTurn(request) }]);
+        let messages = firstMessages();
         for (;;) {
           const params = withWebSearch(buildStreamParams({ system: LESSON_SYSTEM_PROMPT, context, messages, effort: 'medium' }), useWebSearch);
           const grounded = useWebSearch || material ? groundedStream(writer, sources, material ? materialCitation([material.meta]) : undefined) : undefined;
-          result = await runClaude(writer, params, onText, op.attempt(), grounded);
+          result = await runClaude(writer, params, onText, op.attempt(), grounded, { retryable: (err) => !writer.markdown && unreadablePdf(err, material) });
+          if (result.status === 'retry') { // the PDF itself was refused: teach from its text layer
+            const text = await pdfAsText(material);
+            if (text.error) { writer.fail(text.error, 'bad_request'); result = { status: 'failed' }; break; }
+            material = text;
+            writer.reasoning("Claude couldn't read the PDF's pages, so this lesson uses the book's text…");
+            messages = firstMessages();
+            continue;
+          }
           if (result.status === 'done') endAttempt();
           if (result.status !== 'aborted' && result.status !== 'done') break;
           const instruction = nextSteer();
@@ -566,16 +595,25 @@ export function createWonderCore(opts = {}) {
     const topic = clean(body.topic, 300);
     if (!topic) return t.json(400, { ok: false, error: 'topic is required' });
     const level = ['beginner', 'intermediate', 'advanced'].includes(body.level) ? body.level : 'beginner';
-    const material = await loadMaterial(body.materialId); // Phase 10: a course that follows the learner's material
+    let material = await loadMaterial(body.materialId); // Phase 10: a course that follows the learner's material
     if (material?.missing) return t.json(404, { ok: false, error: 'That material is no longer stored on this server.' });
     if (state.mode === 'claude') {
       try {
         const params = buildStructuredParams({ system: COURSE_SYSTEM_PROMPT, schema: COURSE_PLAN_SCHEMA, user: `Topic: ${topic}\nLevel: ${level}`, effort: 'low' });
-        if (material) {
-          // structured output: the document goes in without citations (they don't combine)
-          params.messages = [{ role: 'user', content: [documentBlock(material.meta, material.data, { citations: false }), { type: 'text', text: `Plan a course that teaches the attached material "${material.meta.title}", following its structure and order. Each lesson covers one part of it; lesson summaries name what the learner will be able to explain from that part.\nLevel: ${level}` }] }];
+        // structured output: the document goes in without citations (they don't combine)
+        const fromMaterial = () => { params.messages = [{ role: 'user', content: [documentBlock(material.meta, material.data, { citations: false }), { type: 'text', text: `Plan a course that teaches the attached material "${material.meta.title}", following its structure and order. Each lesson covers one part of it; lesson summaries name what the learner will be able to explain from that part.\nLevel: ${level}` }] }]; };
+        if (material) fromMaterial();
+        let plan;
+        try {
+          plan = await createStructured(state.client, params);
+        } catch (err) {
+          if (!unreadablePdf(err, material)) throw err;
+          const text = await pdfAsText(material); // the PDF itself was refused: plan from its text layer
+          if (text.error) return t.json(422, { ok: false, error: text.error, code: 'bad_request' });
+          material = text;
+          fromMaterial();
+          plan = await createStructured(state.client, params);
         }
-        const plan = await createStructured(state.client, params);
         const sections = (plan.sections || []).map((s) => ({ title: clean(s.title, 120), lessons: (s.lessons || []).map((l) => ({ title: clean(l.title, 160), summary: clean(l.summary, 300) })).filter((l) => l.title).slice(0, 4) })).filter((s) => s.title && s.lessons.length).slice(0, 4);
         if (!sections.length) throw new Error('empty plan');
         return t.json(200, { ok: true, plan: { title: clean(plan.title, 120) || topic, description: clean(plan.description, 400), level, sections } });

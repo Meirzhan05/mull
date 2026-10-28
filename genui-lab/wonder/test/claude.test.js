@@ -142,6 +142,9 @@ test('missing credentials error (SDK, no HTTP status) is treated like auth failu
   assert.equal(isCredentialError(new Error('Could not resolve authentication method. Expected either apiKey or authToken to be set.')), true);
   assert.equal(isCredentialError(apiError(Anthropic.RateLimitError, 429, 'x')), false);
   assert.equal(friendlyError(apiError(Anthropic.AuthenticationError, 401, 'x')).code, 'auth_failed');
+  // a refused request says Claude's own reason (what to change), not a guess
+  const pdf = new Anthropic.BadRequestError(400, { type: 'error', error: { type: 'invalid_request_error', message: 'Could not process PDF' } }, undefined, new Headers());
+  assert.equal(friendlyError(pdf).message, 'Claude could not process this request: Could not process PDF.');
 });
 
 test('mode detection never needs key values', () => {
