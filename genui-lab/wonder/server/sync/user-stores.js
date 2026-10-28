@@ -77,3 +77,12 @@ export function userMaterials(sync, userId) {
   };
   return store;
 }
+
+/** One user's upload parts (server/materials.js PART_BYTES), as files: any instance can read them. */
+export function userUploadParts(sync, userId) {
+  return {
+    put: (upload, index, bytes) => sync.db.putFile(userId, `${upload}.${index}`, { bytes, contentType: 'application/octet-stream' }),
+    get: async (upload, index) => { const f = await sync.db.getFile(userId, `${upload}.${index}`); return f ? Buffer.from(f.bytes) : null; },
+    remove: (upload, index) => sync.db.deleteFile(userId, `${upload}.${index}`),
+  };
+}

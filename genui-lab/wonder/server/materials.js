@@ -17,9 +17,17 @@ import { WONDER_ROOT } from './paths.js'; // import.meta.url is a build chunk un
 export const DEFAULT_MATERIALS_DIR = path.join(WONDER_ROOT, 'data', 'materials');
 export const MATERIAL_ID_RE = /^mat-[0-9a-f]{12}$/;
 export const MAX_TEXT_CHARS = 200_000;
-export const MAX_PDF_BYTES = 10 * 1024 * 1024;
+// a book fits; as base64 (about 26.7 MB) it stays under the Claude API's 32 MB request limit
+export const MAX_PDF_BYTES = 20 * 1024 * 1024;
 export const MAX_MATERIALS = 50;
 export const MATERIAL_BODY_LIMIT = Math.ceil((MAX_PDF_BYTES * 4) / 3) + 64 * 1024; // base64 + JSON
+// A PDF larger than one part goes up in parts (POST /api/materials/part, then POST /api/materials
+// with {kind:'pdf', upload, parts}): Vercel rejects request bodies over 4.5 MB with a 413 before
+// the function runs, and a whole PDF as base64 JSON passes that at about 3.3 MB.
+export const PART_BYTES = 2 * 1024 * 1024;
+export const MAX_PARTS = Math.ceil(MAX_PDF_BYTES / PART_BYTES);
+export const PART_BODY_LIMIT = Math.ceil((PART_BYTES * 4) / 3) + 16 * 1024;
+export const UPLOAD_ID_RE = /^up-[0-9a-f]{16}$/;
 
 const clean = (s, n) => String(s ?? '').replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, n);
 
@@ -35,7 +43,8 @@ export function materialTitle({ title, text, filename } = {}) {
 }
 
 /**
- * Validate one upload: {title?, kind:'text', text} or {title?, kind:'pdf', base64, filename?}.
+ * Validate one upload: {title?, kind:'text', text} or {title?, kind:'pdf', base64 | bytes, filename?}
+ * (bytes: a Buffer, from parts put back together by takeUpload).
  * Returns {ok, meta, data} (data: string for text, Buffer for a PDF) or {ok:false, error}.
  */
 export function prepareMaterial(input) {
@@ -50,9 +59,12 @@ export function prepareMaterial(input) {
     data = text;
     meta = { id, kind, title: materialTitle({ title: input?.title, text, filename: input?.filename }), chars: text.length };
   } else {
-    const b64 = String(input?.base64 || '').replace(/^data:[^,]*,/, '');
-    if (!/^[A-Za-z0-9+/]+=*$/.test(b64)) return { ok: false, error: 'The PDF could not be read.' };
-    const buf = Buffer.from(b64, 'base64');
+    let buf = Buffer.isBuffer(input?.bytes) ? input.bytes : null;
+    if (!buf) {
+      const b64 = String(input?.base64 || '').replace(/^data:[^,]*,/, '');
+      if (!/^[A-Za-z0-9+/]+=*$/.test(b64)) return { ok: false, error: 'The PDF could not be read.' };
+      buf = Buffer.from(b64, 'base64');
+    }
     if (buf.length > MAX_PDF_BYTES) return { ok: false, error: `That PDF is ${(buf.length / 1048576).toFixed(1)} MB; the limit is ${MAX_PDF_BYTES / 1048576} MB.` };
     if (buf.subarray(0, 5).toString('latin1') !== '%PDF-') return { ok: false, error: 'That file is not a PDF.' };
     data = buf;
@@ -116,6 +128,31 @@ export function createMaterialStore({ dir = DEFAULT_MATERIALS_DIR } = {}) {
     get size() { return index.length; },
   };
   return store;
+}
+
+export const newUploadId = () => `up-${randomUUID().replace(/-/g, '').slice(0, 16)}`;
+
+/** Upload parts held in this process (no account sync: one server, one process). */
+export function createPartStore({ max = MAX_PARTS * 8 } = {}) {
+  const parts = new Map(); // `${upload}.${index}` -> Buffer, oldest first
+  return {
+    async put(upload, index, bytes) {
+      parts.set(`${upload}.${index}`, bytes);
+      for (const k of parts.keys()) { if (parts.size <= max) break; parts.delete(k); } // abandoned uploads
+    },
+    get: async (upload, index) => parts.get(`${upload}.${index}`) ?? null,
+    remove: async (upload, index) => { parts.delete(`${upload}.${index}`); },
+  };
+}
+
+/** The stored parts of one upload as one Buffer (and removed), or null when one is missing. */
+export async function takeUpload(parts, upload, count) {
+  const n = Number(count);
+  if (!UPLOAD_ID_RE.test(String(upload)) || !Number.isInteger(n) || n < 1 || n > MAX_PARTS) return null;
+  const bufs = [];
+  for (let i = 0; i < n; i++) bufs.push(await parts.get(upload, i));
+  for (let i = 0; i < n; i++) await parts.remove(upload, i);
+  return bufs.every(Boolean) ? Buffer.concat(bufs) : null;
 }
 
 /**

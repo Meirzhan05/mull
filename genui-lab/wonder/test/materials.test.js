@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { createMaterialStore, documentBlock, materialCitation, materialTitle, demoMaterialLesson, demoMaterialCourse, isMaterialUrl, MAX_TEXT_CHARS } from '../server/materials.js';
+import { createMaterialStore, documentBlock, materialCitation, materialTitle, demoMaterialLesson, demoMaterialCourse, isMaterialUrl, MAX_TEXT_CHARS, PART_BYTES, MAX_PDF_BYTES } from '../server/materials.js';
 import { createSourceRegistry } from '../server/grounding.js';
 import { createWonderServer } from '../server/app.js';
 import { parseConversationSource, ConversationTurn } from '../../chatgpt-dil/src/stream.js';
@@ -205,4 +205,42 @@ test('web adapter: a PDF larger than the JSON limit uploads to /api/materials on
   assert.equal(Buffer.from(await file.arrayBuffer()).subarray(0, 5).toString('latin1'), '%PDF-');
   const del = await handleWebRequest(core, new Request(`http://localhost/api/materials?id=${item.id}`, { method: 'DELETE' }), { logger: quiet });
   assert.equal((await del.json()).items.length, 0);
+});
+
+test('web adapter: a PDF over Vercel\'s 4.5 MB body cap goes up in parts, each request under it', async () => {
+  const VERCEL_BODY_CAP = 4.5 * 1024 * 1024;
+  const core = createWonderCore({ mode: 'demo', demoDelayMs: 0, logger: quiet, memoryFile: null });
+  const book = Buffer.concat([PDF, Buffer.alloc(7 * 1024 * 1024, 0x20)]);
+  const send = async (path, payload) => {
+    const b = JSON.stringify(payload);
+    assert.ok(Buffer.byteLength(b) < VERCEL_BODY_CAP, `${path} body is ${Buffer.byteLength(b)} bytes`);
+    const res = await handleWebRequest(core, new Request(`http://localhost${path}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: b }), { logger: quiet });
+    return { status: res.status, body: await res.json() };
+  };
+  const total = Math.ceil(book.length / PART_BYTES);
+  let upload = null;
+  for (let index = 0; index < total; index++) {
+    const r = await send('/api/materials/part', { upload, index, total, base64: book.subarray(index * PART_BYTES, (index + 1) * PART_BYTES).toString('base64') });
+    assert.equal(r.status, 200);
+    upload = r.body.upload;
+  }
+  assert.match(upload, /^up-[0-9a-f]{16}$/);
+  const done = await send('/api/materials', { kind: 'pdf', upload, parts: total, filename: 'Book.pdf' });
+  assert.equal(done.status, 200);
+  assert.equal(done.body.item.bytes, book.length);
+  assert.equal(done.body.item.title, 'Book');
+  const file = await handleWebRequest(core, new Request(`http://localhost/api/materials/file?id=${done.body.item.id}`), { logger: quiet });
+  assert.ok(Buffer.from(await file.arrayBuffer()).equals(book), 'the parts are put back together in order');
+  // the parts are gone once used; a missing part, a forged id or a too-large file is refused
+  assert.equal((await send('/api/materials', { kind: 'pdf', upload, parts: total })).status, 400);
+  const first = await send('/api/materials/part', { index: 0, total: 2, base64: PDF.toString('base64') });
+  assert.equal((await send('/api/materials', { kind: 'pdf', upload: first.body.upload, parts: 2 })).status, 400);
+  assert.equal((await send('/api/materials/part', { upload: '../x', index: 1, total: 2, base64: 'AAAA' })).status, 400);
+  assert.equal((await send('/api/materials/part', { index: 0, total: Math.ceil(MAX_PDF_BYTES / PART_BYTES) + 1, base64: 'AAAA' })).status, 400);
+  // the size limit itself: a 20 MB book is kept, a byte more is refused
+  assert.equal(MAX_PDF_BYTES, 20 * 1024 * 1024);
+  const store = createMaterialStore({ dir: null });
+  const atLimit = Buffer.concat([PDF, Buffer.alloc(MAX_PDF_BYTES - PDF.length, 0x20)]);
+  assert.equal(store.add({ kind: 'pdf', bytes: atLimit }).ok, true);
+  assert.match(store.add({ kind: 'pdf', bytes: Buffer.concat([atLimit, Buffer.from(' ')]) }).error, /the limit is 20 MB/);
 });
