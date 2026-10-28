@@ -389,12 +389,11 @@ main { display: block; padding: 20px 16px calc(var(--tabbar-h) + 32px + env(safe
 
 /* ---------------------------------------------------------------- today */
 .today { display: grid; gap: 24px; max-width: 1120px; margin: 0 auto; }
+/* the composer is all Today shows, so it sits in the middle of the window (a little above center) */
+body[data-screen="home"] .main-col { display: flex; flex-direction: column; min-height: 100dvh; }
+body[data-screen="home"] main { flex: 1; width: 100%; display: grid; align-content: center; }
 /* the hero: one large composer is the focus of the page */
-.hero { display: grid; justify-items: center; gap: 18px; padding: clamp(28px, 9vh, 96px) 0 clamp(20px, 5vh, 48px); }
-.hero-top { display: grid; justify-items: center; gap: 10px; text-align: center; }
-.hero-greet { margin: 0; display: inline-flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 6px; font-size: 0.875rem; color: var(--ink-3); }
-.hero-dot { color: var(--line-strong); }
-.hero-urgent { color: var(--accent); font-weight: 500; }
+.hero { display: grid; justify-items: center; gap: 18px; padding: 0 0 clamp(20px, 8vh, 80px); }
 .hero-title { margin: 0; font-size: clamp(1.75rem, 4.2vw, 2.6rem); font-weight: 600; letter-spacing: -0.045em; line-height: 1.1; text-wrap: balance; }
 .composer {
   position: relative; width: 100%; max-width: 760px; display: grid; gap: 0; padding: 14px 14px 10px; cursor: text;
@@ -423,7 +422,6 @@ main { display: block; padding: 20px 16px calc(var(--tabbar-h) + 32px + env(safe
 .composer-mode:hover { background: var(--hover); color: var(--ink); }
 .composer-mode[aria-selected="true"] { background: var(--surface-3); color: var(--ink); border-color: var(--line); }
 .composer-mode:focus-visible { border-radius: 999px; }
-.composer-hint { display: none; }
 .composer-bar .cmd-level { height: 32px; border-radius: 999px; }
 .composer-send {
   width: 36px; height: 36px; flex: 0 0 auto; display: grid; place-items: center; border-radius: 50%; border: 0; cursor: pointer;
@@ -442,12 +440,10 @@ main { display: block; padding: 20px 16px calc(var(--tabbar-h) + 32px + env(safe
   font-size: 0.8125rem; color: var(--ink-2); cursor: pointer; text-decoration: none; transition: background 120ms, color 120ms, border-color 120ms;
 }
 .hero-chip:hover { background: var(--hover); color: var(--ink); border-color: var(--line-strong); }
-.hero-chip-tag { font-size: 0.6875rem; font-weight: 500; color: var(--ink-3); padding-right: 8px; border-right: 1px solid var(--line); }
 .hero-chip-link { border-style: dashed; color: var(--ink-3); }
 .hero-chip-link .ui-icon { width: 13px; height: 13px; }
-.t-below { display: grid; gap: 14px; padding-top: 8px; border-top: 1px solid var(--line); }
 @media (max-width: 560px) {
-  .hero { padding-top: 20px; justify-items: stretch; }
+  .hero { justify-items: stretch; }
   .composer { border-radius: 18px; padding: 12px 10px 8px; }
   .composer-input { font-size: 1.0625rem; min-height: 64px; }
   .composer-mode span { display: none; }
@@ -469,18 +465,6 @@ main { display: block; padding: 20px 16px calc(var(--tabbar-h) + 32px + env(safe
 .panel-section { display: grid; gap: 0; background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-lg); box-shadow: var(--shadow-card); overflow: hidden; }
 .panel-section > .section-head { padding: 12px 16px; border-bottom: 1px solid var(--line); }
 
-.queue { list-style: none; margin: 0; padding: 0; }
-.q { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 16px; align-items: center; padding: 14px 16px; }
-.q + .q { border-top: 1px solid var(--line); }
-.q-idx { display: none; }
-.q-body { display: grid; gap: 3px; min-width: 0; }
-.q-kind { font-size: 0.75rem; font-weight: 500; color: var(--ink-3); }
-.q-first .q-kind { color: var(--accent); }
-.q-title { font-weight: 500; font-size: 0.9375rem; letter-spacing: -0.015em; overflow: hidden; text-overflow: ellipsis; }
-.q-first { padding: 20px 16px; background: linear-gradient(to bottom, color-mix(in srgb, var(--brand-subtle) 55%, transparent), transparent); }
-.q-first .q-title { font-size: 1.25rem; font-weight: 600; letter-spacing: -0.03em; line-height: 1.25; }
-.q-text { color: var(--ink-2); font-size: 0.875rem; max-width: 60ch; margin-top: 2px; }
-.q-meta { font-size: 0.75rem; color: var(--ink-3); margin-top: 4px; }
 
 .tiles { list-style: none; margin: 0; padding: 12px; display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px; }
 .tile {
