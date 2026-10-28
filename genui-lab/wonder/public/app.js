@@ -366,12 +366,33 @@ function renderLesson(lessonId) {
   const errorBox = el('div', { class: 'card error-card', hidden: true });
   const finishBtn = el('button', { class: 'btn btn-lg', type: 'button', disabled: true }, 'Collect the cards');
   const endPanel = el('section', { class: 'card lesson-end pending', 'aria-label': 'End of lesson' });
-  // Phase 4: live steer (a pill beside the status line), resume (open, top) and revise (sticky, after the lesson)
+  // phones: one bar docked at the bottom holds Revise and the tutor, instead of pills over the text
+  const phone = window.matchMedia('(max-width: 560px)');
+  const dockSteer = el('div', { class: 'lesson-dock-steer' });
+  const dock = el('div', { class: 'lesson-dock' }, dockSteer,
+    el('button', { class: 'btn btn-secondary lesson-dock-tutor', type: 'button', onclick: () => setTutorOpen(true) }, icon('chat'), el('span', null, 'Tutor')));
+  const placeRevise = (node) => { if (phone.matches) dockSteer.append(node); else errorBox.before(node); };
+  // Phase 4: live steer (a pill beside the status line), resume (open, top) and revise (sticky, after the lesson; in the dock on phones)
+  let steerNode = null;
   const steerBar = createSteerBar({
     onContinue: (req) => { autoRetried = false; continueLesson(req); },
     onOpen: () => onPageScroll(),
-    onMode: (mode, node) => { if (mode === 'revise') errorBox.before(node); else writingRow.append(node); },
+    onMode: (mode, node) => { steerNode = node; if (mode === 'revise') placeRevise(node); else writingRow.append(node); },
   });
+  const onPhoneChange = () => { if (steerNode && steerBar.mode === 'revise') placeRevise(steerNode); };
+  phone.addEventListener('change', onPhoneChange);
+  teardown.push(() => phone.removeEventListener('change', onPhoneChange));
+  // the dock steps aside while reading down, and comes back on any scroll up or at the end
+  let dockY = window.scrollY;
+  const onDockScroll = () => {
+    const y = window.scrollY;
+    if (Math.abs(y - dockY) < 8) return;
+    const atEnd = y + window.innerHeight > document.documentElement.scrollHeight - 120;
+    dock.classList.toggle('away', y > dockY && y > 160 && !atEnd && !dock.querySelector('.steer-bar.is-open'));
+    dockY = y;
+  };
+  window.addEventListener('scroll', onDockScroll, { passive: true });
+  teardown.push(() => window.removeEventListener('scroll', onDockScroll));
   const tutorToggle = el('button', { class: 'btn btn-secondary btn-sm tutor-toggle', type: 'button', 'aria-expanded': 'false', title: 'Ask the tutor about this lesson' }, icon('chat'), el('span', null, 'Tutor'));
 
   // contents menu: jump to any page
@@ -446,10 +467,11 @@ function renderLesson(lessonId) {
     writingRow,
     card,
     errorBox,
-    endPanel);
+    endPanel,
+    dock);
 
   const tutor = createTutor(lessonId);
-  const layout = el('div', { class: 'lesson-layout' }, lessonMain, tutor.scrim, tutor.panel, tutor.fab);
+  const layout = el('div', { class: 'lesson-layout' }, lessonMain, tutor.scrim, tutor.panel); // the dock's Tutor replaces tutor.fab
   app.replaceChildren(layout);
   teardown.push(() => tutor.destroy());
   const setTutorOpen = (open) => {
