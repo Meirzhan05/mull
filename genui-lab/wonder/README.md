@@ -50,7 +50,7 @@ Practice extraction in demo mode is deterministic, built from the lesson's `<Key
 
 ## The app
 
-Five sections, in a sidebar on desktop and a bottom tab bar on phones, plus a ⌘K / Ctrl K (or `/`) command palette that searches lessons, courses and Teacher chats and starts a lesson, course or Teacher chat on whatever you type.
+Five sections, in a sidebar on desktop (with the streak and a link to your profile at the foot) and a bottom tab bar on phones, plus a ⌘K / Ctrl K (or `/`) command palette that searches lessons, courses and Teacher chats and starts a lesson, course or Teacher chat on whatever you type.
 
 - **Today (`#/`).** A greeting, a command bar with three modes (Lesson, Course, Teacher), and the dashboard described above. Topic suggestions come from the interests picked at onboarding. **Up next** picks the single best next action (`public/progress-core.js` `upNext`): continue an unfinished lesson, review due cards, the next item of the saved study plan, or the next lesson of a course. The saved study plan and recent lessons follow.
 - **Lesson (`#/lesson/<id>`).** A focused reader: the sidebar collapses to an icon rail and the phone tabs hide. The bar shows a segmented progress bar (one segment per page; click to jump), "Page x of n", a contents menu, the tutor toggle and a menu with text size and widget reset. While Claude writes, a status line and a compact **Steer** pill sit above the lesson. Highlight any passage to **Explain** it or **Ask about this** in the tutor. The end of the lesson is a colophon that turns into "Collect the cards", then the index cards, then a **what next** step: the next course lesson, a review, or Today. Reopening a lesson offers to jump back to the page you were on.
@@ -882,7 +882,7 @@ Accounts are off unless **both** Neon Auth and a database are set. Without them 
 - **Retries.** A dropped stream's automatic retries (same `streamKey`/`turnId`) are free twice within 10 minutes; reusing a key beyond that is charged.
 - **Database errors** fail open and are logged, so a hiccup never locks everyone out.
 - **Where caps don't apply.** Demo mode has no caps, since it costs nothing. Without accounts there is neither sign-in nor caps.
-- **You page.** The signed-in account card shows today's use.
+- **Today's use** comes back from `GET /api/account` (`usage`); the app does not show it.
 
 **Tests.**
 - `test/usage.test.js`: caps per user, kind and day; free retries and their bounds; failing open; 401 and 429 over HTTP; demo mode and accounts off; non-retryable errors in the browser.

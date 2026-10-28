@@ -22,12 +22,17 @@ const ago = (t) => {
 function accountPanel(ctx) {
   const body = el('div', { class: 'card settings' });
   const sec = el('div', { class: 'account-sync', hidden: true, style: { marginBottom: '12px' } }, body);
-  const btn = (label, cls, onclick) => el('button', { class: `btn ${cls}`, type: 'button', onclick: async (e) => {
+  const btn = (label, cls, onclick, busy = label) => el('button', { class: `btn ${cls}`, type: 'button', onclick: async (e) => {
     const b = e.currentTarget;
     b.disabled = true;
-    try { await onclick(); } catch (err) { toast(err.message || 'That did not work'); } finally { b.disabled = false; }
+    b.textContent = busy;
+    try { await onclick(); } catch (err) { toast(err.message || 'That did not work'); } finally { b.disabled = false; b.textContent = label; }
   } }, label);
   const row = (title, note, ...actions) => el('div', { class: 'setting' }, el('div', { class: 'setting-text' }, el('strong', null, title), el('p', { class: 'muted small' }, note)), el('div', { style: { display: 'flex', gap: '8px', flexWrap: 'wrap' } }, ...actions));
+  // redrawn on every sync status change; replaced only when the text changes, so a button
+  // being clicked stays put
+  let drawn = '';
+  const show = (key, ...rows) => { if (key !== drawn) { drawn = key; body.replaceChildren(...rows); } };
   const draw = () => {
     const info = accountInfo();
     sec.hidden = !info?.sync;
@@ -35,26 +40,26 @@ function accountPanel(ctx) {
     const acct = signedInAccount();
     const st = currentSyncStatus();
     if (!acct) {
-      body.replaceChildren(row('Sync across your devices', 'Sign in to keep your lessons, cards and progress in an account, on every browser you sign in on. What this browser has comes with you.',
+      show('signedOut', row('Sync across your devices', 'Sign in to keep your lessons, cards and progress in an account, on every browser you sign in on. What this browser has comes with you.',
         btn('Sign in', 'btn-primary', signIn)));
     } else if (st.state === 'mismatch') {
-      body.replaceChildren(row('Signed in as someone else', 'This browser holds another account’s copy. Switch to the account that is signed in now, or sign out.',
+      show('mismatch', row('Signed in as someone else', 'This browser holds another account’s copy. Switch to the account that is signed in now, or sign out.',
         btn('Use this account', 'btn-secondary', switchToSignedIn), btn('Sign out', 'btn-secondary', signOut)));
     } else if (st.state === 'signedOut') {
-      body.replaceChildren(row('Your session ended', 'Sign in again to keep syncing. Changes made here meanwhile are kept and sync once you are back.',
+      show('ended', row('Your session ended', 'Sign in again to keep syncing. Changes made here meanwhile are kept and sync once you are back.',
         btn('Sign in', 'btn-primary', signIn), btn('Sign out', 'btn-secondary', signOut)));
     } else {
       const pending = syncEngine()?.pending() || 0;
-      const line = st.state === 'syncing' ? 'Syncing…'
-        : st.state === 'offline' ? `Offline. ${pending ? `${pending} change${pending === 1 ? '' : 's'} will sync when you are back.` : 'Everything here is saved.'}`
-          : st.state === 'error' ? `Could not sync (${st.error || 'error'}). Retrying.`
-            : st.state === 'unavailable' ? 'Sync is unavailable on this server right now; this browser keeps your changes.'
-              : st.at ? `Synced ${ago(st.at)}${pending ? ` · ${pending} waiting` : ''}.` : 'Connecting…';
-      const usageLine = el('p', { class: 'muted small', style: { margin: '4px 0 0' } });
-      body.replaceChildren(row(accountLabel() ? `Signed in as ${accountLabel()}` : 'Signed in', `${line} Lessons, cards and progress are kept in your account.`,
-        btn('Sync now', 'btn-secondary', async () => { await syncEngine()?.syncNow(); toast('Synced'); }),
-        btn('Sign out', 'btn-secondary', async () => { if (await signOut()) toast('Signed out'); })), usageLine);
-      showUsage(usageLine);
+      // a sync runs every minute and on returning to the tab: while one is in flight, keep showing
+      // the last one rather than flashing "Syncing…"
+      const line = st.state === 'offline' ? `Offline. ${pending ? `${pending} change${pending === 1 ? '' : 's'} will sync when you are back.` : 'Everything here is saved.'}`
+        : st.state === 'error' ? `Could not sync (${st.error || 'error'}). Retrying.`
+          : st.state === 'unavailable' ? 'Sync is unavailable on this server right now; this browser keeps your changes.'
+            : st.at ? `Synced ${ago(st.at)}${pending ? ` · ${pending} waiting` : ''}.` : st.state === 'syncing' ? 'Syncing…' : 'Connecting…';
+      const title = accountLabel() ? `Signed in as ${accountLabel()}` : 'Signed in';
+      show(`in:${title}:${line}`, row(title, `${line} Lessons, cards and progress are kept in your account.`,
+        btn('Sync now', 'btn-secondary', async () => { toast((await syncEngine()?.syncNow()) ? 'Synced' : 'Could not sync'); }, 'Syncing…'),
+        btn('Sign out', 'btn-secondary', async () => { if (await signOut()) toast('Signed out'); })));
     }
   };
   draw();
@@ -62,17 +67,6 @@ function accountPanel(ctx) {
   const timer = setInterval(draw, 30_000);
   ctx.teardown?.push(() => { off(); clearInterval(timer); });
   return sec;
-}
-
-/** Today's use of the daily caps (server/usage.js), from /api/account; empty when there are none. */
-async function showUsage(line) {
-  let u = null;
-  try { u = (await (await fetch('/api/account', { headers: { Accept: 'application/json' } })).json()).usage; } catch {}
-  const kinds = u?.kinds || {};
-  const part = (k, noun) => (kinds[k]?.max != null ? `${kinds[k].used} of ${kinds[k].max} ${noun}` : null);
-  const parts = [part('lesson', 'lessons'), part('tutor', 'tutor messages'), part('teacher', 'Teacher messages')].filter(Boolean);
-  line.textContent = parts.length ? `Today: ${parts.join(' · ')}. Resets at midnight UTC.` : '';
-  line.hidden = !parts.length;
 }
 
 /** A row with a switch. */
