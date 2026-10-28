@@ -12,6 +12,7 @@ CREATE TABLE IF NOT EXISTS wonder_users (
   rev bigint NOT NULL DEFAULT 0,
   created_at timestamptz NOT NULL DEFAULT now()
 );
+ALTER TABLE wonder_users ADD COLUMN IF NOT EXISTS deleted_rev bigint NOT NULL DEFAULT 0;
 CREATE TABLE IF NOT EXISTS wonder_records (
   user_id text NOT NULL REFERENCES wonder_users(id) ON DELETE CASCADE,
   kind text NOT NULL,
@@ -72,10 +73,25 @@ export function createPgDb({ pool, blob = null }) {
     try {
       await client.query('BEGIN');
       await client.query('INSERT INTO wonder_users (id) VALUES ($1) ON CONFLICT (id) DO NOTHING', [userId]);
-      const { rows: [u] } = await client.query('SELECT rev FROM wonder_users WHERE id = $1 FOR UPDATE', [userId]);
+      const { rows: [u] } = await client.query('SELECT rev, deleted_rev FROM wonder_users WHERE id = $1 FOR UPDATE', [userId]);
       let rev = Number(u.rev);
       const tx = {
         rev: async () => rev,
+        deletedRev: async () => Number(u.deleted_rev),
+        /**
+         * Delete account: the user's records, files, push subscriptions and reminder log. The
+         * revision counter stays (deleted_rev marks where the delete happened), and so do usage
+         * counts, so deleting and signing in again does not reset the day's caps.
+         * @returns {Promise<string[]>} Blob paths to delete once this commits
+         */
+        wipe: async () => {
+          await client.query('DELETE FROM wonder_records WHERE user_id = $1', [userId]);
+          const { rows } = await client.query('DELETE FROM wonder_files WHERE user_id = $1 RETURNING blob_path', [userId]);
+          await client.query('DELETE FROM wonder_push_subscriptions WHERE user_id = $1', [userId]);
+          await client.query('DELETE FROM wonder_reminders_sent WHERE user_id = $1', [userId]);
+          await client.query('UPDATE wonder_users SET deleted_rev = rev WHERE id = $1', [userId]);
+          return rows.map((r) => r.blob_path).filter(Boolean);
+        },
         setRev: async (n) => { rev = n; await client.query('UPDATE wonder_users SET rev = $2 WHERE id = $1', [userId, n]); },
         get: async (keys) => {
           const out = new Map();
@@ -204,28 +220,10 @@ export function createPgDb({ pool, blob = null }) {
       const { rows: [r] } = await q('DELETE FROM wonder_files WHERE user_id = $1 AND id = $2 RETURNING blob_path', [userId, id]);
       if (r?.blob_path && blob) { try { await blob.del(r.blob_path); } catch { /* orphaned blob: harmless */ } }
     },
-    /**
-     * Delete account: the user's records, files, push subscriptions and reminder log. Usage
-     * counts stay, so deleting and signing in again does not reset the day's caps.
-     */
+    /** Delete account (tx.wipe), under the user's row lock so no sync interleaves. */
     async deleteUser(userId) {
-      await ensure();
-      const client = await pool.connect();
-      let paths;
-      try {
-        await client.query('BEGIN');
-        ({ rows: paths } = await client.query('DELETE FROM wonder_files WHERE user_id = $1 RETURNING blob_path', [userId]));
-        await client.query('DELETE FROM wonder_push_subscriptions WHERE user_id = $1', [userId]);
-        await client.query('DELETE FROM wonder_reminders_sent WHERE user_id = $1', [userId]);
-        await client.query('DELETE FROM wonder_users WHERE id = $1', [userId]); // wonder_records: ON DELETE CASCADE
-        await client.query('COMMIT');
-      } catch (e) {
-        try { await client.query('ROLLBACK'); } catch {}
-        throw e;
-      } finally {
-        client.release();
-      }
-      for (const { blob_path: p } of paths) if (p && blob) { try { await blob.del(p); } catch { /* orphaned blob: harmless */ } }
+      const paths = await transaction(userId, (tx) => tx.wipe());
+      if (paths.length && blob) { try { await blob.del(paths); } catch { /* orphaned blobs: harmless */ } }
     },
     async close() { await pool.end(); },
   };

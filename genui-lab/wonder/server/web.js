@@ -24,10 +24,11 @@ async function readBody(request, limit) {
  * Handle one /api/* request with a core from createWonderCore.
  * @param {ReturnType<typeof createWonderCore>} core
  * @param {Request} request
- * @param {{logger?: Console, userId?: string|null}} [opts]  userId: the signed-in user (account sync)
+ * @param {{logger?: Console, userId?: string|null, deleteAuthUser?: () => Promise<boolean>}} [opts]
+ *   userId: the signed-in user (account sync); deleteAuthUser: delete that user's sign-in (DELETE /api/account)
  * @returns {Promise<Response>}
  */
-export async function handleWebRequest(core, request, { logger = console, userId = null } = {}) {
+export async function handleWebRequest(core, request, { logger = console, userId = null, deleteAuthUser = null } = {}) {
   const url = new URL(request.url);
   if (!core.hasRoute(request.method, url.pathname)) return json(404, { ok: false, error: 'Not found' });
   let body;
@@ -51,6 +52,7 @@ export async function handleWebRequest(core, request, { logger = console, userId
     const transport = {
       url: url.pathname + url.search,
       userId,
+      deleteAuthUser,
       authorization: request.headers.get('authorization') || '',
       json(status, data) {
         if (settled) return;

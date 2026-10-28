@@ -6,7 +6,7 @@ import { el, icon, toast } from './ui.js';
 import { learnerTotals, activityGrid, LEVELS, levelOf } from './progress-core.js';
 import { interestGrid } from './onboarding.js';
 import { masteryPanel } from './mastery-screen.js'; // Phase 6
-import { accountInfo, signedInAccount, currentSyncStatus, onSyncStatus, signIn, signOut, switchToSignedIn, deleteAccount, accountLabel, pushAvailable, enablePush, disablePush } from './account.js'; // account sync
+import { accountInfo, signedInAccount, currentSyncStatus, onSyncStatus, syncEngine, signIn, signOut, switchToSignedIn, deleteAccount, accountLabel, pushAvailable, enablePush, disablePush } from './account.js'; // account sync
 
 export const TEXT_SIZES = [['0.92', 'Small'], ['1', 'Default'], ['1.1', 'Large'], ['1.2', 'Larger']];
 
@@ -46,8 +46,13 @@ function accountPanel(ctx) {
         btn('Sign in', 'btn-primary', signIn), btn('Sign out', 'btn-secondary', signOut)));
     } else {
       const title = accountLabel() ? `Signed in as ${accountLabel()}` : 'Signed in';
-      show(`in:${title}`,
-        row(title, null, btn('Sign out', 'btn-secondary', async () => { if (await signOut()) toast('Signed out'); })),
+      // no "synced" status: only a problem worth knowing about before signing out
+      const pending = st.state === 'offline' ? syncEngine()?.pending() || 0 : 0;
+      const problem = pending ? `Offline. ${pending} change${pending === 1 ? '' : 's'} will sync when you are back.`
+        : st.state === 'error' ? `Could not sync (${st.error || 'error'}). Retrying.`
+          : st.state === 'unavailable' ? 'Sync is unavailable on this server right now; this browser keeps your changes.' : null;
+      show(`in:${title}:${problem}`,
+        row(title, problem, btn('Sign out', 'btn-secondary', async () => { if (await signOut()) toast('Signed out'); })),
         row('Delete account', 'Deletes your lessons, cards, progress, memory and material for good.',
           btn('Delete account', 'btn-danger', async () => {
             if (confirm('Delete your Mull account? Your lessons, cards, progress, memory and material are deleted for good. This cannot be undone.')) await deleteAccount();
@@ -182,7 +187,7 @@ export function renderYou(ctx) {
   const nav = el('nav', { class: 'you-nav', 'aria-label': 'Sections' }, ...navLinks);
   const mark = (id) => { for (const a of navLinks) a.toggleAttribute('aria-current', a.dataset.sec === id); };
   mark('profile');
-  const accountLink = navLinks[navLinks.length - 1];
+  const accountLink = navLinks.find((a) => a.dataset.sec === 'account');
   const content = el('div', { class: 'you-content' },
     sec('profile', head, stats),
     sec('knowledge', masteryPanel(ctx)), // Phase 6
@@ -190,12 +195,17 @@ export function renderYou(ctx) {
     sec('preferences', settingsCard),
     accountPanel({ ...ctx, onAccountShown: (on) => { accountLink.hidden = !on; } }));
   app.replaceChildren(el('div', { class: 'you' }, el('h1', { class: 'h-xl you-title' }, 'You'), el('div', { class: 'you-layout' }, nav, content)));
+  // scrolled to the end: the last section, which may be too short to reach the band below
+  const atEnd = () => window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 4;
+  const markEnd = () => { if (atEnd()) mark([...content.children].filter((n) => !n.hidden).pop().id.replace('you-', '')); };
   const io = new IntersectionObserver((entries) => {
     const vis = entries.filter((e) => e.isIntersecting).sort((a, b) => a.boundingClientRect.top - b.boundingClientRect.top)[0];
     if (vis) mark(vis.target.id.replace('you-', ''));
+    markEnd();
   }, { rootMargin: '-15% 0px -70% 0px' });
   for (const n of content.children) io.observe(n);
-  ctx.teardown?.push(() => io.disconnect());
+  window.addEventListener('scroll', markEnd, { passive: true });
+  ctx.teardown?.push(() => { io.disconnect(); window.removeEventListener('scroll', markEnd); });
   if (location.hash === '#/mastery') requestAnimationFrame(() => document.getElementById('you-knowledge')?.scrollIntoView({ block: 'start' }));
   if (location.hash === '#/interests') requestAnimationFrame(() => document.getElementById('interests')?.scrollIntoView({ block: 'center' }));
 }

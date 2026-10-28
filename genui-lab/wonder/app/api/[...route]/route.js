@@ -4,10 +4,10 @@
 // stream that is still running, and memory / Teacher cards live in it. With accounts configured,
 // the signed-in user's id travels with the request (server/auth.js).
 import { handleWebRequest, getWonderCore } from '../../../server/web.js';
-import { requestUserId } from '../../../server/auth.js';
+import { requestUserId, deleteRequestUser } from '../../../server/auth.js';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-const handler = async (request) => handleWebRequest(getWonderCore(), request, { userId: await requestUserId() });
+const handler = async (request) => handleWebRequest(getWonderCore(), request, { userId: await requestUserId(), deleteAuthUser: deleteRequestUser });
 export { handler as GET, handler as POST, handler as DELETE };

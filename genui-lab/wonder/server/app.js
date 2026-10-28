@@ -13,7 +13,7 @@
 //   GET/POST/DELETE /api/memory -> learner memory items
 //   POST /api/memory/extract    -> 0-3 new memory facts from a finished lesson
 //   GET  /api/account           -> {sync, signedIn, push} (account sync: server/sync/)
-//   DELETE /api/account         -> delete everything kept for the signed-in user
+//   DELETE /api/account         -> delete everything kept for the signed-in user, then the sign-in
 //   POST /api/sync              -> push changed records, pull newer ones (signed in)
 //   POST/DELETE /api/push/subscribe -> this browser's Web Push subscription (signed in)
 //   GET  /api/cron/reminders    -> daily reminders over Web Push (Vercel Cron, CRON_SECRET)
@@ -796,8 +796,10 @@ export function createWonderCore(opts = {}) {
     const { userId, sync } = scopes.getStore() || {};
     if (!sync) return t.json(404, { ok: false, error: 'Accounts are not configured on this server' });
     await sync.deleteAccount(userId);
-    logger.info?.('[wonder] account deleted');
-    t.json(200, { ok: true });
+    // then the sign-in itself, in the same request, so a closed tab cannot leave it behind
+    const authDeleted = (await t.deleteAuthUser?.()) === true;
+    logger.info?.(`[wonder] account deleted${authDeleted ? ' with its sign-in' : ''}`);
+    t.json(200, { ok: true, authDeleted });
   }
 
   async function syncRoute(t, body) {
@@ -843,10 +845,11 @@ export function createWonderCore(opts = {}) {
 }
 
 /** Node transport: the core over node:http req/res. */
-function nodeTransport(req, res, userId = null) {
+function nodeTransport(req, res, userId = null, deleteAuthUser = null) {
   return {
     url: req.url,
     userId,
+    deleteAuthUser,
     authorization: req.headers.authorization || '',
     json: (status, body) => sendJson(res, status, body),
     send: (status, headers, bytes) => { res.writeHead(status, headers); res.end(bytes); },
@@ -875,7 +878,7 @@ export function createWonderServer(opts = {}) {
     try {
       if (core.hasRoute(req.method, url.pathname)) {
         const body = req.method === 'GET' ? {} : await readJson(req, bodyLimit(url.pathname));
-        return await core.handle(req.method, url.pathname, body, nodeTransport(req, res, (await opts.getUserId?.(req)) || null));
+        return await core.handle(req.method, url.pathname, body, nodeTransport(req, res, (await opts.getUserId?.(req)) || null, opts.deleteAuthUser ?? null));
       }
       if (url.pathname.startsWith('/api/')) return sendJson(res, 404, { ok: false, error: 'Not found' });
       if ((req.method === 'GET' || req.method === 'HEAD') && serveStatic(req, res, url.pathname)) return;

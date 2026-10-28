@@ -131,8 +131,9 @@ export function createSyncEngine({ store, storage, userId, post, now = () => Dat
         return r;
       } catch (e) {
         const offline = !e.status && globalThis.navigator?.onLine === false;
-        setStatus({ state: e.status === 409 ? 'mismatch' : e.status === 401 ? 'signedOut' : offline ? 'offline' : 'error', error: e.message });
-        if (e.status !== 409 && e.status !== 401) schedule(30_000);
+        // 410: the account was deleted (on another device) since this browser last synced
+        setStatus({ state: e.status === 409 ? 'mismatch' : e.status === 401 ? 'signedOut' : e.status === 410 ? 'deleted' : offline ? 'offline' : 'error', error: e.message });
+        if (e.status !== 409 && e.status !== 401 && e.status !== 410) schedule(30_000);
         return null;
       } finally {
         running = null;

@@ -55,6 +55,9 @@ export function createSyncService({ db, now = () => Date.now() }) {
     }
     const cursor = Math.max(0, Math.floor(Number(since) || 0));
     return db.transaction(userId, async (tx) => {
+      // a browser that last synced before the account was deleted still holds the deleted data:
+      // it must drop it, not push it back
+      if (cursor > 0 && cursor <= await tx.deletedRev()) throw httpError(410, 'This account was deleted');
       let rev = await tx.rev();
       const stored = await tx.get(valid.map((c) => [c.kind, c.id]));
       const writes = new Map();
@@ -117,7 +120,7 @@ export function createSyncService({ db, now = () => Date.now() }) {
     list,
     /** How many browser-side records the account holds (the first sign-in asks before merging). */
     async count(userId) { requireUser(userId); return db.count(userId, CLIENT_KINDS); },
-    /** Delete account: everything the server keeps for this user. */
+    /** Delete account: everything the server keeps for this user (usage counts aside). */
     async deleteAccount(userId) { requireUser(userId); await db.deleteUser(userId); },
     db,
   };

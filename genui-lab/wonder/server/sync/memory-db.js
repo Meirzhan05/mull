@@ -5,10 +5,10 @@
 const key = (kind, id) => `${kind}:${id}`;
 
 export function createMemoryDb() {
-  const users = new Map(); // userId -> {rev, records: Map, subs: Map, reminders: Set, files: Map}
+  const users = new Map(); // userId -> {rev, deletedRev, records: Map, subs: Map, reminders: Set, files: Map, usage: Map}
   const locks = new Map(); // userId -> tail of the transaction queue
   const user = (id) => {
-    if (!users.has(id)) users.set(id, { rev: 0, records: new Map(), subs: new Map(), reminders: new Set(), files: new Map(), usage: new Map() });
+    if (!users.has(id)) users.set(id, { rev: 0, deletedRev: 0, records: new Map(), subs: new Map(), reminders: new Set(), files: new Map(), usage: new Map() });
     return users.get(id);
   };
   const copy = (r) => ({ ...r });
@@ -23,8 +23,12 @@ export function createMemoryDb() {
       const u = user(userId);
       let rev = u.rev;
       const pending = new Map();
+      let wiped = false;
       const tx = {
         rev: async () => rev,
+        deletedRev: async () => u.deletedRev,
+        /** Delete account: drop everything but the revision counter and the usage counts. */
+        wipe: async () => { wiped = true; pending.clear(); },
         setRev: async (n) => { rev = n; },
         get: async (keys) => {
           const out = new Map();
@@ -47,6 +51,10 @@ export function createMemoryDb() {
         },
       };
       const result = await fn(tx);
+      if (wiped) {
+        for (const m of [u.records, u.subs, u.reminders, u.files]) m.clear();
+        u.deletedRev = rev;
+      }
       for (const [k, r] of pending) u.records.set(k, r);
       u.rev = rev;
       return result;
@@ -101,11 +109,8 @@ export function createMemoryDb() {
     async putFile(userId, id, { bytes, contentType }) { user(userId).files.set(id, { bytes: Buffer.from(bytes), contentType }); },
     async getFile(userId, id) { const f = users.get(userId)?.files.get(id); return f ? { bytes: Buffer.from(f.bytes), contentType: f.contentType } : null; },
     async deleteFile(userId, id) { users.get(userId)?.files.delete(id); },
-    /** Delete account: everything kept for the user except today's usage counts (server/usage.js). */
-    async deleteUser(userId) {
-      const u = users.get(userId);
-      if (u) users.set(userId, { rev: 0, records: new Map(), subs: new Map(), reminders: new Set(), files: new Map(), usage: u.usage });
-    },
+    /** Delete account: records, files, push subscriptions and the reminder log (tx.wipe). */
+    async deleteUser(userId) { await transaction(userId, (tx) => tx.wipe()); },
     async close() {},
   };
 }
