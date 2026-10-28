@@ -1133,17 +1133,6 @@ body[data-screen="lesson"] main { padding-top: 0; }
 .onboard-preview-list { margin: 0; padding: 0; list-style: none; display: grid; gap: 8px; }
 .onboard-preview-list li { display: flex; align-items: baseline; gap: 10px; font-size: 0.9375rem; animation: rise 220ms cubic-bezier(.2,.8,.2,1) both; }
 .onboard-preview-tag, .onboard-topic-tag { flex: none; font-size: 0.75rem; color: var(--ink-3); min-width: 92px; }
-.onboard-pace { display: grid; gap: 24px; }
-.goal-options { display: grid; gap: 8px; }
-.goal-option { display: flex; align-items: center; gap: 14px; padding: 12px 14px; border-radius: var(--r-md); border: 1px solid var(--control-border); background: var(--surface); color: var(--ink); cursor: pointer; text-align: left; font-weight: 400; transition: background 120ms, border-color 120ms; }
-.goal-option:hover { background: var(--hover); }
-.goal-option-text { flex: 1; display: grid; gap: 2px; }
-.goal-option-text strong { font-weight: 600; font-size: 0.9375rem; }
-.goal-option b { font-weight: 500; font-variant-numeric: tabular-nums; color: var(--ink-3); font-size: 0.8125rem; }
-.goal-option-dot { flex: none; width: 18px; height: 18px; border-radius: 999px; border: 1.5px solid var(--line-strong); transition: border 140ms; }
-.goal-option[aria-checked="true"] { border-color: var(--accent); background: var(--brand-subtle); box-shadow: var(--ring); }
-.goal-option[aria-checked="true"] b { color: var(--accent); }
-.goal-option[aria-checked="true"] .goal-option-dot { border: 5.5px solid var(--accent); }
 .onboard-topics { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .onboard-topic { position: relative; display: grid; align-content: space-between; gap: 18px; min-height: 108px; padding: 14px 40px 14px 16px; border-radius: var(--r-lg); border: 1px solid var(--line-strong); background: var(--surface); color: var(--ink); text-align: left; cursor: pointer; box-shadow: var(--shadow-card); transition: border-color 140ms, transform 140ms, box-shadow 140ms; }
 .onboard-topic:hover { border-color: var(--ink-3); transform: translateY(-1px); box-shadow: var(--shadow-pop); }

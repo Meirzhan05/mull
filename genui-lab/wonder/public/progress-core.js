@@ -8,7 +8,7 @@ import { nextPlanItem } from './plan-core.js'; // Phase 10
 import { fadingLessons, RECALL_MIN } from './outcomes-core.js'; // Phase 9
 import { courseReviewSuggestion } from './course-review-core.js';
 
-/** The level a new lesson starts at (settings.level), offered at onboarding and in You. */
+/** The level a new lesson starts at (settings.level), set in You. */
 export const LEVELS = Object.freeze([
   { id: 'beginner', label: 'Beginner', hint: 'Start from the ground up' },
   { id: 'intermediate', label: 'Intermediate', hint: 'I know the basics' },
