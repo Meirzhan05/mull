@@ -264,6 +264,15 @@ export function accountLabel() {
   return sessionUser?.email || sessionUser?.name || null;
 }
 
+/**
+ * This page's account cache was just seeded (beginAccount) and has not synced yet, so it does not
+ * hold the account's lessons or settings: the store looks like a new learner's until startAccount().
+ */
+export function accountAwaitsFirstSync() {
+  if (!current || !cache) return false;
+  try { return !!JSON.parse(cache.getItem(BASE_KEY) || 'null')?.first; } catch { return false; }
+}
+
 export const accountInfo = () => info;
 export const signedInAccount = () => current;
 export const accountSwitching = () => switching;
