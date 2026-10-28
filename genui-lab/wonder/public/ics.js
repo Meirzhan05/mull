@@ -37,21 +37,21 @@ const ITEM_VERB = { lesson: 'Lesson', review: 'Review', quiz: 'Quiz' };
 export function planToIcs(plan, { time = '18:00', minutes = 20, url = '', now = new Date() } = {}) {
   const [hh, mm] = (/^([01]\d|2[0-3]):([0-5]\d)$/.test(time) ? time : '18:00').split(':');
   const start = planStart(plan) || cleanDateKey(new Date(now).toISOString().slice(0, 10));
-  const lines = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Wonder//Study plan//EN', 'CALSCALE:GREGORIAN', 'METHOD:PUBLISH', `X-WR-CALNAME:${icsEscape(`Wonder: ${plan.goal || 'Study plan'}`)}`];
+  const lines = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Mull//Study plan//EN', 'CALSCALE:GREGORIAN', 'METHOD:PUBLISH', `X-WR-CALNAME:${icsEscape(`Mull: ${plan.goal || 'Study plan'}`)}`];
   (plan.days || []).forEach((d, i) => {
     const date = addDays(start, i).replace(/-/g, '');
     const items = (d.items || []).map((it) => `• ${ITEM_VERB[it.kind] || 'Study'}: ${it.title}`);
-    const desc = [`Day ${i + 1} of your plan: ${plan.goal || ''}`.trim(), ...items, url ? `Open Wonder: ${url}` : ''].filter(Boolean).join('\n');
+    const desc = [`Day ${i + 1} of your plan: ${plan.goal || ''}`.trim(), ...items, url ? `Open Mull: ${url}` : ''].filter(Boolean).join('\n');
     lines.push(
       'BEGIN:VEVENT',
       `UID:${icsEscape(`${plan.id || 'plan'}-d${i + 1}@wonder.local`)}`,
       `DTSTAMP:${stamp(now)}`,
       `DTSTART:${date}T${hh}${mm}00`,
       `DURATION:PT${Math.max(5, Math.round(minutes))}M`,
-      `SUMMARY:${icsEscape(`Wonder · ${d.focus || `Day ${i + 1}`}`)}`,
+      `SUMMARY:${icsEscape(`Mull · ${d.focus || `Day ${i + 1}`}`)}`,
       `DESCRIPTION:${icsEscape(desc)}`,
       ...(url ? [`URL:${icsEscape(url)}`] : []),
-      'BEGIN:VALARM', 'ACTION:DISPLAY', `DESCRIPTION:${icsEscape(`Time to study: ${d.focus || plan.goal || 'Wonder'}`)}`, 'TRIGGER:PT0M', 'END:VALARM',
+      'BEGIN:VALARM', 'ACTION:DISPLAY', `DESCRIPTION:${icsEscape(`Time to study: ${d.focus || plan.goal || 'Mull'}`)}`, 'TRIGGER:PT0M', 'END:VALARM',
       'END:VEVENT');
   });
   if (cleanDateKey(plan.deadline)) {

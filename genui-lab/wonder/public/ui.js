@@ -85,6 +85,25 @@ export function icon(name, cls = 'ui-icon') {
   return svg;
 }
 
+// The Mull mark: a lowercase m whose last leg curls back on itself, with the accent dot. Same
+// drawing as app/icon.svg; the tile, stroke and dot take their colors from CSS (.brand-mark).
+const MARK_PATH = 'M8.5 21.5V14.25a3.75 3.75 0 0 1 7.5 0V21.5M16 14.25a3.75 3.75 0 0 1 7.5 0v4.5a2.5 2.5 0 0 1-5 0';
+export function brandMark() {
+  const NS = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(NS, 'svg');
+  svg.setAttribute('viewBox', '0 0 32 32');
+  svg.setAttribute('aria-hidden', 'true');
+  svg.setAttribute('class', 'brand-mark');
+  const tile = document.createElementNS(NS, 'rect');
+  for (const [k, v] of [['width', 32], ['height', 32], ['rx', 9]]) tile.setAttribute(k, v);
+  const m = document.createElementNS(NS, 'path');
+  m.setAttribute('d', MARK_PATH);
+  const dot = document.createElementNS(NS, 'circle');
+  for (const [k, v] of [['cx', 18.5], ['cy', 15.2], ['r', 1.6]]) dot.setAttribute(k, v);
+  svg.append(tile, m, dot);
+  return svg;
+}
+
 let toastTimer = null;
 export function toast(text, ms = 2600) {
   const t = document.getElementById('toast');

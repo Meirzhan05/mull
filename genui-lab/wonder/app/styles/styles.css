@@ -233,9 +233,13 @@ input[type="text"], input[type="search"], input:not([type]), select, textarea { 
 .sidebar { display: none; }
 main { display: block; padding: 20px 16px calc(var(--tabbar-h) + 32px + env(safe-area-inset-bottom)); max-width: 1120px; margin: 0 auto; outline: none; }
 
-.brand { display: inline-flex; align-items: center; gap: 0; text-decoration: none; margin: 0; }
+.brand { display: inline-flex; align-items: center; gap: 8px; text-decoration: none; margin: 0; color: var(--ink); }
 .brand-name { font-weight: 650; font-size: 1.05rem; letter-spacing: -0.04em; line-height: 1; }
-.brand-dot { font-weight: 650; font-size: 1.05rem; line-height: 1; color: var(--accent); }
+/* the mark inverts with the theme like primary buttons; the dot is the accent */
+.brand-mark { width: 22px; height: 22px; flex: 0 0 auto; }
+.brand-mark rect { fill: var(--brand); }
+.brand-mark path { fill: none; stroke: var(--brand-ink); stroke-width: 2.6; stroke-linecap: round; stroke-linejoin: round; }
+.brand-mark circle { fill: var(--accent); }
 
 .topbar {
   position: sticky; top: 0; z-index: 30; display: flex; align-items: center; justify-content: space-between; gap: 10px;
@@ -295,7 +299,6 @@ main { display: block; padding: 20px 16px calc(var(--tabbar-h) + 32px + env(safe
   body[data-screen="lesson"] .sidebar .side-recent,
   body[data-screen="lesson"] .sidebar .side-theme-label { display: none; }
   body[data-screen="lesson"] .sidebar .brand { padding: 6px 0 14px; }
-  body[data-screen="lesson"] .sidebar .brand::before { content: "W"; font-weight: 650; font-size: 1.05rem; letter-spacing: -0.04em; line-height: 1; }
   body[data-screen="lesson"] .sidebar .nav-link { justify-content: center; padding: 0; width: 36px; }
   body[data-screen="lesson"] .sidebar .nav-link .badge { position: absolute; top: -2px; right: -4px; }
   body[data-screen="lesson"] .sidebar .search-trigger { width: 36px; justify-content: center; padding: 0; }

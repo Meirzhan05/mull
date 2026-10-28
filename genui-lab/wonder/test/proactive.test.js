@@ -150,7 +150,7 @@ test('ics: one event per day at the reminder time, escaped and folded, plus the 
   assert.match(ics, /DTSTART;VALUE=DATE:20261024/);
   for (const line of ics.split('\r\n')) assert.ok(new TextEncoder().encode(line).length <= 75, line);
   const flat = ics.replace(/\r\n /g, ''); // unfold
-  assert.match(flat, /SUMMARY:Wonder · Spread/);
+  assert.match(flat, /SUMMARY:Mull · Spread/);
   assert.match(flat, /DESCRIPTION:Day 2 of your plan: Statistics exam\\n• Lesson: Variance\\n• Review: Review/);
   assert.match(ics, /UID:p1-d1@wonder.local/);
   assert.match(ics, /DTSTAMP:20261021T100000Z/);

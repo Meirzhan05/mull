@@ -92,7 +92,7 @@ test('accounts on, Claude mode: signed out gets 401 on every Claude route; caps 
       const r = await anon('POST', p, body);
       assert.equal(r.status, 401, p);
       assert.equal(r.body.signedOut, true, p);
-      assert.match(r.body.error, /Sign in to use Wonder/);
+      assert.match(r.body.error, /Sign in to use Mull/);
     }
     assert.equal(client.calls.stream.length, 0, 'no Claude call for a signed-out request');
     const first = await alice('POST', '/api/lesson/stream', LESSON);
@@ -127,10 +127,10 @@ test('demo mode has no caps (it costs nothing); accounts off keeps the single-us
 test('browser: signed out and a used-up cap are not retried, and say so', async () => {
   const reply = (status, body) => async () => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
   const err = async (status, body) => { try { await streamTurn('/api/lesson/stream', {}, { fetch: reply(status, body) }); } catch (e) { return e; } return null; };
-  const out = await err(401, { ok: false, error: 'Sign in to use Wonder', signedOut: true });
+  const out = await err(401, { ok: false, error: 'Sign in to use Mull', signedOut: true });
   assert.equal(out.code, 'signed_out');
   assert.equal(out.retryable, false);
-  assert.equal(out.message, 'Sign in to use Wonder');
+  assert.equal(out.message, 'Sign in to use Mull');
   const lim = await err(429, limitBody('lesson', 20));
   assert.equal(lim.code, 'daily_limit');
   assert.equal(lim.retryable, false, 'a 429 that carries `limited` is final, unlike Claude being busy');

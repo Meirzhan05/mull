@@ -43,8 +43,11 @@ button { cursor: pointer; }
 }
 .bar.is-solid { background: color-mix(in oklab, #0A0A0A 97%, transparent); border-bottom-color: var(--line); }
 .bar__mark { display: inline-flex; align-items: center; gap: 10px; color: var(--sc-ink); text-decoration: none; font-weight: 600; letter-spacing: -0.01em; justify-self: start; }
-.bar__mark svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linejoin: round; stroke-linecap: round; }
-.bar__beam { stroke: var(--ink-faint); }
+/* the Mull mark (app/icon.svg), inverted for the dark page */
+.bar__mark svg { width: 22px; height: 22px; flex: 0 0 auto; }
+.bar__mark rect { fill: var(--sc-ink); }
+.bar__mark path { fill: none; stroke: var(--sc-canvas); stroke-width: 2.6; stroke-linejoin: round; stroke-linecap: round; }
+.bar__mark circle { fill: var(--sc-accent); }
 .bar__pages { display: flex; gap: 6px; }
 .bar__pages a {
   position: relative; flex: 1; height: 20px; display: flex; align-items: center;

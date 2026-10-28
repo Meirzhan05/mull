@@ -31,7 +31,7 @@ export function masteryPanel(ctx) {
       weak.length ? el('button', { class: 'btn btn-secondary btn-sm', type: 'button', onclick: () => practiceConcepts(ctx.actions, weak) }, 'Practice weak spots') : null);
     if (!list.length) {
       wrap.replaceChildren(head, el('div', { class: 'card mastery-empty' }, el('p', { class: 'muted' },
-        'Answer a lesson quiz or review a few cards and Wonder will start estimating how well you know each concept. Lessons, the tutor and your Teacher use it to recap what is shaky and skip what you already know.')));
+        'Answer a lesson quiz or review a few cards and Mull will start estimating how well you know each concept. Lessons, the tutor and your Teacher use it to recap what is shaky and skip what you already know.')));
       return;
     }
     const groups = STATUS_ORDER.map((status) => {

@@ -96,7 +96,7 @@ function reminderSetting(settings, setSetting) {
   const describe = () => {
     note.textContent = !supported ? 'This browser has no notifications. Use “Add to calendar” on your study plan instead.'
       : Notification.permission === 'denied' ? 'Notifications are blocked for this site in your browser settings. “Add to calendar” on your plan still works.'
-        : r().enabled ? `Wonder nudges you at ${r().time} on days you haven’t studied yet, ${pushAvailable() ? 'on this device even when Wonder is closed' : 'while a Wonder tab is open'}. Plan events added to your calendar use this time too.`
+        : r().enabled ? `Mull nudges you at ${r().time} on days you haven’t studied yet, ${pushAvailable() ? 'on this device even when Mull is closed' : 'while a Mull tab is open'}. Plan events added to your calendar use this time too.`
           : 'A nudge at this time on days you haven’t studied yet. Plan events added to your calendar use this time too.';
   };
   sw.addEventListener('click', async () => {

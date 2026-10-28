@@ -3,10 +3,12 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Wonder · Name anything you want to understand</title>
-<meta name="description" content="Name anything you want to understand. Wonder writes you a short lesson as you read, with a tutor beside the text and reviews that help it stay.">
+<title>Mull · Name anything you want to understand</title>
+<meta name="description" content="Name anything you want to understand. Mull writes you a short lesson as you read, with a tutor beside the text and reviews that help it stay.">
 <meta name="theme-color" content="#0A0A0A">
-<meta property="og:title" content="Wonder · Name anything you want to understand">
+<link rel="icon" href="/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/apple-icon.png">
+<meta property="og:title" content="Mull · Name anything you want to understand">
 <meta property="og:image" content="/welcome/assets/og.webp">
 <!-- Where "Start a lesson" goes: the app at /, which opens #/learn/<topic> as a new lesson. Served at /welcome (next.config.mjs), so paths here are absolute. -->
 <meta name="wonder-app" content="/">
@@ -26,11 +28,11 @@
 <div class="sc-grain" aria-hidden="true"></div>
 <a class="skip" href="#p1">Skip to the lesson</a>
 
-<!-- The reader's own chrome: one segment per page, like Wonder's lesson bar. -->
+<!-- The reader's own chrome: one segment per page, like Mull's lesson bar. -->
 <header class="bar" id="bar">
-  <a class="bar__mark" href="#top" aria-label="Wonder, back to the title page">
-    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M1 9.5h8.6" class="bar__beam"/><path d="M12 4.5 19.5 18h-15z"/></svg>
-    <span>Wonder</span>
+  <a class="bar__mark" href="#top" aria-label="Mull, back to the title page">
+    <svg viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="9"/><path d="M8.5 21.5V14.25a3.75 3.75 0 0 1 7.5 0V21.5M16 14.25a3.75 3.75 0 0 1 7.5 0v4.5a2.5 2.5 0 0 1-5 0"/><circle cx="18.5" cy="15.2" r="1.6"/></svg>
+    <span>Mull</span>
   </a>
   <nav class="bar__pages" aria-label="Pages">
     <a href="#p1" data-seg="p1"><span class="bar__fill"></span><span class="sr">Page 1: Anything</span></a>
@@ -41,7 +43,7 @@
   </nav>
   <div class="bar__end">
     <p class="bar__where sc-nums" id="where" aria-live="off"></p>
-    <a class="bar__in" id="bar-in" href="/#/">Open Wonder</a>
+    <a class="bar__in" id="bar-in" href="/#/">Open Mull</a>
   </div>
 </header>
 
@@ -53,7 +55,7 @@
       <div class="hero__plane hero__plate" aria-hidden="true"><img src="/welcome/assets/plate.webp" alt="" width="1402" height="1122"></div>
       <div class="hero__copy" data-sc-cue="0 0.42 0 0.16">
         <h1 id="hero-h" class="sc-display hero__h">Name anything you want to understand.</h1>
-        <p class="hero__sub">Wonder's AI writes you a short lesson as you read, with sources and a quiz, then brings it back so it sticks.</p>
+        <p class="hero__sub">Mull's AI writes you a short lesson as you read, with sources and a quiz, then brings it back so it sticks.</p>
         <form class="composer" data-composer>
           <label class="sr" for="topic-1">What do you want to learn?</label>
           <input id="topic-1" name="topic" type="text" placeholder="What do you want to learn?" autocomplete="off" maxlength="200" data-examples>
@@ -61,7 +63,7 @@
         </form>
         <p class="composer__note" data-next data-try hidden></p>
       </div>
-      <p class="hero__beat sc-display" data-sc-cue="0.5 1 0.14 0.05">A chat answers once.<br>Wonder teaches it, then brings it back.</p>
+      <p class="hero__beat sc-display" data-sc-cue="0.5 1 0.14 0.05">A chat answers once.<br>Mull teaches it, then brings it back.</p>
       <div class="hero__plane hero__subject" aria-hidden="true">
         <picture>
           <source media="(max-width: 760px)" srcset="/welcome/assets/subject-tall.webp">
@@ -106,7 +108,7 @@
   <section id="p1" class="page p1 sc-section" data-sc-act="flow" data-sc-drift="#0A0A0A" data-page="1" aria-labelledby="p1-h">
     <div class="sc-wrap p1__head sc-stack" data-sc-in data-sc-stagger="70">
       <h2 id="p1-h" class="sc-display sc-display--md">Science, money, music, history. Or your own question.</h2>
-      <p class="sc-body">Pick a subject or type anything. Wonder writes for your level and suggests what to read next from the subjects you like.</p>
+      <p class="sc-body">Pick a subject or type anything. Mull writes for your level and suggests what to read next from the subjects you like.</p>
     </div>
     <nav class="topics" id="topics" aria-label="Topics to start a lesson on"></nav>
     <p class="p1__turn sc-wrap sc-display" data-sc-in>Pick one, and the lesson writes itself while you read.</p>
@@ -125,9 +127,9 @@
           <li data-note="steer">Too dense? Tap <b>Simpler</b> and it rewrites from there.</li>
           <li data-note="done">A short quiz at the end, then cards to keep. Try this one; it works.</li>
         </ol>
-        <p class="p2__cap">A real Wonder lesson, recorded October 23, 2026, replayed as you scroll.</p>
+        <p class="p2__cap">A real Mull lesson, recorded October 23, 2026, replayed as you scroll.</p>
       </div>
-      <div class="reader" aria-label="A Wonder lesson">
+      <div class="reader" aria-label="A Mull lesson">
         <div class="reader__bar">
           <span class="reader__title" id="reader-title">New lesson</span>
           <span class="reader__segs" id="reader-segs" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span>
@@ -139,7 +141,7 @@
           <article class="lesson" id="lesson"></article>
         </div>
         <form class="composer composer--close yourturn" id="yourturn" data-composer>
-          <label class="yourturn__ask" for="topic-3">Your turn. What should Wonder write for you?</label>
+          <label class="yourturn__ask" for="topic-3">Your turn. What should Mull write for you?</label>
           <p class="yourturn__try">This lesson is yours to try first, no sign-in: take the quiz above, step through the examples.</p>
           <div class="composer__row">
             <input id="topic-3" name="topic" type="text" placeholder="Any topic, any level" autocomplete="off" maxlength="200" tabindex="-1">
@@ -178,7 +180,7 @@
     <div data-sc-stage class="sc-stage p4__stage" id="memory" data-sc-verify-state="0">
       <div class="p4__copy sc-stack">
         <h2 id="p4-h" class="sc-display sc-display--md">Then it makes sure you keep it.</h2>
-        <p class="sc-body" id="p4-body">When you finish a lesson, its key ideas become cards. Wonder brings each one back just before you'd forget it, and the gaps keep growing.</p>
+        <p class="sc-body" id="p4-body">When you finish a lesson, its key ideas become cards. Mull brings each one back just before you'd forget it, and the gaps keep growing.</p>
         <div class="keep" aria-label="Cards from the lesson above">
           <p class="keep__k">Cards from the lesson above</p>
           <ul class="keep__cards" id="keep"></ul>
@@ -192,9 +194,9 @@
         </div>
         <svg id="curve-svg" viewBox="0 0 720 380" role="img" aria-labelledby="curve-title curve-desc">
           <title id="curve-title">How well you remember one card over six months</title>
-          <desc id="curve-desc">Without reviews, recall decays steadily. With Wonder's scheduled reviews, recall returns to full at each review and decays more slowly each time.</desc>
+          <desc id="curve-desc">Without reviews, recall decays steadily. With Mull's scheduled reviews, recall returns to full at each review and decays more slowly each time.</desc>
         </svg>
-        <figcaption>How well you'd remember one card you get right each time it comes back. The review dates come from the same scheduler Wonder uses.</figcaption>
+        <figcaption>How well you'd remember one card you get right each time it comes back. The review dates come from the same scheduler Mull uses.</figcaption>
       </figure>
     </div>
   </section>
@@ -204,7 +206,7 @@
     <div class="sc-wrap">
       <div class="p5__head" data-sc-in data-sc-stagger="70">
         <h2 id="p5-h" class="sc-display sc-display--md">A little every day.</h2>
-        <p class="sc-body">Today shows the one thing to do next: finish a lesson, review what's due, or take the next step in a course. Tell the Teacher (Wonder's study coach, which knows what you've learned) a goal, and it plans your week.</p>
+        <p class="sc-body">Today shows the one thing to do next: finish a lesson, review what's due, or take the next step in a course. Tell the Teacher (Mull's study coach, which knows what you've learned) a goal, and it plans your week.</p>
       </div>
       <div class="week" data-sc-in>
         <div class="week__top">
@@ -240,15 +242,15 @@
         </ol>
       </form>
       <footer class="foot">
-        <p><span class="foot__mark">Wonder</span> Lessons, the tutor and the Teacher are written by Claude, an AI made by Anthropic.</p>
-        <p>The lesson and the plan on this page are real recordings from Wonder.</p>
+        <p><span class="foot__mark">Mull</span> Lessons, the tutor and the Teacher are written by Claude, an AI made by Anthropic.</p>
+        <p>The lesson and the plan on this page are real recordings from Mull.</p>
       </footer>
     </div>
   </section>
 
 </main>
 
-<noscript><p class="noscript">This page replays a recorded lesson with JavaScript. <a href="/">Open Wonder</a> to start one.</p></noscript>
+<noscript><p class="noscript">This page replays a recorded lesson with JavaScript. <a href="/">Open Mull</a> to start one.</p></noscript>
 
 <script src="/welcome/scrollcraft.js"></script>
 <script>ScrollCraft.mount(document.body);</script>

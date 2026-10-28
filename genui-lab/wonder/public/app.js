@@ -1253,7 +1253,7 @@ async function finishLesson(lessonId, btn, { onFinished } = {}) {
       saveLesson(lessonId, { memoryExtracted: true });
       const tutorThread = (lesson.tutor || []).filter((m) => m.role === 'user').map((m) => m.content);
       postJson('/api/memory/extract', { lessonTitle: lesson.title, quizResults: lesson.quizResults || [], tutorThread, memoryEnabled: true })
-        .then((r) => { if (r.added?.length) setTimeout(() => toast(`Wonder will remember: ${r.added[0].fact}`, 4200), 1400); })
+        .then((r) => { if (r.added?.length) setTimeout(() => toast(`Mull will remember: ${r.added[0].fact}`, 4200), 1400); })
         .catch(() => {});
     }
   } catch (e) {
@@ -1400,7 +1400,7 @@ function route() {
   refreshChrome();
   if (h !== '#/memory' && h !== '#/mastery' && h !== '#/interests') window.scrollTo(0, 0);
   const titles = { home: 'Today', library: 'Library', review: 'Review', teacher: 'Teacher', you: 'You', course: 'Course', lesson: 'Lesson' };
-  document.title = screen === 'home' ? 'Wonder' : `${titles[screen]} · Wonder`;
+  document.title = screen === 'home' ? 'Mull' : `${titles[screen]} · Mull`;
 }
 
 window.addEventListener('hashchange', route);

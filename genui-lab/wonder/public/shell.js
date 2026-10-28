@@ -4,7 +4,7 @@
 // courses, cards and Teacher chats (search-core.js). Screens render into #app; the shell only
 // reflects the current route and the learner's stats.
 
-import { el, icon, toast } from './ui.js';
+import { el, icon, toast, brandMark } from './ui.js';
 import { deckStats, currentStreak } from './deck.js';
 import { studiedToday, matchScore, courseProgress, recentLessons, lessonState } from './progress-core.js';
 import { searchStoreGroups, openResult, resultBody, hasTitleHit, TYPE_ICON, resultCount } from './search-ui.js';
@@ -33,8 +33,8 @@ export function createShell({ store, getStatus, actions }) {
   const tabbar = document.getElementById('tabbar');
   const banner = document.getElementById('demo-banner');
 
-  const brand = () => el('a', { class: 'brand', href: '#/', 'aria-label': 'Wonder, today' },
-    el('span', { class: 'brand-name' }, 'Wonder'), el('span', { class: 'brand-dot', 'aria-hidden': 'true' }, '.'));
+  const brand = () => el('a', { class: 'brand', href: '#/', 'aria-label': 'Mull, today' },
+    brandMark(), el('span', { class: 'brand-name' }, 'Mull'));
 
   // -- theme
   let theme = 'system';

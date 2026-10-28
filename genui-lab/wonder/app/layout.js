@@ -20,9 +20,9 @@ const sans = Geist({ subsets: ['latin'], variable: '--font-sans-face', display: 
 const mono = Geist_Mono({ subsets: ['latin'], variable: '--font-mono-face', display: 'swap' });
 
 export const metadata = {
-  title: 'Wonder',
+  title: 'Mull',
   description: 'Learn anything with interactive AI lessons, a tutor, and spaced-repetition review.',
-  icons: { icon: "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='9' fill='%23111111'/%3E%3Cpath d='M9 11l3 11 4-8 4 8 3-11' fill='none' stroke='%23FFFFFF' stroke-width='2.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E" },
+  // icons: app/icon.svg (favicon) and app/apple-icon.png (home screen), picked up by file convention
 };
 
 export const viewport = {

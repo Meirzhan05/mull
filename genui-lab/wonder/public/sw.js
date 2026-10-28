@@ -8,7 +8,7 @@ self.addEventListener('activate', (event) => event.waitUntil(self.clients.claim(
 self.addEventListener('push', (event) => {
   let d = {};
   try { d = event.data ? event.data.json() : {}; } catch { d = { body: event.data ? event.data.text() : '' }; }
-  event.waitUntil(self.registration.showNotification(d.title || 'Wonder', {
+  event.waitUntil(self.registration.showNotification(d.title || 'Mull', {
     body: d.body || 'Time for today’s learning.',
     tag: d.tag || 'wonder-daily',
     data: { url: typeof d.url === 'string' && d.url.startsWith('/') ? d.url : '/#/' },
