@@ -15,7 +15,8 @@ const NAV = [
   { id: 'library', label: 'Library', icon: 'library', href: '#/library' },
   { id: 'review', label: 'Review', icon: 'repeat', href: '#/review' },
   { id: 'teacher', label: 'Teacher', icon: 'teacher', href: '#/teacher' },
-  { id: 'you', label: 'You', icon: 'user', href: '#/you' },
+  // mobile tabs only: on desktop the profile link at the bottom of the sidebar opens You
+  { id: 'you', label: 'You', icon: 'user', href: '#/you', mobileOnly: true },
 ];
 // which nav entry a screen belongs to
 const SECTION = { home: 'today', course: 'library', lesson: 'library', library: 'library', review: 'review', teacher: 'teacher', you: 'you', memory: 'you' };
@@ -54,7 +55,7 @@ export function createShell({ store, getStatus, actions }) {
   // -- sidebar (desktop)
   const navLinks = {};
   const navBadges = {};
-  const nav = el('nav', { class: 'nav', 'aria-label': 'Sections' }, ...NAV.map((n) => {
+  const nav = el('nav', { class: 'nav', 'aria-label': 'Sections' }, ...NAV.filter((n) => !n.mobileOnly).map((n) => {
     navBadges[n.id] = el('span', { class: 'badge', hidden: true });
     navLinks[n.id] = el('a', { class: 'nav-link', href: n.href, title: n.label }, icon(n.icon), el('span', { class: 'nav-label' }, n.label), navBadges[n.id]);
     return navLinks[n.id];
@@ -128,10 +129,13 @@ export function createShell({ store, getStatus, actions }) {
     const section = SECTION[screen] || 'today';
     for (const n of NAV) {
       for (const m of [navLinks, tabLinks]) {
+        if (!m[n.id]) continue;
         if (n.id === section) m[n.id].setAttribute('aria-current', 'page');
         else m[n.id].removeAttribute('aria-current');
       }
     }
+    if (section === 'you') profile.setAttribute('aria-current', 'page');
+    else profile.removeAttribute('aria-current');
   }
 
   function refresh() {
