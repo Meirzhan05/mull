@@ -65,7 +65,19 @@ export function createShell({ store, getStatus, actions }) {
   const goalMini = el('a', { class: 'goal-mini', href: '#/you', title: 'Streak' });
   const recent = el('nav', { class: 'side-recent', 'aria-label': 'Recent lessons and courses' });
   const profile = el('a', { class: 'side-profile', href: '#/you' });
-  sidebar.replaceChildren(brand(), searchBtn, nav, recent, el('div', { class: 'sidebar-foot' }, goalMini, profile));
+  // lessons fold the sidebar to a rail (styles.css); this unfolds it, and the choice is remembered
+  const sideToggle = el('button', { class: 'side-toggle', type: 'button', onclick: () => setSideOpen(!document.body.classList.contains('side-open')) }, icon('chevron'));
+  const setSideOpen = (open) => {
+    document.body.classList.toggle('side-open', open);
+    sideToggle.setAttribute('aria-expanded', String(open));
+    sideToggle.setAttribute('aria-label', open ? 'Collapse sidebar' : 'Expand sidebar');
+    sideToggle.title = open ? 'Collapse sidebar' : 'Expand sidebar';
+    try { localStorage.setItem('wonder.sidebar', open ? 'open' : 'rail'); } catch {}
+  };
+  let sideOpen = false;
+  try { sideOpen = localStorage.getItem('wonder.sidebar') === 'open'; } catch {}
+  setSideOpen(sideOpen);
+  sidebar.replaceChildren(brand(), sideToggle, searchBtn, nav, recent, el('div', { class: 'sidebar-foot' }, goalMini, profile));
 
   let profileKey = '';
   function drawProfile(d) {

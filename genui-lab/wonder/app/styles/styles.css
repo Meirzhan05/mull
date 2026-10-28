@@ -289,20 +289,29 @@ main { display: block; padding: 20px 16px calc(var(--tabbar-h) + 32px + env(safe
     border-right: 1px solid var(--line); background: var(--bg-deep); overflow-y: auto; overflow-x: hidden;
   }
   .sidebar .brand { padding: 6px 8px 14px; }
-  body[data-screen="lesson"] .shell { grid-template-columns: 60px minmax(0, 1fr); }
-  body[data-screen="lesson"] .sidebar { padding: 16px 8px; align-items: center; }
-  body[data-screen="lesson"] .sidebar .brand-name,
-  body[data-screen="lesson"] .sidebar .nav-label,
-  body[data-screen="lesson"] .sidebar .search-trigger-text,
-  body[data-screen="lesson"] .sidebar .search-trigger kbd,
-  body[data-screen="lesson"] .sidebar .goal-mini,
-  body[data-screen="lesson"] .sidebar .side-recent,
-  body[data-screen="lesson"] .sidebar .side-profile-text { display: none; }
-  body[data-screen="lesson"] .sidebar .brand { padding: 6px 0 14px; }
-  body[data-screen="lesson"] .sidebar .nav-link { justify-content: center; padding: 0; width: 36px; }
-  body[data-screen="lesson"] .sidebar .nav-link .badge { position: absolute; top: -2px; right: -4px; }
-  body[data-screen="lesson"] .sidebar .search-trigger { width: 36px; justify-content: center; padding: 0; }
-  body[data-screen="lesson"] .sidebar .side-profile { width: 36px; justify-content: center; padding: 0; }
+  /* lessons fold the sidebar to a rail; its toggle (shell.js) unfolds it */
+  body[data-screen="lesson"]:not(.side-open) .shell { grid-template-columns: 60px minmax(0, 1fr); }
+  body[data-screen="lesson"]:not(.side-open) .sidebar { padding: 16px 8px; align-items: center; }
+  body[data-screen="lesson"]:not(.side-open) .sidebar .brand-name,
+  body[data-screen="lesson"]:not(.side-open) .sidebar .nav-label,
+  body[data-screen="lesson"]:not(.side-open) .sidebar .search-trigger-text,
+  body[data-screen="lesson"]:not(.side-open) .sidebar .search-trigger kbd,
+  body[data-screen="lesson"]:not(.side-open) .sidebar .goal-mini,
+  body[data-screen="lesson"]:not(.side-open) .sidebar .side-recent,
+  body[data-screen="lesson"]:not(.side-open) .sidebar .side-profile-text { display: none; }
+  body[data-screen="lesson"]:not(.side-open) .sidebar .brand { padding: 6px 0 14px; }
+  body[data-screen="lesson"]:not(.side-open) .sidebar .nav-link { justify-content: center; padding: 0; width: 36px; }
+  body[data-screen="lesson"]:not(.side-open) .sidebar .nav-link .badge { position: absolute; top: -2px; right: -4px; }
+  body[data-screen="lesson"]:not(.side-open) .sidebar .search-trigger { width: 36px; justify-content: center; padding: 0; }
+  body[data-screen="lesson"]:not(.side-open) .sidebar .side-profile { width: 36px; justify-content: center; padding: 0; }
+  body[data-screen="lesson"] .side-toggle {
+    display: grid; place-items: center; position: absolute; top: 18px; right: 10px; width: 28px; height: 28px;
+    border: 0; border-radius: var(--r-sm); background: none; color: var(--ink-3); cursor: pointer;
+  }
+  body[data-screen="lesson"] .side-toggle:hover { background: var(--hover); color: var(--ink); }
+  body[data-screen="lesson"] .side-toggle:focus-visible { outline: none; box-shadow: var(--ring); }
+  body[data-screen="lesson"].side-open .side-toggle .ui-icon { transform: rotate(180deg); }
+  body[data-screen="lesson"]:not(.side-open) .side-toggle { position: static; width: 36px; height: 32px; margin-bottom: 6px; }
 }
 .search-trigger {
   display: flex; align-items: center; gap: 8px; height: 32px; padding: 0 6px 0 10px; margin-bottom: 10px; border-radius: var(--r-md); border: 1px solid var(--control-border);
@@ -335,6 +344,7 @@ main { display: block; padding: 20px 16px calc(var(--tabbar-h) + 32px + env(safe
 .side-item-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .side-item-meta { font-family: var(--font-mono); font-size: 0.6875rem; color: var(--ink-3); font-variant-numeric: tabular-nums; }
 .side-empty { margin: 0; padding: 2px 8px; font-size: 0.8125rem; color: var(--ink-3); }
+.side-toggle { display: none; }
 .sidebar-foot { margin-top: auto; display: grid; gap: 4px; }
 .goal-mini { display: grid; gap: 8px; padding: 12px; border: 1px solid var(--line); border-radius: var(--r-lg); background: var(--surface); text-decoration: none; box-shadow: var(--shadow-card); }
 .goal-mini:hover { border-color: var(--line-strong); }
