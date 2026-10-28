@@ -64,7 +64,7 @@ export function renderCourseReview(ctx, courseId) {
     store,
     entries,
     onExit: () => { location.hash = back; },
-    onXp: () => { refresh(); shell.bump(); },
+    onActivity: () => { refresh(); shell.bump(); },
     summary: (results) => summaryNode(ctx, course, results),
   });
   if (typeof cleanup === 'function') teardown.push(cleanup);

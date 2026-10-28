@@ -2,7 +2,7 @@
 
 Mull is a working learning app that combines the two systems reverse-engineered in this lab:
 
-- **wondering.app's product loop.** You pick a topic or plan a course. You get a short paged lesson with interactive widgets and a tutor you can ask about it. When you finish, knowledge cards are revealed in a "pack opening", and spaced-repetition review is scheduled with FSRS. XP and streaks are tracked throughout. A **Teacher** agent plans your study, proposes lessons, quizzes you and remembers what matters, and a **learner memory** personalizes every lesson, tutor reply and Teacher turn.
+- **wondering.app's product loop.** You pick a topic or plan a course. You get a short paged lesson with interactive widgets and a tutor you can ask about it. When you finish, knowledge cards are revealed in a "pack opening", and spaced-repetition review is scheduled with FSRS. A daily streak is tracked throughout. A **Teacher** agent plans your study, proposes lessons, quizzes you and remembers what matters, and a **learner memory** personalizes every lesson, tutor reply and Teacher turn.
 - **ChatGPT's "intelligent UI" (DIL).** The model writes JSX-like UI tags inline in its markdown. The server recompiles the growing message into a DIL program on every revision and streams it as `conversation-source` NDJSON. The browser runs the program in a sandboxed Web Worker and applies the resulting render ops to the DOM.
 
 The model is Claude (`claude-opus-5-5`). Without credentials the app runs in **demo mode**, streaming pre-written lessons through exactly the same pipeline.
@@ -58,8 +58,8 @@ Five sections, in a sidebar on desktop and a bottom tab bar on phones, plus a �
 - **Library (`#/library`).** Every lesson and course in this browser, with search, filters (in progress, finished, courses) and delete. Courses open as a path (`#/course/<id>`) with a progress ring and a Continue button.
 - **Review (`#/review`).** FSRS review with keyboard shortcuts: 1–5 or A–E to choose, T/F, Space to show an answer, 1–4 to grade, Enter to continue.
 - **Teacher (`#/teacher`).** The agent chat with tool cards (below).
-- **You (`#/you`).** Name, totals, a 22-week activity heatmap, settings (daily goal, theme, lesson text size), learner memory, and data export or erase.
-- **Onboarding.** A full-screen welcome in three steps: interests (with the name filled from the Google account), pace (a daily goal), and a first lesson. With accounts on it runs only after sign-in. A topic brought from the landing page leads the last step as **Your first lesson**, one press from starting. All of it is skippable.
+- **You (`#/you`).** Name, account and sync, totals, "What you know", a 22-week activity heatmap, and settings (level, interests, theme, lesson text size, reminder). Memory, material and "What works for you" are still kept and synced but have no place on this screen.
+- **Onboarding.** A full-screen welcome in two steps: interests (with the name filled from the Google account), and a first lesson. With accounts on it runs only after sign-in. A topic brought from the landing page leads the last step as **Your first lesson**, one press from starting. All of it is skippable.
 - **Landing page (`/welcome`).** A scroll page that replays a recorded lesson. Its composers and topic cards say **Continue with Google** and open `#/start/<topic>` in the app. The home page `/` opens on it instead of Today (a pre-paint script, `app/landing-script.js`, run by `app/layout.js`):
   - **Account sync on:** for any browser without an account, every time and on any hash, because everything in Mull needs a signed-in user. A deep link (`#/lesson/<id>`, `#/library`) is saved as `wonder.signInReturn`, so the visitor lands back on it after signing in. A browser that has signed in before (`wonder.account` is set) stays in the app, where **Sign in again** is if its session ended. A page coming back from Google sign-in (`?neon_auth_session_verifier=`) stays too, so the app can finish the sign-in, and so do the hashes that lead into sign-in (`#/start…`, `#/signin`, `#/learn/…`). Neon Auth's cookies are HttpOnly, so the script goes by the account marker, not cookies.
   - **Accounts off:** for a first-time visitor, once (`wonder.welcomed`), when this browser has no Mull data (`wonder.v1`, `wonder.account`).
@@ -67,7 +67,7 @@ Five sections, in a sidebar on desktop and a bottom tab bar on phones, plus a �
   - **Real recordings.** The replayed lesson ("Why the Roman Empire Fell", `test/fixtures/claude-lesson-rome.ndjson`, steered once with Simpler) and the Teacher's week (`claude-teacher-statistics.ndjson`) are real claude-opus-5-5 turns. `npm run welcome:data` rebuilds `public/welcome/js/data.js` from them.
   - **Ways in.** `#/start[/<topic>]` (`public/start-core.js`): the composers (hero, the end of the replay, the close), the topic chips and cards link there. With accounts on and signed out it signs in with Google first, and the topic waits in `wonder.afterSignIn`. A new account then gets onboarding with the topic leading its last step; someone already onboarded starts the lesson. Without accounts it opens onboarding or the lesson directly. `#/learn/<topic>` (old links) signs in first the same way, and `#/signin` opens sign-in over Today. The page asks `/api/account`: with accounts on and nobody signed in, the bar's link reads **Sign in** and the notes name the steps that follow (the close lists onboarding's own step names). Accounts off, or already signed in, the composers read **Start a lesson** and the link reads **Open Mull**. `app/layout.js` marks `<html data-accounts>` so the client knows at boot whether sign-in comes first.
 
-**Design.** A neutral design system in light and dark (Vercel-style grays: white and near-black), with one blue accent for focus, links and the current state. Geist for text and Geist Mono for numbers and keys (both self-hosted by `next/font`); soft corners, filled controls with focus rings, pill segmented controls and cards with a hairline border and a light shadow. Each section has its own layout: **Today** is a dashboard (a command bar, the "Up next" queue, suggestion tiles and recent reading, and a rail with today's XP, the streak, the deck and the study plan); **Library** is a pair of sortable tables; **Review** puts the card beside a live session panel (position, accuracy, the queue, the deck, the keys); **Teacher** adds a column showing what it sees (your progress, memory and plan); **You** is a settings page with a section nav. Lessons are a clean article with numbered pages; finishing one turns its ideas into cards. Reading time is estimated from the prose plus about half a minute per interactive widget.
+**Design.** A neutral design system in light and dark (Vercel-style grays: white and near-black), with one blue accent for focus, links and the current state. Geist for text and Geist Mono for numbers and keys (both self-hosted by `next/font`); soft corners, filled controls with focus rings, pill segmented controls and cards with a hairline border and a light shadow. Each section has its own layout: **Today** is a dashboard (a command bar, the "Up next" queue, suggestion tiles and recent reading, and a rail with the streak, the deck and the study plan); **Library** is a pair of sortable tables; **Review** puts the card beside a live session panel (position, accuracy, the queue, the deck, the keys); **Teacher** adds a column showing what it sees (your progress, memory and plan); **You** is a settings page with a section nav. Lessons are a clean article with numbered pages; finishing one turns its ideas into cards. Reading time is estimated from the prose plus about half a minute per interactive widget.
 
 ## On Next.js
 
@@ -90,7 +90,7 @@ Five sections, in a sidebar on desktop and a bottom tab bar on phones, plus a �
 | Lesson shape | n/a | `#` title, hook, pages (`##` sections), embeds per page, KeyTerm highlights, wondering-lens asides, 3-question check (§1.5) | Same pedagogy, taught to Claude in `server/prompts.js`. Each `##` renders as a numbered "page" |
 | Tutor | Follow-ups via `followupPrompts` | `course-chat`, `quick_replies` | `/api/tutor/stream` with the lesson as context. Replies are DIL (they can include a Quiz or a visual). `<Followups items={[…]}/>` is lifted out of the program into `followupPrompts` chips |
 | Practice | n/a | `generate-knowledge-cards`, practice types mcq/cloze/binary_choice/flashcard, FSRS v5 via ts-fsrs, pack opening (§1.6, §5) | `/api/practice/extract` uses Claude structured output (`json_schema`, effort low) with a deterministic fallback. FSRS scheduling uses wondering-genui's `fsrs.js` port with shipped defaults. Deck and review logs live in localStorage |
-| Gamification | n/a | XP events, streaks with local-date keys (§7) | `public/deck.js`: XP for lessons, quiz answers, reviews and collected cards, plus a streak that counts consecutive local days |
+| Gamification | n/a | XP events, streaks with local-date keys (§7) | `public/deck.js`: no XP. Finished lessons, quizzes, explanations and reviews count as the day's activity (the heatmap), plus a streak that counts consecutive local days |
 | Agent with tool cards | Server-resolved catalog components: `componentResults[__resolutionId]` (§3.4, §8.2); widget server actions (§3.6) | `teacher-chat`: SSE `tool_start`/`tool_result`, cards `plan`/`approval`/`quiz`/`memory`, `resolve_action`/`undo_action` (wondering §2.3) | `/api/teacher/stream`: Claude's tool calls run on the server; each result is a resolved `<TeacherCard>` spliced into the streamed DIL, with `reasoning` records as the tool status line. Card buttons → `/api/widget_action` (`teacher_accept`/`teacher_dismiss`/`teacher_undo`/`teacher_open_item`) |
 | Memory | Memory cites | `learner_memory_items`, `extract-learner-memory`, `forget_me`, `noMemory` (wondering §5) | `server/memory.js` (JSON file), Teacher `remember`/`forget`, post-lesson extraction, "About this learner" system block after the cache breakpoint, `#/memory` screen and a "Use memory" switch (`memoryEnabled`) |
 
@@ -178,7 +178,7 @@ Formulas are typeset with [KaTeX](https://katex.org) (npm `katex`, served read-o
 
 What happens in one turn:
 
-1. The client sends the message, a text history (cards as `[Card: …]` notes), a **progress snapshot** assembled from localStorage (`public/teacher-core.js`: deck size, due cards, mastered, streak, XP, recent lessons with quiz scores, courses, saved plans) and `memoryEnabled`.
+1. The client sends the message, a text history (cards as `[Card: …]` notes), a **progress snapshot** assembled from localStorage (`public/teacher-core.js`: deck size, due cards, mastered, streak, recent lessons with quiz scores, courses, saved plans) and `memoryEnabled`.
 2. Claude streams text and calls tools. When a `tool_use` block starts, a `reasoning` record shows the tool status ("Checking your progress…", "Drafting a study plan…"). This is Wondering's `tool_start`.
 3. The server validates and runs the tool. Results that need UI get a resolution id (`tc-<uuid>`) and are stored as `{status:"resolved", state}` in the turn's `appData.opGenui.componentResults` and in a server-side card store. Then `<TeacherCard kind="…" __resolutionId="…"/>` is spliced into the markdown at that point. The compiler hands that id to the stock chatgpt-dil compiler instead of the default salted id. `quiz_me` splices a normal `<Quiz>`, graded by the existing `quiz_answer` action; `get_progress` returns JSON only.
 4. Card buttons dispatch widget actions to `/api/widget_action`. The response has the card's new `componentResults` entry plus `clientActions` for the host:
@@ -203,7 +203,7 @@ The Teacher persona (`TEACHER_SYSTEM_PROMPT`) uses Wondering's dial values fixed
   - Post-lesson extraction. "Finish lesson" sends the quiz results and the learner's tutor questions to `/api/memory/extract`: a structured-output call at effort low, giving 0–3 facts that are de-duplicated against memory. A toast says what Mull will remember.
   - The Memory screen.
 - **Reads.** A compact "About this learner" block with the newest 15 items goes into the lesson, tutor and Teacher system prompts as a system block after the cache breakpoint. The Teacher's copy includes item ids so it can `forget` them.
-- **UI.** The You screen (`#/you`, also `#/memory`) lists items by kind, with add, delete and "Forget everything", plus the persisted **Use memory** switch that sets `memoryEnabled` on every request.
+- **UI.** None on the You screen any more. `public/memory-screen.js` (items by kind, add, delete, "Forget everything", the **Use memory** switch) is kept but not shown; the Teacher's context panel still lists what it remembers.
 
 ## Learner model (Phase 6)
 
@@ -271,7 +271,7 @@ npm run eval -- --tag media
   - **Claude mode:** one structured call at effort low, with the answer fenced as data. It returns a 0–3 score, each rubric criterion met or missed with quoted evidence, feedback, the misconception and a follow-up question.
   - **Demo mode,** or when the call fails: a keyword grader.
 
-  The widget then shows the score, criteria, feedback, "Show a model answer", "Ask the tutor" and "Try again". The first attempt awards XP (5 per point) and becomes mastery evidence. Lessons include one ExplainBack on their last content page.
+  The widget then shows the score, criteria, feedback, "Show a model answer", "Ask the tutor" and "Try again". The first attempt counts toward the day's activity and becomes mastery evidence. Lessons include one ExplainBack on their last content page.
 - **Review.** Extraction adds one `explain` practice item per lesson. The review screen grades it through the same grader (`practice_grade`), and the score maps to an FSRS rating (0 Again … 3 Easy).
 - **"Guide me."** A switch in the tutor header (saved as `settings.tutorMode`) sends `mode: "socratic"`. The tutor then asks one guiding question at a time and gives the answer only after two real tries or when asked outright. The rules (`SOCRATIC_TUTOR_MODE`) go after the cache breakpoint, so the cached tutor prompt is the same in both modes. Demo replies follow the same pattern.
 
@@ -324,8 +324,8 @@ node --test genui-lab/wonder/test/index.js      # no network (Figure and Video l
   - `/vendor/katex/` serves css, js and fonts (200) and refuses traversal and other files (404).
 - **`view-state.test.js`** covers widget state persistence: a snapshot restores every persisted widget on the first render (also via `setStateSnapshot`), one debounced message per burst of clicks (mock timers), live state and the snapshot survive streamed recompiles, unknown ids/keys and invalid values are ignored, a revision that rewrites or removes a widget drops its state while unchanged widgets keep theirs, reset, server-graded Quiz state wins over local progress, Cite/KeyTerm stay ephemeral, the compound-interest FunctionGraph slider, Stepper and Flashcards round-trip (desktop and 390 px), size caps and eviction, and store persistence with corrupted snapshots.
 - **`web.test.js`** drives the Fetch-API adapter used by the Next route handlers: status and 404s, a demo lesson as NDJSON, memory and course plans, a live steer reaching the in-flight stream, client-disconnect aborts, and the read-only static mounts.
-- **`progress.test.js`** covers the Today and You helpers: the daily goal, the week strip, the activity grid, topic suggestions from interests, the Up next order and the palette matcher.
-- **`deck.test.js`** covers practice grading, FSRS deck scheduling (learning steps, graduation, growing intervals, lapses), XP/streak rules, and localStorage persistence when storage is blocked or corrupted.
+- **`progress.test.js`** covers the Today and You helpers: studied today, the week strip, the activity grid, topic suggestions from interests, the Up next order and the palette matcher.
+- **`deck.test.js`** covers practice grading, FSRS deck scheduling (learning steps, graduation, growing intervals, lapses), activity/streak rules, and localStorage persistence when storage is blocked or corrupted.
 
 ## Files
 
@@ -390,7 +390,7 @@ Interactive widgets keep their state across reloads and when a lesson is reopene
 - **Server-side widget state is in memory** (quiz answers per resolution id). The client persists `componentResults` with each lesson, so reloads still restore it, but a server restart forgets its copy.
 - **One sandbox worker per surface**: the lesson plus each tutor reply. Very long tutor threads therefore start many workers. They are terminated when you leave the lesson.
 - **Tutor replies are not lesson-specific in demo mode.** They are templates that use the lesson's KeyTerms and Quiz. Any other topic streams one of the three sample lessons.
-- **Accounts are optional.** Without Neon Auth and a database, courses, lessons, the deck and XP live in this browser's localStorage, and the app falls back to in-memory storage when localStorage is blocked. With them, see [Accounts, sync and daily limits](#accounts-sync-and-daily-limits).
+- **Accounts are optional.** Without Neon Auth and a database, courses, lessons, the deck and activity live in this browser's localStorage, and the app falls back to in-memory storage when localStorage is blocked. With them, see [Accounts, sync and daily limits](#accounts-sync-and-daily-limits).
 - **Multi-tab is safe.**
   - The cross-tab lock keeps two tabs from streaming the same lesson.
   - `store.js` writes with a three-way merge per lesson, thread, course and plan, and idle tabs pick up other tabs' saves. So one tab no longer wipes another tab's changes.
@@ -634,7 +634,7 @@ A lesson's quiz says what the learner knew a minute after reading it. Mull also 
   - "How well it stuck" at the end of a finished lesson.
   - A "Refresh" row in Today's Up next for the worst-fading lesson, after Phase 6's "Strengthen".
   - "92% recall" in reading rows (Today's Recent, the Library).
-  - "What works for you" on You, next to Phase 6's "What you know", with the same layout. Its "Fading lessons" group has **Refresh** (`#/review/lesson/<id>`: that lesson's cards, weakest first) and **Relearn** (the same topic in the best-measured other style).
+  - "What works for you" (`public/insights-panel.js`, no longer shown on You), with the same layout as Phase 6's "What you know". Its "Fading lessons" group has **Refresh** (`#/review/lesson/<id>`: that lesson's cards, weakest first) and **Relearn** (the same topic in the best-measured other style).
   - The Teacher's `get_progress`, which includes per-lesson recall, fading lessons with their slipping cards, and findings.
 
 ## Phase 10: a proactive Teacher, and lessons from your own material
@@ -652,7 +652,7 @@ A lesson's quiz says what the learner knew a minute after reading it. Mull also 
   - A daily notification at a chosen time while a Mull tab is open, if the goal isn't met.
   - "Add to calendar" exports the plan as `.ics` (`public/ics.js`, RFC 5545 escaping and folding) with an alarm per study day and the deadline, so reminders work with Mull closed.
 - **Your own material.**
-  - In Today's command bar, choose "Material": paste notes or attach .txt/.md/.pdf, then Begin (a lesson) or Make a course. `server/materials.js` stores it, and "Your material" on You lists it.
+  - In Today's command bar, choose "Material": paste notes or attach .txt/.md/.pdf, then Begin (a lesson) or Make a course. `server/materials.js` stores it (You no longer lists it).
   - Both servers accept it: `bodyLimit()` raises the request limit for `/api/materials` in the node:http harness and the Next.js Fetch adapter, and a `t.send()` transport method serves the original file.
   - Claude gets it as a cached `document` block with citations on.
   - `char_location` and `page_location` citations are mapped onto the same source registry as web results. They become Cite pills and Sources ("Your material", "…, p. 4") that open the original.

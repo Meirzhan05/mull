@@ -37,7 +37,7 @@ const ITEM_VERB = { lesson: 'Lesson', review: 'Review', quiz: 'Quiz' };
 export function planToIcs(plan, { time = '18:00', minutes = 20, url = '', now = new Date() } = {}) {
   const [hh, mm] = (/^([01]\d|2[0-3]):([0-5]\d)$/.test(time) ? time : '18:00').split(':');
   const start = planStart(plan) || cleanDateKey(new Date(now).toISOString().slice(0, 10));
-  const lines = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Wonder//Study plan//EN', 'CALSCALE:GREGORIAN', 'METHOD:PUBLISH', `X-WR-CALNAME:${icsEscape(`Mull: ${plan.goal || 'Study plan'}`)}`];
+  const lines = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Mull//Study plan//EN', 'CALSCALE:GREGORIAN', 'METHOD:PUBLISH', `X-WR-CALNAME:${icsEscape(`Mull: ${plan.goal || 'Study plan'}`)}`];
   (plan.days || []).forEach((d, i) => {
     const date = addDays(start, i).replace(/-/g, '');
     const items = (d.items || []).map((it) => `• ${ITEM_VERB[it.kind] || 'Study'}: ${it.title}`);

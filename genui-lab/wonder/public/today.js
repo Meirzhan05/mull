@@ -1,14 +1,14 @@
 // Today (#/): input first. The hero is one large composer (a question as the headline, an
 // auto-growing field, and a footer with the mode, the level and send), with quick-start chips
 // under it. Below it, secondary: the "Up next" queue and recent reading on the left, and a rail of
-// panels (today's XP, the streak, the deck, the study plan) on the right.
+// panels (the streak, the deck, the study plan) on the right.
 // Phases 9-10: the header carries the Teacher's brief when a deadline or the streak is at stake,
 // Up next has "Refresh" rows for fading lessons and dated plan rows, the plan panel follows the
 // calendar, the command bar takes the learner's own material, and reading rows show recall.
 
 import { el, icon, toast, relTime } from './ui.js';
 import { currentStreak, deckStats, formatDue } from './deck.js';
-import { dailyProgress, weekStrip, upNext, suggestedTopics, greeting, courseProgress, learnerTotals, topicInterest, readingMinutes, recentLessons, LEVELS, levelOf } from './progress-core.js';
+import { studiedToday, weekStrip, upNext, suggestedTopics, greeting, courseProgress, learnerTotals, topicInterest, readingMinutes, recentLessons, LEVELS, levelOf } from './progress-core.js';
 import { pageCount } from './steering-core.js';
 import { practiceConcepts } from './mastery-screen.js'; // Phase 6
 import { lessonOutcome, outcomeLabel } from './outcomes-core.js'; // Phase 9
@@ -46,18 +46,16 @@ export function renderToday(ctx) {
   const d = store.data;
   const settings = d.settings || {};
   const now = new Date();
-  const day = dailyProgress(d.stats, settings, now);
+  const studied = studiedToday(d.stats, now);
   const streak = currentStreak(d.stats, now);
   const totals = learnerTotals(d, now);
   const name = String(settings.name || '').trim();
 
   // -- header (Phase 10: the brief's headline when a deadline or the streak is at stake)
   const brief = dailyBrief(d, now);
-  const sub = brief.urgent ? brief.headline : day.met
-    ? 'Today’s goal is met.'
-    : day.xp > 0
-      ? `${day.goal - day.xp} XP to today’s goal.`
-      : streak > 0 ? `Keep the ${streak}-day streak going.` : 'Pick up where you left off, or start something new.';
+  const sub = brief.urgent ? brief.headline : studied
+    ? `Day ${streak} of the streak.`
+    : streak > 0 ? `Keep the ${streak}-day streak going.` : 'Pick up where you left off, or start something new.';
   const heroTitle = el('h1', { class: 'hero-title' });
   const head = el('div', { class: 'hero-top' },
     el('p', { class: 'hero-greet' }, `${greeting(now)}${name ? `, ${name}` : ''}`, el('span', { class: 'hero-dot', 'aria-hidden': 'true' }, '·'), el('span', { class: brief.urgent ? 'hero-urgent' : '' }, sub)),
@@ -180,19 +178,14 @@ export function renderToday(ctx) {
     el('ul', { class: 'rows' }, ...recent.map((l) => el('li', null, readRow(l, d))))) : null;
 
   // -- right rail
-  const week = weekStrip(d.stats, settings, now);
+  const week = weekStrip(d.stats, now);
   const deck = deckStats(d.deck, now);
   const rail = el('aside', { class: 't-rail', 'aria-label': 'Your progress' },
-    el('a', { class: 'stat-panel', href: '#/you' },
-      el('span', { class: 'stat-label' }, 'Today'),
-      el('span', { class: 'stat-big' }, String(day.xp), el('small', null, ` / ${day.goal} XP`)),
-      el('span', { class: `ledger-bar ${day.met ? 'met' : ''}`, 'aria-hidden': 'true' }, el('i', { style: { width: `${Math.round(day.pct * 100)}%` } })),
-      el('span', { class: 'stat-note' }, day.met ? 'Goal met' : `${day.goal - day.xp} XP to go`)),
     el('a', { class: 'stat-panel', href: '#/you' },
       el('span', { class: 'stat-label' }, 'Streak'),
       el('span', { class: 'stat-big' }, String(streak), el('small', null, streak === 1 ? ' day' : ' days')),
       el('span', { class: 'week7', 'aria-label': `Last seven days: ${week.filter((w) => w.active).length} active` },
-        ...week.map((w) => el('span', { class: `w ${w.active ? 'on' : ''} ${w.met ? 'met' : ''} ${w.today ? 'today' : ''}`, title: `${w.key}: ${w.xp} XP` }, el('i'), el('b', null, w.label))))),
+        ...week.map((w) => el('span', { class: `w ${w.active ? 'on' : ''} ${w.today ? 'today' : ''}`, title: `${w.key}${w.active ? ': studied' : ''}` }, el('i'), el('b', null, w.label))))),
     el('a', { class: 'stat-panel', href: '#/review' },
       el('span', { class: 'stat-label' }, 'Deck'),
       el('span', { class: 'stat-big' }, String(deck.due), el('small', null, ' due')),

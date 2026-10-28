@@ -1,7 +1,7 @@
 // Web Push reminders (with account sync on): the daily reminder of Phase 10, sent when no Wonder
 // tab is open. A Vercel Cron job calls GET /api/cron/reminders (vercel.json); for every user with
 // a push subscription it rebuilds their synced state, and when their reminder time has passed in
-// their time zone and today's goal is not met, it sends the brief's top action once that day.
+// their time zone and they have not studied yet today, it sends the brief's top action once that day.
 //
 // Keys: VAPID_PUBLIC_KEY / VAPID_PRIVATE_KEY (`npx web-push generate-vapid-keys`) and
 // VAPID_SUBJECT (a mailto: or https: contact). Only the public key ever reaches a browser.

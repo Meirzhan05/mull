@@ -9,7 +9,7 @@
 import { deckStats, dueEntries, currentStreak, dateKey } from './deck.js';
 import { planStatus, nextPlanItem, countdownLabel, dayLabel } from './plan-core.js';
 import { fadingLessons, RECALL_MIN } from './outcomes-core.js';
-import { dailyProgress } from './progress-core.js';
+import { studiedToday } from './progress-core.js';
 import { courseReviewSuggestion } from './course-review-core.js';
 
 const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
@@ -21,7 +21,7 @@ export function dailyBrief(data, now = new Date()) {
   const plan = (data?.plans || [])[0] || null;
   const ps = plan ? planStatus(plan, now) : null;
   const next = plan ? nextPlanItem(plan, now) : null;
-  const day = dailyProgress(data?.stats, data?.settings, now);
+  const studied = studiedToday(data?.stats, now);
   const streak = currentStreak(data?.stats || {}, now);
   const hour = new Date(now).getHours();
 
@@ -57,11 +57,9 @@ export function dailyBrief(data, now = new Date()) {
   if (ps?.deadline && ps.daysToDeadline != null && ps.daysToDeadline >= 0) {
     headline = `${countdownLabel(ps.daysToDeadline, plan.goal)}.${ps.pace === 'behind' ? ` You are ${plural(ps.overdue.length, 'item')} behind.` : ps.pace === 'ahead' ? ' You are ahead of plan.' : ''}`;
     urgent = true;
-  } else if (streak > 0 && !day.xp && hour >= 18) {
+  } else if (streak > 0 && !studied && hour >= 18) {
     headline = `Your ${streak}-day streak ends at midnight. One review keeps it.`;
     urgent = true;
-  } else if (day.met) {
-    headline = 'Today’s goal is done. Anything more is a bonus.';
   } else if (st.due) {
     headline = `${plural(st.due, 'card')} ${st.due === 1 ? 'is' : 'are'} ready, the best moment to lock ${st.due === 1 ? 'it' : 'them'} in.`;
   } else {
@@ -76,7 +74,7 @@ export function briefNotification(brief) {
   return { title: 'Mull', body: top ? `${brief.headline} Next: ${top.title}.` : brief.headline };
 }
 
-/** Should the daily reminder fire now? (enabled, past its time, goal not met, not yet today) */
+/** Should the daily reminder fire now? (enabled, past its time, nothing studied today, not yet shown today) */
 export function reminderDue(settings, stats, now = new Date(), lastShown = null) {
   const r = settings?.reminder;
   if (!r?.enabled || !/^([01]\d|2[0-3]):([0-5]\d)$/.test(r.time || '')) return false;
@@ -85,5 +83,5 @@ export function reminderDue(settings, stats, now = new Date(), lastShown = null)
   const [h, m] = r.time.split(':').map(Number);
   const d = new Date(now);
   if (d.getHours() * 60 + d.getMinutes() < h * 60 + m) return false;
-  return !dailyProgress(stats, settings, now).met;
+  return !studiedToday(stats, now);
 }

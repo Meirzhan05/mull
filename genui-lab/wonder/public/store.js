@@ -1,6 +1,6 @@
 // localStorage persistence for courses, lessons (markdown + compiled dil + widget state),
 // Teacher threads (messages + compiled dil + card componentResults), saved study plans,
-// settings (memoryEnabled), the practice deck and XP/streak. Every storage access is wrapped: private windows and
+// settings (memoryEnabled), the practice deck and activity/streak. Every storage access is wrapped: private windows and
 // blocked storage fall back to an in-memory store, and quota errors prune old lessons.
 
 import { emptyDeck, emptyStats } from './deck.js';
