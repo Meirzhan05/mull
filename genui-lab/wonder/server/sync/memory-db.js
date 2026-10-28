@@ -92,13 +92,13 @@ export function createMemoryDb() {
       return true;
     },
     // -- daily usage caps (server/usage.js)
-    async useQuota(userId, day, kind, max) {
+    async useQuota(userId, day, kind, max, units = 1) {
       const u = user(userId);
       const k = `${day}|${kind}`;
       const n = u.usage.get(k) || 0;
-      if (n >= max) return { ok: false, used: n };
-      u.usage.set(k, n + 1);
-      return { ok: true, used: n + 1 };
+      if (n + units > max) return { ok: false, used: n };
+      u.usage.set(k, n + units);
+      return { ok: true, used: n + units };
     },
     async quotaUsed(userId, day) {
       const out = {};
@@ -109,6 +109,7 @@ export function createMemoryDb() {
     async putFile(userId, id, { bytes, contentType }) { user(userId).files.set(id, { bytes: Buffer.from(bytes), contentType }); },
     async getFile(userId, id) { const f = users.get(userId)?.files.get(id); return f ? { bytes: Buffer.from(f.bytes), contentType: f.contentType } : null; },
     async deleteFile(userId, id) { users.get(userId)?.files.delete(id); },
+    async listFiles(userId, prefix = '') { return [...(users.get(userId)?.files.keys() || [])].filter((id) => id.startsWith(prefix)); },
     /** Delete account: records, files, push subscriptions and the reminder log (tx.wipe). */
     async deleteUser(userId) { await transaction(userId, (tx) => tx.wipe()); },
     async close() {},

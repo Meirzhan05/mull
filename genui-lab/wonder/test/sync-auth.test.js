@@ -84,6 +84,18 @@ test('account sync over HTTP: learner memory belongs to the signed-in user', asy
   });
 });
 
+test('account sync over HTTP: upload parts belong to the signed-in user', async () => {
+  await withServer({}, async ({ alice, bob, anon }) => {
+    const PDF = Buffer.from('%PDF-1.4\n1 0 obj<<>>endobj\ntrailer<<>>\n%%EOF\n');
+    assert.equal((await anon('POST', '/api/materials/part', { index: 0, total: 1, base64: PDF.toString('base64') })).status, 401);
+    const { upload } = (await alice('POST', '/api/materials/part', { index: 0, total: 1, base64: PDF.toString('base64') })).body;
+    assert.equal((await bob('POST', '/api/materials', { kind: 'pdf', upload, parts: 1 })).status, 400, 'Bob cannot claim Alice\'s upload');
+    const done = await alice('POST', '/api/materials', { kind: 'pdf', upload, parts: 1, filename: 'Notes.pdf' });
+    assert.equal(done.status, 200);
+    assert.equal(done.body.item.bytes, PDF.length);
+  });
+});
+
 test('account sync over HTTP: material and its file are readable only by their owner', async () => {
   await withServer({}, async ({ alice, bob, anon }) => {
     const up = await alice('POST', '/api/materials', { kind: 'text', text: NOTES });
