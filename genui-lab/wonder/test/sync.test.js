@@ -132,6 +132,28 @@ test('sync: two browsers of one account converge; edits, deletes and tombstones 
   } finally { a.engine.stop(); b.engine.stop(); }
 });
 
+test('sync: a browser that last synced before the account was deleted is told so and pushes nothing back', async () => {
+  const svc = service();
+  const a = browser(svc, 'user-a');
+  const b = browser(svc, 'user-a');
+  try {
+    a.edit((d) => { d.lessons.l1 = lesson('l1', 'Sky'); });
+    await a.sync();
+    await b.sync();
+    await svc.deleteAccount('user-a');
+    b.edit((d) => { d.lessons.l2 = lesson('l2', 'Tides'); });
+    assert.equal(await b.sync(), null);
+    assert.equal(b.engine.status.state, 'deleted');
+    assert.deepEqual((await svc.sync('user-a', { since: 0 })).records, [], 'nothing came back');
+    // a new browser of the same sign-in starts the account over
+    const c = browser(svc, 'user-a');
+    c.edit((d) => { d.lessons.l3 = lesson('l3', 'Fresh'); });
+    await c.sync();
+    assert.equal(c.engine.status.state, 'synced');
+    assert.deepEqual((await svc.sync('user-a', { since: 0 })).records.map((r) => r.id).filter((id) => id.startsWith('l')), ['l3']);
+  } finally { a.engine.stop(); b.engine.stop(); }
+});
+
 test('sync: concurrent edits merge by kind (different records both survive; same record: later edit)', async () => {
   const svc = service();
   const a = browser(svc, 'u');

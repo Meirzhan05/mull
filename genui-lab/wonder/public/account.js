@@ -20,6 +20,7 @@ export const ACCOUNT_KEY = 'wonder.account';
 export const PUSH_KEY = 'wonder.push'; // this browser's push endpoint while push reminders are on
 const STATE_KEY = 'wonder.v1'; // store.js KEY
 const MIGRATED_KEY = 'wonder.migrate'; // signed-out data waiting to be confirmed on the server
+const DELETED_KEY = 'wonder.accountDeleted'; // sessionStorage: this tab deleted its account
 
 const ls = () => { try { return globalThis.localStorage; } catch { return null; } };
 const readJson = (k) => { try { return JSON.parse(ls()?.getItem(k) || 'null'); } catch { return null; } };
@@ -120,7 +121,10 @@ export async function startAccount({ store, toast = () => {}, onChange = () => {
     // (not twice in a row: if the switch did not stick, e.g. storage is full, stay signed out)
     let recent = false;
     try { recent = Date.now() - Number(sessionStorage.getItem('wonder.beginAccount') || 0) < 15000; } catch {}
-    if (sessionUser && info.signedIn && info.userId === sessionUser.id && !recent) await beginAccount(sessionUser.id, { store });
+    // (nor right after deleting the account here, if signing out failed: that would make a new one)
+    let deleted = false;
+    try { deleted = sessionStorage.getItem(DELETED_KEY) === sessionUser?.id; } catch {}
+    if (sessionUser && info.signedIn && info.userId === sessionUser.id && !recent && !deleted) await beginAccount(sessionUser.id, { store });
     setStatus({ state: 'signedOut' });
     return info;
   }
@@ -133,7 +137,11 @@ export async function startAccount({ store, toast = () => {}, onChange = () => {
     userId: current.userId,
     post: postSync,
     lock: syncLock(current.userId),
-    onStatus: (s) => { setStatus(s); onChange(); },
+    onStatus: (s) => {
+      setStatus(s);
+      onChange();
+      if (s.state === 'deleted') leaveAccount().catch(() => location.reload()); // deleted on another device
+    },
     onFirstSync: (mode) => {
       if (mode === 'merge' && migrating) {
         try { ls()?.removeItem(STATE_KEY); ls()?.removeItem(MIGRATED_KEY); } catch {}
@@ -249,6 +257,33 @@ export async function signOut() {
   return true;
 }
 
+/**
+ * Delete this account. The server deletes everything it keeps for it and, in the same request,
+ * the Neon Auth user; then this browser leaves it. Nothing here changes until the server is done,
+ * so a failed request leaves syncing and reminders as they were.
+ */
+export async function deleteAccount() {
+  await postJson('/api/account', {}, 'DELETE');
+  await leaveAccount();
+}
+
+let leaving = null;
+/** The account is gone (deleted here or elsewhere): sign out and drop this browser's copy. */
+function leaveAccount() {
+  return (leaving ??= (async () => {
+    engine?.stop();
+    try { if (current) sessionStorage.setItem(DELETED_KEY, current.userId); } catch {}
+    await disablePush({ server: false }).catch(() => {}); // the server dropped the subscriptions
+    // clears this origin's session cookies; when it fails, DELETED_KEY keeps the reload signed out
+    const a = await authClient(5000);
+    await a?.signOut().catch(() => {});
+    sessionUser = null;
+    try { ls()?.removeItem(ACCOUNT_KEY); ls()?.removeItem(MIGRATED_KEY); } catch {}
+    await cache?.destroy?.();
+    location.reload();
+  })());
+}
+
 /** The browser holds another account's cache than the one signed in: drop it, take the new one. */
 export async function switchToSignedIn() {
   if (!confirmLoss('Switch accounts')) return;
@@ -313,11 +348,12 @@ export async function enablePush() {
   return true;
 }
 
-export async function disablePush() {
+/** @param {{server?: boolean}} [opts]  server: false skips telling the server (it already forgot it) */
+export async function disablePush({ server = true } = {}) {
   const endpoint = ls()?.getItem(PUSH_KEY);
   ls()?.removeItem(PUSH_KEY);
   const reg = await navigator.serviceWorker?.getRegistration?.('/sw.js');
   const sub = await reg?.pushManager?.getSubscription();
   if (sub) await sub.unsubscribe().catch(() => {});
-  if (endpoint && current) await postJson('/api/push/subscribe', { endpoint }, 'DELETE').catch(() => {});
+  if (server && endpoint && current) await postJson('/api/push/subscribe', { endpoint }, 'DELETE').catch(() => {});
 }
