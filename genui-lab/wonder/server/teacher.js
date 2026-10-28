@@ -138,7 +138,7 @@ export const TEACHER_TOOLS = Object.freeze([
   },
   {
     name: 'get_progress',
-    description: 'Read the learner\'s progress: review deck size and due cards, streak, XP, recent lessons (with quiz scores), courses (cards due, mean memory %, and reviewSuggested when the learner should review the whole course at once, mixed), saved study plans, memory items and per-concept mastery (shaky / fading / learning / mastered, estimated from graded answers). Call this before planning, or when they ask how they are doing or what to study next.',
+    description: 'Read the learner\'s progress: review deck size and due cards, streak, recent lessons (with quiz scores), courses (cards due, mean memory %, and reviewSuggested when the learner should review the whole course at once, mixed), saved study plans, memory items and per-concept mastery (shaky / fading / learning / mastered, estimated from graded answers). Call this before planning, or when they ask how they are doing or what to study next.',
     input_schema: { type: 'object', additionalProperties: false, required: [], properties: {} },
   },
 ].map((t) => ({ ...t, strict: true, eager_input_streaming: true })));
@@ -246,7 +246,6 @@ export function sanitizeProgress(p) {
   const list = (v, max) => (Array.isArray(v) ? v.slice(0, max) : []);
   return {
     today: oneLine(o.today, 20),
-    xp: n(o.xp),
     streak: n(o.streak),
     deck: { total: n(o.deck?.total), due: n(o.deck?.due), mastered: n(o.deck?.mastered ?? o.deck?.review), nextDue: oneLine(o.deck?.nextDue, 40) || null },
     recentLessons: list(o.recentLessons, 8).map((l) => ({

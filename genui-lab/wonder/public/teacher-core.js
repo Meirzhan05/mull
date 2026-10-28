@@ -24,7 +24,6 @@ export function progressSnapshot(data, now = new Date()) {
   });
   return {
     today: dateKey(now),
-    xp: data.stats?.xp || 0,
     streak: currentStreak(data.stats || {}, now),
     deck: { total: st.total, due: st.due, mastered: st.review, nextDue: st.nextDue },
     recentLessons: lessons.map((l) => {

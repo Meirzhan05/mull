@@ -1,15 +1,14 @@
-// First-run welcome, a full-screen flow in three steps that ends in the learner's first lesson:
+// First-run welcome, a full-screen flow in two steps that ends in the learner's first lesson:
 // 1. what they're curious about (interests, with a live preview of the topics they unlock),
-// 2. their pace (a daily goal),
-// 3. a first lesson, picked from those topics or typed in.
+// 2. a first lesson, picked from those topics or typed in.
 // Skippable at any point (Esc or Skip keeps what was chosen so far); the choices live in
-// store.settings: name, interests, dailyGoal. Only what the learner actually set is
+// store.settings: name, interests. Only what the learner actually set is
 // written, so settings that arrive meanwhile (account sync on a new device) are not reset.
 
 import { el, icon } from './ui.js';
-import { INTERESTS, DAILY_GOALS, suggestedTopics, topicInterest, goalOf, levelOf } from './progress-core.js';
+import { INTERESTS, suggestedTopics, topicInterest, levelOf } from './progress-core.js';
 
-const STEPS = ['Interests', 'Pace', 'First lesson'];
+const STEPS = ['Interests', 'First lesson'];
 
 export function needsOnboarding(data) {
   return !data.settings?.onboarded && !Object.keys(data.lessons || {}).length && !(data.courses || []).length;
@@ -36,7 +35,7 @@ export function interestGrid(selected, onToggle) {
  */
 export function showOnboarding({ store, onDone, startLesson, firstTopic = '', accountName = null }) {
   const settings = store.data?.settings || {};
-  const pick = { name: String(settings.name || '').trim(), interests: new Set(settings.interests || []), level: levelOf(settings), dailyGoal: goalOf(settings) };
+  const pick = { name: String(settings.name || '').trim(), interests: new Set(settings.interests || []), level: levelOf(settings) };
   const touched = new Set(); // the picks the learner made; only these are saved
   let step = 0;
   let back = false;
@@ -59,7 +58,6 @@ export function showOnboarding({ store, onDone, startLesson, firstTopic = '', ac
   function finish(topic) {
     const patch = { onboarded: true };
     if (touched.has('interests')) patch.interests = [...pick.interests];
-    if (touched.has('dailyGoal')) patch.dailyGoal = pick.dailyGoal;
     const name = pick.name.trim();
     store.update((d) => {
       if (touched.has('name') || (name && !d.settings?.name)) patch.name = name;
@@ -117,35 +115,6 @@ export function showOnboarding({ store, onDone, startLesson, firstTopic = '', ac
     return [form, pick.name ? grid.firstChild : nameInput];
   }
 
-  function paceStep() {
-    const choice = (label, items, current, onPick) => {
-      // a saved value that is not one of the options (a custom goal) leaves the first one tabbable
-      const tabStop = items.some((it) => it.value === current) ? current : items[0]?.value;
-      const group = el('div', { class: 'goal-options', role: 'radiogroup', 'aria-label': label }, ...items.map((it) => el('button', {
-        class: 'goal-option', type: 'button', role: 'radio', 'aria-checked': String(it.value === current), tabindex: it.value === tabStop ? '0' : '-1',
-        onclick: (e) => { onPick(it.value); for (const b of group.children) { const on = b === e.currentTarget; b.setAttribute('aria-checked', String(on)); b.tabIndex = on ? 0 : -1; } },
-      }, el('span', { class: 'goal-option-text' }, el('strong', null, it.label), el('span', { class: 'muted small' }, it.hint)), it.tag ? el('b', null, it.tag) : null, el('i', { class: 'goal-option-dot', 'aria-hidden': 'true' }))));
-      // arrow keys move within a radio group, as they do in a native one
-      group.addEventListener('keydown', (e) => {
-        const dir = { ArrowDown: 1, ArrowRight: 1, ArrowUp: -1, ArrowLeft: -1 }[e.key];
-        if (!dir) return;
-        e.preventDefault();
-        const list = [...group.children];
-        const next = list[(list.indexOf(document.activeElement) + dir + list.length) % list.length];
-        next.click();
-        next.focus();
-      });
-      return group;
-    };
-    const goal = choice('Daily goal', DAILY_GOALS.map((g) => ({ value: g.xp, label: g.label, hint: g.hint, tag: `${g.xp} XP` })), pick.dailyGoal, (v) => { pick.dailyGoal = v; touched.add('dailyGoal'); });
-    const node = el('div', { class: 'onboard-step' },
-      heading(`How much each day${pick.name.trim() ? `, ${pick.name.trim()}` : ''}?`, 'A starting point. You can change it any time in You.'),
-      el('div', { class: 'onboard-pace' },
-        el('div', { class: 'onboard-field' }, el('span', null, 'Daily goal'), goal)),
-      actions(el('button', { class: 'btn btn-lg', type: 'button', onclick: () => go(2) }, 'Continue', icon('arrow-right'))));
-    return [node, goal.querySelector('[tabindex="0"]')];
-  }
-
   function firstLessonStep() {
     // the topic brought from the landing page leads, ready to start; suggestions follow it
     const mine = String(firstTopic || '').trim();
@@ -164,7 +133,7 @@ export function showOnboarding({ store, onDone, startLesson, firstTopic = '', ac
       mine ? el('p', { class: 'onboard-or muted' }, 'Or ask about something else:') : null,
       el('form', { class: 'onboard-ask', onsubmit: (e) => { e.preventDefault(); const t = input.value.trim(); if (t) finish(t); else input.focus(); } }, icon('search'), input, send),
       el('div', { class: 'onboard-actions' },
-        el('button', { class: 'btn btn-ghost', type: 'button', onclick: () => go(1) }, icon('arrow-left'), 'Back'),
+        el('button', { class: 'btn btn-ghost', type: 'button', onclick: () => go(0) }, icon('arrow-left'), 'Back'),
         el('button', { class: 'btn btn-secondary', type: 'button', onclick: () => finish() }, 'Look around first')));
     return [node, node.querySelector('.onboard-topic')];
   }
@@ -172,7 +141,7 @@ export function showOnboarding({ store, onDone, startLesson, firstTopic = '', ac
   function draw() {
     progress.replaceChildren(...STEPS.map((label, i) => el('li', { class: i < step ? 'done' : i === step ? 'on' : '', 'aria-current': i === step ? 'step' : null },
       el('i', { 'aria-hidden': 'true' }, i < step ? icon('check') : String(i + 1)), el('span', null, label))));
-    const [node, focus] = [interestsStep, paceStep, firstLessonStep][step]();
+    const [node, focus] = [interestsStep, firstLessonStep][step]();
     node.classList.add(back ? 'from-left' : 'from-right');
     body.replaceChildren(node);
     body.scrollTop = 0;

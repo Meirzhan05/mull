@@ -82,7 +82,7 @@ test('sync-core: diff finds edits, additions and deletions (tombstones) against 
   assert.equal(changes.length, 3);
 });
 
-test('sync-core: merge rules: last edit wins, deletes too; concepts, XP and settings combine', () => {
+test('sync-core: merge rules: last edit wins, deletes too; concepts, activity and settings combine', () => {
   const lww = mergeRecord('lesson', 'a', { data: { t: 1 }, updatedAt: 10 }, { data: { t: 2 }, updatedAt: 5 });
   assert.deepEqual(lww.data, { t: 1 });
   assert.equal(mergeRecord('lesson', 'a', { data: { t: 1 }, updatedAt: 10 }, { deleted: true, updatedAt: 20 }).deleted, true);
@@ -95,7 +95,7 @@ test('sync-core: merge rules: last edit wins, deletes too; concepts, XP and sett
     { data: { xp: 100, streak: { count: 3, lastDate: '2026-10-03', best: 5 }, days: { d1: 50, d2: 30 } }, updatedAt: 1 },
     { data: { xp: 90, streak: { count: 1, lastDate: '2026-10-02', best: 1 }, days: { d1: 40, d3: 20 } }, updatedAt: 2 });
   assert.deepEqual(stats.data.days, { d1: 50, d2: 30, d3: 20 });
-  assert.equal(stats.data.xp, 100);
+  assert.equal(stats.data.xp, undefined, 'XP from older states is dropped');
   assert.equal(stats.data.streak.lastDate, '2026-10-03');
   assert.equal(stats.data.streak.best, 5);
   assert.deepEqual(mergeRecord('state', 'settings', { data: { dailyGoal: 30, name: 'A' }, updatedAt: 2 }, { data: { dailyGoal: 50 }, updatedAt: 1 }).data, { dailyGoal: 30, name: 'A' });
