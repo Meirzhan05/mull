@@ -1,4 +1,4 @@
-// Pure helpers for the Today and You screens (no DOM): the daily XP goal, the week strip, the
+// Pure helpers for the Today and You screens (no DOM): today's activity, the week strip, the
 // activity heatmap, interest-based topic suggestions and the "Up next" pick. Everything reads
 // the plain store state, so it is tested under node:test.
 
@@ -7,14 +7,6 @@ import { weakestConcepts } from './mastery-core.js';
 import { nextPlanItem } from './plan-core.js'; // Phase 10
 import { fadingLessons, RECALL_MIN } from './outcomes-core.js'; // Phase 9
 import { courseReviewSuggestion } from './course-review-core.js';
-
-export const DAILY_GOALS = Object.freeze([
-  { xp: 10, label: 'Casual', hint: 'A few minutes a day' },
-  { xp: 30, label: 'Regular', hint: 'About one lesson a day' },
-  { xp: 60, label: 'Serious', hint: 'A lesson plus reviews' },
-  { xp: 100, label: 'Intense', hint: 'Several lessons a day' },
-]);
-export const DEFAULT_GOAL = 30;
 
 /** The level a new lesson starts at (settings.level), offered at onboarding and in You. */
 export const LEVELS = Object.freeze([
@@ -52,34 +44,25 @@ export function levelOf(settings) {
   return LEVELS.some((l) => l.id === settings?.level) ? settings.level : 'beginner';
 }
 
-export function goalOf(settings) {
-  const g = Number(settings?.dailyGoal);
-  return Number.isFinite(g) && g > 0 ? Math.round(g) : DEFAULT_GOAL;
+/** Has the learner done anything today (a lesson, a review, a quiz)? */
+export function studiedToday(stats, now = new Date(), timeZone) {
+  return Number(stats?.days?.[dateKey(now, timeZone)]) > 0;
 }
 
-/** Today's XP against the daily goal. */
-export function dailyProgress(stats, settings, now = new Date(), timeZone) {
-  const goal = goalOf(settings);
-  const xp = Math.max(0, Number(stats?.days?.[dateKey(now, timeZone)]) || 0);
-  return { xp, goal, pct: Math.min(1, xp / goal), met: xp >= goal };
-}
-
-/** The last 7 local days (oldest first): {key, label, xp, active, met, today}. */
-export function weekStrip(stats, settings, now = new Date(), timeZone) {
-  const goal = goalOf(settings);
+/** The last 7 local days (oldest first): {key, label, active, today}. */
+export function weekStrip(stats, now = new Date(), timeZone) {
   const today = dateKey(now, timeZone);
   const out = [];
   for (let i = 6; i >= 0; i--) {
     const key = addDays(today, -i);
-    const xp = Math.max(0, Number(stats?.days?.[key]) || 0);
-    out.push({ key, label: 'SMTWTFS'[weekdayOf(key)], xp, active: xp > 0, met: xp >= goal, today: key === today });
+    out.push({ key, label: 'SMTWTFS'[weekdayOf(key)], active: Number(stats?.days?.[key]) > 0, today: key === today });
   }
   return out;
 }
 
 /**
  * Activity heatmap: `weeks` columns of 7 days (Sunday first), ending with the current week.
- * Each cell: {key, xp, level 0-4, future}.
+ * Each cell: {key, count, level 0-4, future}, count being that day's activities.
  */
 export function activityGrid(stats, now = new Date(), { weeks = 15, timeZone } = {}) {
   const today = dateKey(now, timeZone);
@@ -91,9 +74,9 @@ export function activityGrid(stats, now = new Date(), { weeks = 15, timeZone } =
     const col = [];
     for (let d = 0; d < 7; d++) {
       const key = addDays(start, w * 7 + d);
-      const xp = Math.max(0, Number(stats?.days?.[key]) || 0);
-      const level = xp <= 0 ? 0 : Math.min(4, Math.max(1, Math.ceil((xp / Math.max(top, 1)) * 4)));
-      col.push({ key, xp, level, future: key > today });
+      const count = Math.max(0, Number(stats?.days?.[key]) || 0);
+      const level = count <= 0 ? 0 : Math.min(4, Math.max(1, Math.ceil((count / Math.max(top, 1)) * 4)));
+      col.push({ key, count, level, future: key > today });
     }
     cols.push(col);
   }
@@ -106,7 +89,6 @@ export function learnerTotals(data, now = new Date()) {
   const deck = deckStats(data?.deck || { items: [] }, now);
   const activeDays = Object.values(data?.stats?.days || {}).filter((v) => Number(v) > 0).length;
   return {
-    xp: data?.stats?.xp || 0,
     streak: currentStreak(data?.stats || {}, now),
     bestStreak: Math.max(data?.stats?.streak?.best || 0, currentStreak(data?.stats || {}, now)),
     lessonsFinished: lessons.filter((l) => l.finished).length,

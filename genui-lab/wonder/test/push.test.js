@@ -1,5 +1,5 @@
 // Web Push reminders: which subscribed learners get the daily reminder from the cron, in their own
-// time zone, once a day, only when today's goal is not met, with the brief's top action; dead
+// time zone, once a day, only when nothing was studied yet that day, with the brief's top action; dead
 // subscriptions are dropped. A fake sender stands in for web-push (no network).
 
 import { test } from 'node:test';
@@ -62,9 +62,9 @@ test('push reminders: due after the learner\'s local time, once a day, with the 
   assert.equal(sent[1].endpoint, 'https://push.example.test/tokyo');
 });
 
-test('push reminders: none when the goal is met or reminders are off; dead subscriptions are removed', async () => {
+test('push reminders: none when they studied today or reminders are off; dead subscriptions are removed', async () => {
   const svc = createSyncService({ db: createMemoryDb() });
-  await learner(svc, 'met', { tz: 'Europe/Berlin', days: { '2026-10-22': 40 } });
+  await learner(svc, 'studied', { tz: 'Europe/Berlin', days: { '2026-10-22': 1 } });
   await learner(svc, 'off', { tz: 'Europe/Berlin', reminder: { enabled: false, time: '18:00' } });
   await learner(svc, 'gone', { tz: 'Europe/Berlin' });
   const { send, sent } = sender({ fail: { 'https://push.example.test/gone': 410 } });
@@ -72,7 +72,7 @@ test('push reminders: none when the goal is met or reminders are off; dead subsc
   assert.equal(sent.length, 0);
   assert.equal(r.removed, 1);
   assert.deepEqual(await svc.db.listSubscriptions('gone'), []);
-  assert.equal((await svc.db.listSubscriptions('met')).length, 1);
+  assert.equal((await svc.db.listSubscriptions('studied')).length, 1);
 });
 
 test('push config: needs both VAPID keys and a subject; the private key stays server-side', () => {

@@ -1,5 +1,5 @@
 // Practice deck scheduled with FSRS v5 (wondering-genui/src/fsrs.js, a port of the ts-fsrs
-// build Wondering ships, findings §5), plus XP and streak bookkeeping (findings §7).
+// build Wondering ships, findings §5), plus the per-day activity tally and streak (findings §7).
 // Pure functions over plain JSON objects so the state can live in localStorage and be tested
 // under node:test.
 
@@ -9,8 +9,6 @@ export { Rating, State };
 
 const scheduler = fsrs(); // shipped defaults: retention .9, short-term steps on, no fuzz
 const MAX_LOGS = 2000;
-
-export const XP = Object.freeze({ lessonComplete: 50, quizCorrect: 10, reviewCorrect: 5, reviewAttempt: 1, cardsCollected: 2, explainPoint: 5 });
 
 export function emptyDeck() {
   return { items: [], logs: [] };
@@ -115,10 +113,10 @@ export function formatDue(due, now = new Date()) {
   return `in ${months} months`;
 }
 
-// ---------------------------------------------------------------- XP + streak
+// ---------------------------------------------------------------- activity + streak
 
 export function emptyStats() {
-  return { xp: 0, streak: { count: 0, lastDate: null, best: 0 }, days: {} };
+  return { streak: { count: 0, lastDate: null, best: 0 }, days: {} };
 }
 
 /** Local calendar date (en-CA gives YYYY-MM-DD), as Wondering stores activity dates. */
@@ -132,12 +130,12 @@ function dayBefore(key) {
   return dt.toISOString().slice(0, 10);
 }
 
-/** Award XP and count today toward the streak. */
-export function awardXp(stats, amount, now = new Date(), timeZone) {
+/** Count one activity (a finished lesson, a review, a quiz) today and toward the streak. */
+export function recordActivity(stats, now = new Date(), timeZone) {
   const today = dateKey(now, timeZone);
   const s = { ...stats, streak: { ...stats.streak }, days: { ...stats.days } };
-  s.xp += Math.max(0, Math.round(amount));
-  s.days[today] = (s.days[today] || 0) + Math.max(0, Math.round(amount));
+  delete s.xp; // XP is gone; older states may still carry it
+  s.days[today] = (Number(s.days[today]) || 0) + 1;
   if (s.streak.lastDate !== today) {
     s.streak.count = s.streak.lastDate === dayBefore(today) ? s.streak.count + 1 : 1;
     s.streak.lastDate = today;

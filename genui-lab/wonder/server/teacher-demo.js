@@ -135,7 +135,7 @@ function script(text, ctx) {
         const p = ctx.results.get_progress || {};
         const due = p.deck?.due || 0;
         const lessons = (p.recentLessons || []).length;
-        const body = `You're on a **${p.streak || 0}-day streak** with **${p.xp || 0} XP**, ${lessons} recent lesson${lessons === 1 ? '' : 's'} and **${due} card${due === 1 ? '' : 's'} due**.`;
+        const body = `You're on a **${p.streak || 0}-day streak**, ${lessons} recent lesson${lessons === 1 ? '' : 's'} and **${due} card${due === 1 ? '' : 's'} due**.`;
         if (due) return { text: `${body} Reviews first: ten minutes now saves you an hour of relearning later.${followups(['Start my review', 'Quiz me', 'Make me a study plan'])}` };
         const next = p.recentLessons?.[0]?.title;
         return { text: `${body} Nothing is due, so let's learn something new.`, tools: [{ name: 'create_lesson', input: { topic: next ? `next steps after ${next}` : 'How memory works: the forgetting curve', level: 'beginner', reason: 'A short lesson that builds on what you have already done.' } }] };

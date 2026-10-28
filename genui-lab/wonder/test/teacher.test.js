@@ -298,8 +298,8 @@ test('history: card markup is stripped, roles alternate, the new message is last
 });
 
 test('sanitizeProgress bounds untrusted snapshots', () => {
-  const p = sanitizeProgress({ xp: -5, streak: '7', deck: { due: 1e9 }, recentLessons: Array.from({ length: 20 }, (_, i) => ({ title: `L${i}`.repeat(100) })) });
-  assert.equal(p.xp, 0);
+  const p = sanitizeProgress({ xp: 5, streak: '7', deck: { due: 1e9 }, recentLessons: Array.from({ length: 20 }, (_, i) => ({ title: `L${i}`.repeat(100) })) });
+  assert.equal(p.xp, undefined, 'no XP is passed on');
   assert.equal(p.streak, 7);
   assert.equal(p.recentLessons.length, 8);
   assert.ok(p.recentLessons[0].title.length <= 160);
@@ -416,7 +416,7 @@ test('client history turns cards into notes from their latest state; progress sn
   data.plans = [{ goal: 'Stats', days: [{ items: [{ opened: true }, { opened: false }] }] }];
   data.stats.xp = 40;
   const p = progressSnapshot(data, new Date('2026-10-21T12:00:00Z'));
-  assert.equal(p.xp, 40);
+  assert.equal(p.xp, undefined, 'an older state’s XP is not sent');
   assert.deepEqual(p.recentLessons[0], { title: 'Variance', finished: true, quiz: { score: 2, total: 3 }, when: '2026-10-20T10:00:00Z' });
   assert.deepEqual(p.plans[0], { goal: 'Stats', days: 1, opened: 1, total: 2 });
   assert.equal(p.deck.due, 0);

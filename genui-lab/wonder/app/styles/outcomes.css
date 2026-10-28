@@ -51,19 +51,11 @@
 .works-findings li[data-tone="down"] .status-dot { background: var(--warning); }
 .works-empty { margin: 0; }
 .works-lessons { list-style: none; margin: 0; padding: 0; display: grid; }
-.works-lesson, .material-row { display: flex; align-items: center; justify-content: space-between; gap: 8px 12px; flex-wrap: wrap; padding: 8px 0; }
+.works-lesson { display: flex; align-items: center; justify-content: space-between; gap: 8px 12px; flex-wrap: wrap; padding: 8px 0; }
 .works-lesson + .works-lesson { border-top: 1px solid var(--line); }
-.works-lesson .mastery-text, .material-row .mastery-text { flex: 1 1 200px; }
+.works-lesson .mastery-text { flex: 1 1 200px; }
 .works-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .works-toggle { border-top: 1px solid var(--line); }
-
-/* -- You: materials */
-.materials-card { padding: 4px 16px; }
-.materials-list { list-style: none; margin: 0; padding: 0; display: grid; }
-.material-row + .material-row { border-top: 1px solid var(--line); }
-.materials-empty { margin: 0; padding: 12px 0; }
-.material-row .icon-btn { width: 30px; height: 30px; color: var(--ink-3); }
-.material-row .icon-btn:hover { color: var(--danger); }
 
 /* -- You: the daily reminder */
 .reminder-controls { display: flex; align-items: center; gap: 12px; }

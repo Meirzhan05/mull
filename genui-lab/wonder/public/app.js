@@ -8,7 +8,7 @@ import { startAction, startTopic } from './start-core.js'; // sign in, onboardin
 import { DilSurface, mergeComponentResults } from './dil-surface.js';
 import { streamTurn, postJson, failureError, retryDelay } from './stream-client.js';
 import { retryControl } from './retry-ui.js'; // recoverable streams
-import { addItems, deckStats, awardXp, formatDue, XP } from './deck.js';
+import { addItems, deckStats, recordActivity, formatDue } from './deck.js';
 import { normalizePracticeItem } from './practice-core.js';
 import { renderReview } from './review.js';
 import { renderCourseReview, courseReviewButton } from './course-review-screen.js'; // whole-course review
@@ -29,7 +29,7 @@ import { renderToday } from './today.js';
 import { renderLibrary } from './library.js';
 import { renderYou, TEXT_SIZES } from './you.js';
 import { needsOnboarding, showOnboarding } from './onboarding.js';
-import { dailyProgress, courseProgress, roman, readingMinutes, levelOf } from './progress-core.js';
+import { courseProgress, roman, readingMinutes, levelOf } from './progress-core.js';
 import { storeEvidence, quizEvidence, explainEvidence, requestMastery } from './mastery-core.js'; // Phase 6 + 8
 import { qualitySummary } from './quality-core.js'; // Phase 7
 import { pickVariant, insightsForPrompt, lessonOutcome, RECALL_MIN, STYLE_VARIANTS } from './outcomes-core.js'; // Phase 9
@@ -196,7 +196,7 @@ function exportPlan(planId) {
 const actions = { startLesson, startMaterialLesson, planCourse, askTeacher, openPlanItem, openCourseLesson, teacherCheckIn, exportPlan };
 
 // Phase 10: the daily reminder. While any Wonder tab is open, a notification fires once a day at
-// the learner's time if today's goal is not met, saying what the brief would put first. The
+// the learner's time if they have not studied yet today, saying what the brief would put first. The
 // "shown today" mark lives outside the synced state so two tabs don't both fire.
 const REMINDED_KEY = 'wonder.reminded';
 function checkReminder() {
@@ -220,15 +220,11 @@ const shell = createShell({ store, getStatus: () => status, actions });
 
 function refreshChrome() { shell.refresh(); }
 
-function giveXp(amount, why) {
-  if (amount <= 0) return;
-  const before = dailyProgress(store.data.stats, store.data.settings);
-  store.update((d) => { d.stats = awardXp(d.stats, amount); return d; });
+/** Count a lesson, quiz or explanation toward today's activity and the streak. */
+function logActivity() {
+  store.update((d) => { d.stats = recordActivity(d.stats); return d; });
   refreshChrome();
   shell.bump();
-  const after = dailyProgress(store.data.stats, store.data.settings);
-  if (!before.met && after.met) toast(`Today’s goal is met · +${amount} XP`, 3600);
-  else toast(`+${amount} XP${why ? ` · ${why}` : ''}`);
 }
 
 async function loadStatus() {
@@ -243,7 +239,7 @@ const memoryEnabled = () => store.data.settings?.memoryEnabled !== false;
 const applyFontScale = () => document.documentElement.style.setProperty('--lesson-scale', String(Number(store.data.settings?.fontScale) || 1));
 
 /** Shared context for the screens that live in their own modules. */
-const screenCtx = () => ({ app, store, status, teardown, createLesson, giveXp, reroute: route, actions, shell, refresh: () => { refreshChrome(); applyFontScale(); } });
+const screenCtx = () => ({ app, store, status, teardown, createLesson, logActivity, reroute: route, actions, shell, refresh: () => { refreshChrome(); applyFontScale(); } });
 
 function cleanupScreen() {
   for (const fn of teardown.splice(0)) { try { fn(); } catch {} }
@@ -597,7 +593,7 @@ function renderLesson(lessonId) {
         el('p', { class: 'kicker' }, 'End of the lesson'),
         el('h2', { class: 'h-lg' }, 'File what you have learned'),
         el('p', { class: 'muted' }, 'The key ideas become index cards in your review deck. Each returns just before you would forget it.'),
-        el('div', { class: 'end-stats' }, pages ? el('span', { class: 'tag' }, `${pages} pages`) : null, score, el('span', { class: 'tag' }, `+${XP.lessonComplete} XP`)),
+        el('div', { class: 'end-stats' }, pages ? el('span', { class: 'tag' }, `${pages} pages`) : null, score),
         el('div', { class: 'end-actions' }, finishBtn,
           el('button', { class: 'btn btn-secondary btn-lg', type: 'button', onclick: () => setTutorOpen(true) }, 'Ask the tutor first')),
         qualityNote(l.quality));
@@ -977,7 +973,7 @@ function handleClientAction(a, { lessonId, openTutor, tutor }) {
       store.update((d) => { d.awarded = { ...(d.awarded || {}), [key]: true }; return d; });
       // first attempt only: a retake right after seeing the answers is not evidence of mastery
       if (memoryEnabled()) storeEvidence(store, quizEvidence(p.results, { topic: store.data.lessons[lessonId]?.title || '' }));
-      giveXp((Number(p.score) || 0) * XP.quizCorrect, `${p.score}/${p.total} on the quiz`);
+      logActivity();
       break;
     }
     case 'explain_graded': { // Phase 8: once per ExplainBack attempt
@@ -985,8 +981,7 @@ function handleClientAction(a, { lessonId, openTutor, tutor }) {
       if (store.data.awarded?.[key]) break;
       store.update((d) => { d.awarded = { ...(d.awarded || {}), [key]: true }; return d; });
       if (memoryEnabled()) storeEvidence(store, explainEvidence(p, { topic: store.data.lessons[lessonId]?.title || '' }));
-      const pts = Math.max(0, Math.min(3, Number(p.score) || 0));
-      if (pts && !(Number(p.attempt) > 0)) giveXp(pts * XP.explainPoint, `${pts}/3 on your explanation`);
+      if (!(Number(p.attempt) > 0)) logActivity();
       break;
     }
     case 'save_flashcards': {
@@ -1295,12 +1290,10 @@ function showPack(lesson, data, { onFinished } = {}) {
       return d;
     });
     store.flush();
-    const gained = first ? XP.lessonComplete + added * XP.cardsCollected : 0;
-    if (gained) giveXp(gained, 'lesson finished');
+    if (first) logActivity();
     else toast(added ? `${added} new cards filed` : 'These cards are already in your deck');
     onFinished?.();
     // what next: the next course lesson, a review, or back to Today
-    const day = dailyProgress(store.data.stats, store.data.settings);
     const nxt = lesson.courseId ? nextInCourse(lesson.courseId, lesson.id) : null;
     const due = deckStats(store.data.deck).due;
     const step = (title, sub2, onclick) => el('li', null, el('button', { class: 'numbered-row', type: 'button', onclick: () => { close(); onclick(); } },
@@ -1308,9 +1301,6 @@ function showPack(lesson, data, { onFinished } = {}) {
     panel.replaceChildren(el('div', { class: 'pack-done' },
       el('p', { class: 'kicker' }, 'Filed'),
       el('h2', { class: 'h-lg' }, `${added} card${added === 1 ? '' : 's'} added to your deck`),
-      el('div', { class: 'ledger ledger-compact' },
-        el('div', { class: 'ledger-item' }, el('span', { class: 'ledger-label' }, 'Earned'), el('span', { class: 'ledger-value' }, `+${gained}`, el('small', null, ' XP'))),
-        el('div', { class: 'ledger-item' }, el('span', { class: 'ledger-label' }, 'Today'), el('span', { class: 'ledger-value' }, String(day.xp), el('small', null, ` / ${day.goal} XP`)), el('span', { class: `ledger-bar ${day.met ? 'met' : ''}`, 'aria-hidden': 'true' }, el('i', { style: { width: `${Math.round(day.pct * 100)}%` } })))),
       el('h3', { class: 'rubric' }, 'What next'),
       el('ol', { class: 'numbered' },
         nxt ? step(nxt.title, `Next in ${nxt.course.title}`, () => openCourseLesson(lesson.courseId, nxt.si, nxt.li)) : null,
@@ -1329,7 +1319,7 @@ function showPack(lesson, data, { onFinished } = {}) {
 function renderReviewScreen(lessonId = null) {
   const root = el('div', { class: 'review-wrap' });
   app.replaceChildren(root);
-  const cleanup = renderReview(root, { store, lessonId, onExit: () => { location.hash = lessonId ? '#/you' : '#/'; }, onXp: () => { refreshChrome(); shell.bump(); } });
+  const cleanup = renderReview(root, { store, lessonId, onExit: () => { location.hash = lessonId ? '#/you' : '#/'; }, onActivity: () => { refreshChrome(); shell.bump(); } });
   if (typeof cleanup === 'function') teardown.push(cleanup);
 }
 

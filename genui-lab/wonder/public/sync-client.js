@@ -66,7 +66,7 @@ export function createSyncEngine({ store, storage, userId, post, now = () => Dat
         continue; // both have it: the local version goes up against no base, so the server merges the two
       }
       // edited during the round: keep ours, and keep the old base, so the next push is a
-      // concurrent change the server merges (XP, evidence) rather than a plain overwrite
+      // concurrent change the server merges (activity, evidence) rather than a plain overwrite
       if (localH !== (snap.get(key) ?? DELETED_HASH)) continue;
       state.base.set(key, seen);
       toApply.push(r);

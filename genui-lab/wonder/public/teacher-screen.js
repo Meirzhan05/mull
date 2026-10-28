@@ -9,8 +9,8 @@ import { DilSurface, mergeComponentResults } from './dil-surface.js';
 import { hasViewState } from './view-state.js';
 import { streamTurn, postJson, failureError, retryDelay } from './stream-client.js';
 import { retryControl } from './retry-ui.js'; // recoverable streams
-import { XP, deckStats, currentStreak, dateKey } from './deck.js';
-import { dailyProgress, learnerTotals } from './progress-core.js';
+import { deckStats, currentStreak, dateKey } from './deck.js';
+import { learnerTotals } from './progress-core.js';
 import { el, icon, toast } from './ui.js';
 import { progressSnapshot, historyForModel, threadTitle, TEACHER_OPENER } from './teacher-core.js';
 import { storeEvidence, quizEvidence, explainEvidence, requestMastery } from './mastery-core.js'; // Phase 6 + 8
@@ -42,7 +42,7 @@ function relTime(iso) {
 }
 
 /**
- * @param {{app: HTMLElement, store: object, status: object, teardown: Function[], createLesson: Function, giveXp: Function}} ctx
+ * @param {{app: HTMLElement, store: object, status: object, teardown: Function[], createLesson: Function, logActivity: Function}} ctx
  * @param {string|null} threadId
  */
 export function renderTeacher(ctx, threadId) {
@@ -67,7 +67,7 @@ export function renderTeacher(ctx, threadId) {
   input.addEventListener('input', () => { input.style.height = 'auto'; input.style.height = `${Math.min(160, input.scrollHeight)}px`; });
   const toggleThreads = el('button', { class: 'icon-btn threads-toggle', type: 'button', 'aria-label': 'Show chats', 'aria-expanded': 'false' }, icon('menu'));
   const ctxToggle = el('button', { class: 'icon-btn ctx-toggle', type: 'button', 'aria-label': 'What your Teacher sees', 'aria-expanded': 'false', title: 'Context' }, icon('list'));
-  const memChip = el('a', { class: `mem-chip ${memoryOn() ? 'on' : ''}`, href: '#/memory', title: 'Learner memory' }, icon('brain'), memoryOn() ? 'Memory on' : 'Memory off');
+  const memChip = el('span', { class: `mem-chip ${memoryOn() ? 'on' : ''}`, title: 'Learner memory' }, icon('brain'), memoryOn() ? 'Memory on' : 'Memory off');
   const empty = el('div', { class: 'teacher-empty' },
     el('span', { class: 'tutor-avatar big', 'aria-hidden': 'true' }, icon('teacher')),
     el('h1', { class: 'h-lg' }, 'Your Teacher'),
@@ -193,7 +193,7 @@ export function renderTeacher(ctx, threadId) {
         if (store.data.awarded?.[key]) break;
         store.update((d) => { d.awarded = { ...(d.awarded || {}), [key]: true }; return d; });
         if (memoryOn()) storeEvidence(store, quizEvidence(p.results, { source: 'teacher_quiz' }));
-        ctx.giveXp((Number(p.score) || 0) * XP.quizCorrect, `${p.score}/${p.total} on the quiz`);
+        ctx.logActivity();
         break;
       }
       case 'explain_graded': { // Phase 8
@@ -201,8 +201,7 @@ export function renderTeacher(ctx, threadId) {
         if (store.data.awarded?.[key]) break;
         store.update((d) => { d.awarded = { ...(d.awarded || {}), [key]: true }; return d; });
         if (memoryOn()) storeEvidence(store, explainEvidence(p));
-        const pts = Math.max(0, Math.min(3, Number(p.score) || 0));
-        if (pts && !(Number(p.attempt) > 0)) ctx.giveXp(pts * XP.explainPoint, `${pts}/3 on your explanation`);
+        if (!(Number(p.attempt) > 0)) ctx.logActivity();
         break;
       }
       case 'open_url': if (/^https?:\/\//i.test(p.url || '') || /^\/api\/materials\/file\?id=mat-[0-9a-f]{12}(#page=\d+)?$/.test(p.url || '')) window.open(p.url, '_blank', 'noopener,noreferrer'); break;
@@ -371,15 +370,13 @@ function buildContext(store) {
   const root = el('aside', { class: 'teacher-context', 'aria-label': 'What your Teacher sees' },
     el('p', { class: 'ctx-intro muted small' }, 'Sent with every message, so replies fit where you are.'),
     el('section', { class: 'stat-panel' }, el('span', { class: 'stat-label' }, 'Progress'), progress),
-    el('section', { class: 'stat-panel' }, el('span', { class: 'stat-label' }, 'Memory', el('a', { class: 'link-btn', href: '#/you' }, 'Edit')), memList),
+    el('section', { class: 'stat-panel' }, el('span', { class: 'stat-label' }, 'Memory'), memList),
     el('section', { class: 'stat-panel' }, el('span', { class: 'stat-label' }, 'Study plan'), planBox));
   function refresh() {
     const d = store.data;
     const t = learnerTotals(d);
-    const day = dailyProgress(d.stats, d.settings);
     const deck = deckStats(d.deck);
     progress.replaceChildren(
-      el('dt', null, 'Today'), el('dd', null, `${day.xp} / ${day.goal} XP`),
       el('dt', null, 'Streak'), el('dd', null, `${currentStreak(d.stats)} days`),
       el('dt', null, 'Lessons'), el('dd', null, `${t.lessonsFinished} finished`),
       el('dt', null, 'Cards'), el('dd', null, `${deck.due} due · ${deck.total} total`));

@@ -14,7 +14,7 @@
 // Merge (server side, when a change was made against an older revision than the stored one):
 //   deletes and plain records: the later edit (client updatedAt) wins
 //   concept: union of evidence events     reviewLog: immutable
-//   state/stats: max XP per day           state/awarded: union        state/settings: shallow merge
+//   state/stats: max activity per day     state/awarded: union        state/settings: shallow merge
 
 export const SERVER_KINDS = Object.freeze(['memory', 'material']);
 export const CLIENT_KINDS = Object.freeze(['course', 'lesson', 'thread', 'plan', 'teacherLesson', 'concept', 'card', 'reviewLog', 'state']);
@@ -153,9 +153,10 @@ function mergeStats(a, b) {
   const sa = a?.streak || {};
   const sb = b?.streak || {};
   const later = String(sb.lastDate || '') > String(sa.lastDate || '') || (sb.lastDate === sa.lastDate && (sb.count || 0) > (sa.count || 0)) ? sb : sa;
+  const { xp: _xa, ...ra } = a || {};
+  const { xp: _xb, ...rb } = b || {};
   return {
-    ...a, ...b,
-    xp: Math.max(Number(a?.xp) || 0, Number(b?.xp) || 0),
+    ...ra, ...rb,
     streak: { ...later, best: Math.max(Number(sa.best) || 0, Number(sb.best) || 0, Number(later.count) || 0) },
     days,
   };
@@ -194,13 +195,13 @@ export function mergeRecord(kind, id, stored, incoming) {
 }
 
 /** Records -> a whole state (server side: the reminder cron reads a learner's state). */
-export function recordsToState(records, empty = () => ({ version: 1, courses: [], lessons: {}, deck: { items: [], logs: [] }, stats: { xp: 0, streak: { count: 0, lastDate: null, best: 0 }, days: {} }, awarded: {}, teacherThreads: [], teacherLessons: {}, plans: [], mastery: {}, settings: {} })) {
+export function recordsToState(records, empty = () => ({ version: 1, courses: [], lessons: {}, deck: { items: [], logs: [] }, stats: { streak: { count: 0, lastDate: null, best: 0 }, days: {} }, awarded: {}, teacherThreads: [], teacherLessons: {}, plans: [], mastery: {}, settings: {} })) {
   const live = records.filter((r) => !r.deleted && CLIENT_KINDS.includes(r.kind));
   // in revision order: applyRecords puts each new list item first, so lists end newest first
   return applyRecords(empty(), live.slice().sort((a, b) => (Number(a.rev) || 0) - (Number(b.rev) || 0)));
 }
 
-/** Does this state hold anything worth keeping (lessons, courses, cards, chats, plans, XP)? */
+/** Does this state hold anything worth keeping (lessons, courses, cards, chats, plans, activity)? */
 export function hasLearnerData(data) {
-  return !!(Object.keys(data?.lessons || {}).length || data?.courses?.length || data?.deck?.items?.length || data?.teacherThreads?.length || data?.plans?.length || Number(data?.stats?.xp) > 0 || Object.keys(data?.mastery || {}).length);
+  return !!(Object.keys(data?.lessons || {}).length || data?.courses?.length || data?.deck?.items?.length || data?.teacherThreads?.length || data?.plans?.length || Object.values(data?.stats?.days || {}).some((v) => Number(v) > 0) || Object.keys(data?.mastery || {}).length);
 }

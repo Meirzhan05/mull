@@ -1,13 +1,13 @@
 // First-run welcome, a full-screen flow in three steps that ends in the learner's first lesson:
 // 1. what they're curious about (interests, with a live preview of the topics they unlock),
-// 2. their pace (the level lessons start at and a daily goal),
+// 2. their pace (the level lessons start at),
 // 3. a first lesson, picked from those topics or typed in.
 // Skippable at any point (Esc or Skip keeps what was chosen so far); the choices live in
-// store.settings: name, interests, level, dailyGoal. Only what the learner actually set is
+// store.settings: name, interests, level. Only what the learner actually set is
 // written, so settings that arrive meanwhile (account sync on a new device) are not reset.
 
 import { el, icon } from './ui.js';
-import { INTERESTS, DAILY_GOALS, LEVELS, suggestedTopics, topicInterest, goalOf, levelOf } from './progress-core.js';
+import { INTERESTS, LEVELS, suggestedTopics, topicInterest, levelOf } from './progress-core.js';
 
 const STEPS = ['Interests', 'Pace', 'First lesson'];
 
@@ -36,7 +36,7 @@ export function interestGrid(selected, onToggle) {
  */
 export function showOnboarding({ store, onDone, startLesson, firstTopic = '', accountName = null }) {
   const settings = store.data?.settings || {};
-  const pick = { name: String(settings.name || '').trim(), interests: new Set(settings.interests || []), level: levelOf(settings), dailyGoal: goalOf(settings) };
+  const pick = { name: String(settings.name || '').trim(), interests: new Set(settings.interests || []), level: levelOf(settings) };
   const touched = new Set(); // the picks the learner made; only these are saved
   let step = 0;
   let back = false;
@@ -60,7 +60,6 @@ export function showOnboarding({ store, onDone, startLesson, firstTopic = '', ac
     const patch = { onboarded: true };
     if (touched.has('interests')) patch.interests = [...pick.interests];
     if (touched.has('level')) patch.level = pick.level;
-    if (touched.has('dailyGoal')) patch.dailyGoal = pick.dailyGoal;
     const name = pick.name.trim();
     store.update((d) => {
       if (touched.has('name') || (name && !d.settings?.name)) patch.name = name;
@@ -137,12 +136,10 @@ export function showOnboarding({ store, onDone, startLesson, firstTopic = '', ac
       return group;
     };
     const level = choice('Level', LEVELS.map((l) => ({ value: l.id, label: l.label, hint: l.hint })), pick.level, (v) => { pick.level = v; touched.add('level'); });
-    const goal = choice('Daily goal', DAILY_GOALS.map((g) => ({ value: g.xp, label: g.label, hint: g.hint, tag: `${g.xp} XP` })), pick.dailyGoal, (v) => { pick.dailyGoal = v; touched.add('dailyGoal'); });
     const node = el('div', { class: 'onboard-step' },
-      heading(`How should lessons feel${pick.name.trim() ? `, ${pick.name.trim()}` : ''}?`, 'Both are a starting point. You can change the level on any lesson, and the goal in You.'),
+      heading(`How should lessons feel${pick.name.trim() ? `, ${pick.name.trim()}` : ''}?`, 'A starting point. You can change the level on any lesson, and in You.'),
       el('div', { class: 'onboard-pace' },
-        el('div', { class: 'onboard-field' }, el('span', null, 'Start lessons at'), level),
-        el('div', { class: 'onboard-field' }, el('span', null, 'Daily goal'), goal)),
+        el('div', { class: 'onboard-field' }, el('span', null, 'Start lessons at'), level)),
       actions(el('button', { class: 'btn btn-lg', type: 'button', onclick: () => go(2) }, 'Continue', icon('arrow-right'))));
     return [node, level.querySelector('[aria-checked="true"]')];
   }
