@@ -105,17 +105,6 @@
 }
 
 /* Lesson quality check, last child of the end panel */
-.quality-note { width: 100%; max-width: 520px; margin-top: 6px; text-align: left; font-size: 0.8125rem; color: var(--ink-2); border: 1px solid var(--line); border-radius: var(--r-md); padding: 10px 12px; background: var(--surface); }
-.quality-note p, .quality-note summary { margin: 0; display: flex; gap: 8px; align-items: flex-start; }
-.quality-note summary { cursor: pointer; list-style: none; border-radius: var(--r-sm); }
-.quality-note summary::-webkit-details-marker { display: none; }
-.quality-note summary:focus-visible { outline: none; box-shadow: var(--ring); }
-.quality-note .ui-icon { width: 15px; height: 15px; flex: 0 0 auto; margin-top: 2px; color: var(--ink-3); }
-.quality-note.ok .ui-icon, .quality-note.fixed .ui-icon { color: var(--success); }
-.quality-note.warn .ui-icon { color: var(--warning); }
-.quality-note ul { margin: 8px 0 0; padding-left: 23px; display: grid; gap: 4px; }
-.quality-note li strong { font-weight: 600; color: var(--ink); }
-.quality-note li.major strong { color: var(--danger); }
 
 /* Free-response review cards */
 .explain-form { display: grid; gap: 10px; }

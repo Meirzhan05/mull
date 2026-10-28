@@ -31,7 +31,6 @@ import { renderYou, TEXT_SIZES } from './you.js';
 import { needsOnboarding, showOnboarding } from './onboarding.js';
 import { dailyProgress, courseProgress, roman, readingMinutes, levelOf } from './progress-core.js';
 import { storeEvidence, quizEvidence, explainEvidence, requestMastery } from './mastery-core.js'; // Phase 6 + 8
-import { qualitySummary } from './quality-core.js'; // Phase 7
 import { pickVariant, insightsForPrompt, lessonOutcome, RECALL_MIN, STYLE_VARIANTS } from './outcomes-core.js'; // Phase 9
 
 // Signed in: this account's IndexedDB cache (synced with the server); signed out: localStorage.
@@ -599,8 +598,7 @@ function renderLesson(lessonId) {
         el('p', { class: 'muted' }, 'The key ideas become index cards in your review deck. Each returns just before you would forget it.'),
         el('div', { class: 'end-stats' }, pages ? el('span', { class: 'tag' }, `${pages} pages`) : null, score, el('span', { class: 'tag' }, `+${XP.lessonComplete} XP`)),
         el('div', { class: 'end-actions' }, finishBtn,
-          el('button', { class: 'btn btn-secondary btn-lg', type: 'button', onclick: () => setTutorOpen(true) }, 'Ask the tutor first')),
-        qualityNote(l.quality));
+          el('button', { class: 'btn btn-secondary btn-lg', type: 'button', onclick: () => setTutorOpen(true) }, 'Ask the tutor first')));
       return;
     }
     endPanel.className = 'card lesson-end finished';
@@ -615,8 +613,7 @@ function renderLesson(lessonId) {
       el('div', { class: 'end-actions' },
         nxt ? el('button', { class: 'btn btn-lg', type: 'button', onclick: () => openCourseLesson(l.courseId, nxt.si, nxt.li) }, `Next: ${nxt.title}`, icon('arrow-right')) : null,
         due ? el('a', { class: `btn btn-lg ${nxt ? 'btn-secondary' : ''}`, href: '#/review' }, `Review ${due} card${due === 1 ? '' : 's'}`) : null,
-        el('a', { class: `btn btn-lg ${nxt || due ? 'btn-secondary' : ''}`, href: '#/' }, 'Back to Today')),
-      qualityNote(l.quality));
+        el('a', { class: `btn btn-lg ${nxt || due ? 'btn-secondary' : ''}`, href: '#/' }, 'Back to Today')));
   }
 
   function markComplete() {
@@ -873,8 +870,6 @@ function renderLesson(lessonId) {
       streaming = false;
       autoRetried = false;
       saveLesson(lessonId, { status: 'complete', streamOwner: null, markdown: msg.markdown, dil, appData: current.appData, messageId, title: lessonTitleFrom(msg.markdown, l.title), truncated: !!r.final?.debug?.truncated, interruptedReason: null, quality });
-      const qs = qualitySummary(quality);
-      if (qs?.tone === 'fixed') toast(qs.headline, 4200);
       store.flush();
       if (dil) surface.pruneViewState(resolutionIdsOf(dil)); // widget state: drop widgets a revision removed or rewrote
       if (r.final?.debug?.truncated) toast('The lesson was cut short (length limit).');
@@ -952,16 +947,6 @@ function renderLesson(lessonId) {
       window.removeEventListener('beforeunload', onHide);
     }
   }
-}
-
-/** Phase 7: the lesson's quality check, a collapsed note in the end panel. */
-function qualityNote(report) {
-  const q = qualitySummary(report);
-  if (!q) return null;
-  const ic = q.tone === 'warn' ? 'quote' : q.tone === 'lint' ? 'list' : 'check';
-  if (!q.items.length) return el('div', { class: `quality-note ${q.tone}` }, el('p', null, icon(ic), el('span', null, q.headline)));
-  return el('details', { class: `quality-note ${q.tone}` }, el('summary', null, icon(ic), el('span', null, q.headline)),
-    el('ul', null, ...q.items.map((i) => el('li', { class: i.major ? 'major' : '' }, el('strong', null, `${i.label}. `), i.text))));
 }
 
 function handleClientAction(a, { lessonId, openTutor, tutor }) {

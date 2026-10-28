@@ -1,6 +1,6 @@
 // Phase 7: lesson quality. The deterministic lint, the critic call (structured output, fixes
 // applied to Quiz props only when they still validate), the quality-report control and the
-// replace record in /api/lesson/stream, the client summary, and the eval harness (judge,
+// replace record in /api/lesson/stream, and the eval harness (judge,
 // summary, markdown report, an end-to-end demo and fake-Claude run).
 
 import { test } from 'node:test';
@@ -13,7 +13,6 @@ import { createMemoryStore } from '../server/memory.js';
 import { lintLesson, lessonParts, applyQuizFixes, normalizeCritique, criticUserMessage, citesAsText, critiqueLesson, qualityReport, CRITIC_SYSTEM_PROMPT } from '../server/critic.js';
 import { normalizeJudgement, summarizeRuns, reportMarkdown, RUBRIC_KEYS, JUDGE_SYSTEM_PROMPT } from '../server/judge.js';
 import { componentsOf } from '../server/practice.js';
-import { qualitySummary } from '../public/quality-core.js';
 import { parseArgs, runEval, writeReport } from '../evals/run.js';
 import { ConversationSourceParser, ConversationTurn } from '../../chatgpt-dil/src/stream.js';
 import { fakeClient, demo, DEMO_FILES } from './helpers.js';
@@ -101,7 +100,6 @@ test('lesson stream: the critic fixes a wrong answer key with one replace record
     assert.deepEqual(report.critic.fixed, [{ question_id: 'q1', from: ['a'], to: ['b'] }]);
     const order = records.map((r) => r.detail?.kind || r.type);
     assert.ok(order.indexOf('quality-report') < order.indexOf('message-stream-complete'));
-    assert.equal(qualitySummary(report).tone, 'fixed', 'the only issue was the key it fixed');
   });
 });
 
@@ -110,7 +108,6 @@ test('lesson stream: demo mode lints only; verify:false skips the check; a faili
     const { report } = await lessonTurn(base, { topic: 'Why the sky is blue' });
     assert.equal(report.critic.skipped, true);
     assert.equal(report.lint.total, 12);
-    assert.equal(qualitySummary(report).tone, 'lint');
     const off = await lessonTurn(base, { topic: 'Why the sky is blue', verify: false });
     assert.equal(off.report, undefined);
     assert.equal(off.turn.primary.status, 'complete');
@@ -123,16 +120,6 @@ test('lesson stream: demo mode lints only; verify:false skips the check; a faili
     assert.equal(report.critic.skipped, true);
     assert.equal(report.critic.reason, 'internal');
   });
-});
-
-test('qualitySummary: ok / fixed / warn / lint tones and headlines', () => {
-  const lint = { score: 1, passed: 12, total: 12, checks: [] };
-  assert.equal(qualitySummary(null), null);
-  assert.equal(qualitySummary(qualityReport({ lint, critique: { verdict: 'pass', summary: '', issues: [] }, checked: true })).tone, 'ok');
-  const fixed = qualitySummary(qualityReport({ lint, critique: { verdict: 'minor_issues', summary: '', issues: [{ severity: 'minor', kind: 'quiz_key', page: 5, problem: 'key' }] }, applied: [{ question_id: 'q2', from: ['a'], to: ['c'] }], checked: true }));
-  assert.equal(fixed.tone, 'fixed');
-  assert.match(fixed.headline, /1 quiz answer corrected/);
-  assert.equal(fixed.items.length, 1, 'the quiz_key issue the fix resolved is not repeated');
 });
 
 test('judge: scores are bounded, the mean skips missing ones; runs summarize into a markdown report', () => {
