@@ -5,10 +5,10 @@
 const key = (kind, id) => `${kind}:${id}`;
 
 export function createMemoryDb() {
-  const users = new Map(); // userId -> {rev, deletedRev, records: Map, subs: Map, reminders: Set, files: Map, usage: Map}
+  const users = new Map(); // userId -> {rev, deletedRev, records: Map, subs: Map, reminders: Set, files: Map, usage: Map, plan}
   const locks = new Map(); // userId -> tail of the transaction queue
   const user = (id) => {
-    if (!users.has(id)) users.set(id, { rev: 0, deletedRev: 0, records: new Map(), subs: new Map(), reminders: new Set(), files: new Map(), usage: new Map() });
+    if (!users.has(id)) users.set(id, { rev: 0, deletedRev: 0, records: new Map(), subs: new Map(), reminders: new Set(), files: new Map(), usage: new Map(), plan: null });
     return users.get(id);
   };
   const copy = (r) => ({ ...r });
@@ -53,6 +53,7 @@ export function createMemoryDb() {
       const result = await fn(tx);
       if (wiped) {
         for (const m of [u.records, u.subs, u.reminders, u.files]) m.clear();
+        u.plan = null;
         u.deletedRev = rev;
       }
       for (const [k, r] of pending) u.records.set(k, r);
@@ -105,12 +106,20 @@ export function createMemoryDb() {
       for (const [k, n] of users.get(userId)?.usage || []) if (k.startsWith(`${day}|`)) out[k.slice(day.length + 1)] = n;
       return out;
     },
+    // -- Free/Pro plans (server/plans.js)
+    async getPlan(userId) { const p = users.get(userId)?.plan; return p ? { ...p } : null; },
+    async setPlan(userId, p) {
+      const u = user(userId);
+      if (u.plan?.syncedAt != null && p.syncedAt != null && p.syncedAt < u.plan.syncedAt) return false; // an older read
+      u.plan = { ...p };
+      return true;
+    },
     // -- material files
     async putFile(userId, id, { bytes, contentType }) { user(userId).files.set(id, { bytes: Buffer.from(bytes), contentType }); },
     async getFile(userId, id) { const f = users.get(userId)?.files.get(id); return f ? { bytes: Buffer.from(f.bytes), contentType: f.contentType } : null; },
     async deleteFile(userId, id) { users.get(userId)?.files.delete(id); },
     async listFiles(userId, prefix = '') { return [...(users.get(userId)?.files.keys() || [])].filter((id) => id.startsWith(prefix)); },
-    /** Delete account: records, files, push subscriptions and the reminder log (tx.wipe). */
+    /** Delete account: records, files, push subscriptions, the reminder log and the plan (tx.wipe). */
     async deleteUser(userId) { await transaction(userId, (tx) => tx.wipe()); },
     async close() {},
   };

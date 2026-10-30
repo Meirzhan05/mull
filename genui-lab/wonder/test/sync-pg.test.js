@@ -18,7 +18,7 @@ const quiet = { warn() {}, error() {}, info() {}, log() {} };
 async function fresh() {
   const { default: pg } = await import('pg');
   const pool = new pg.Pool({ connectionString: URL_, max: 8 });
-  await pool.query('DROP TABLE IF EXISTS wonder_records, wonder_users, wonder_push_subscriptions, wonder_reminders_sent, wonder_usage, wonder_files');
+  await pool.query('DROP TABLE IF EXISTS wonder_records, wonder_users, wonder_push_subscriptions, wonder_reminders_sent, wonder_usage, wonder_files, wonder_plans');
   const db = createPgDb({ pool });
   return { db, svc: createSyncService({ db }) };
 }
@@ -114,4 +114,24 @@ test('postgres: delete account wipes one user, keeps the revision counter and us
     assert.ok((await put('alice', 'a2')).rev > rev, 'revisions keep counting up');
     assert.equal(await svc.count('bob'), 1);
   } finally { await db.close(); }
+});
+
+test('postgres: plan records round-trip, an older provider read is dropped, and the plan goes with the account', { skip: !URL_ && 'set WONDER_TEST_DATABASE_URL' }, async () => {
+  const { db, svc } = await fresh();
+  try {
+    assert.equal(await db.getPlan('alice'), null);
+    const rec = { plan: 'pro', status: 'active', provider: 'polar', customerId: 'cus_1', subscriptionId: 'sub_1', periodEnd: Date.UTC(2026, 10, 24), cancelAtPeriodEnd: false, syncedAt: 2000 };
+    assert.equal(await db.setPlan('alice', rec), true);
+    assert.deepEqual(await db.getPlan('alice'), rec);
+    assert.equal(await db.setPlan('alice', { ...rec, status: 'canceled', syncedAt: 1000 }), false, 'read before the stored one');
+    assert.equal((await db.getPlan('alice')).status, 'active');
+    assert.equal(await db.setPlan('alice', { ...rec, cancelAtPeriodEnd: true, periodEnd: null, syncedAt: 3000 }), true);
+    assert.deepEqual(await db.getPlan('alice'), { ...rec, cancelAtPeriodEnd: true, periodEnd: null, syncedAt: 3000 });
+    assert.equal(await db.setPlan('alice', { ...rec, status: 'trialing', syncedAt: null }), true, 'no stamp: always written');
+    assert.equal(await db.getPlan('bob'), null, 'per user');
+    await svc.deleteAccount('alice');
+    assert.equal(await db.getPlan('alice'), null);
+  } finally {
+    await db.close();
+  }
 });

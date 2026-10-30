@@ -390,7 +390,7 @@ Interactive widgets keep their state across reloads and when a lesson is reopene
 - **Server-side widget state is in memory** (quiz answers per resolution id). The client persists `componentResults` with each lesson, so reloads still restore it, but a server restart forgets its copy.
 - **One sandbox worker per surface**: the lesson plus each tutor reply. Very long tutor threads therefore start many workers. They are terminated when you leave the lesson.
 - **Tutor replies are not lesson-specific in demo mode.** They are templates that use the lesson's KeyTerms and Quiz. Any other topic streams one of the three sample lessons.
-- **Accounts are optional.** Without Neon Auth and a database, courses, lessons, the deck and activity live in this browser's localStorage, and the app falls back to in-memory storage when localStorage is blocked. With them, see [Accounts, sync and daily limits](#accounts-sync-and-daily-limits).
+- **Accounts are optional.** Without Neon Auth and a database, courses, lessons, the deck and activity live in this browser's localStorage, and the app falls back to in-memory storage when localStorage is blocked. With them, see [Accounts, sync, daily limits and plans](#accounts-sync-daily-limits-and-plans).
 - **Multi-tab is safe.**
   - The cross-tab lock keeps two tabs from streaming the same lesson.
   - `store.js` writes with a three-way merge per lesson, thread, course and plan, and idle tabs pick up other tabs' saves. So one tab no longer wipes another tab's changes.
@@ -841,7 +841,7 @@ Three catalog components put pictures or video next to the explanation.
   - **Critic.** In these runs it flagged Diagram problems the lint cannot see: "to lungs/to body" arrows leaving the bottom of the ventricles, an earthquake epicenter drawn off to the side of its focus, and a Diagram step's arithmetic (a 44 mm image does not fit a 36 mm sensor "sideways").
   - **Remaining format misses.** Mostly `key_terms`: lessons use 6-7 distinct KeyTerms where the lint wants 2-5.
 
-## Accounts, sync and daily limits
+## Accounts, sync, daily limits and plans
 
 Accounts are off unless **both** Neon Auth and a database are set. Without them Mull runs exactly as before: browser-only, one local learner.
 
@@ -865,27 +865,54 @@ Accounts are off unless **both** Neon Auth and a database are set. Without them 
 
 **Who may use Claude** (`server/usage.js`). With accounts on:
 - **Sign-in required.** Every route that calls Claude needs a signed-in user: lessons, tutor, Teacher, course plans, card and memory extraction, and free-response grading. A signed-out request gets `401 {signedOut: true}`, and the lesson page shows **Sign in to start this lesson** with a Sign in button. A new lesson refused this way is not kept, so it never shows as Failed in Recent. Signing in from that button starts the same topic again on the account; the topic waits in the tab's `sessionStorage` (`wonder.afterSignIn`, up to 30 minutes) across the sign-in reload.
-- **Daily caps.** In Claude mode, each user has these caps per UTC day:
+- **Daily caps.** In Claude mode, each user has these caps per UTC day, by plan (see **Plans** below):
 
-| Kind | Default | Override |
-|---|---|---|
-| Lessons (new, steer, resume, revise) | 20 | `WONDER_LIMIT_LESSON` |
-| Tutor messages | 100 | `WONDER_LIMIT_TUTOR` |
-| Teacher messages | 60 | `WONDER_LIMIT_TEACHER` |
-| Course plans | 10 | `WONDER_LIMIT_COURSE` |
-| Card and memory extractions | 60 | `WONDER_LIMIT_EXTRACT` |
-| Graded free-response answers | 150 | `WONDER_LIMIT_GRADE` |
+| Kind | Free | Pro | Override (Free / Pro) |
+|---|---|---|---|
+| Lessons (new, steer, resume, revise) | 20 | 100 | `WONDER_LIMIT_LESSON` / `WONDER_PRO_LIMIT_LESSON` |
+| Tutor messages | 100 | 500 | `WONDER_LIMIT_TUTOR` / `WONDER_PRO_LIMIT_TUTOR` |
+| Teacher messages | 60 | 300 | `WONDER_LIMIT_TEACHER` / `WONDER_PRO_LIMIT_TEACHER` |
+| Course plans | 10 | 50 | `WONDER_LIMIT_COURSE` / `WONDER_PRO_LIMIT_COURSE` |
+| Card and memory extractions | 60 | 300 | `WONDER_LIMIT_EXTRACT` / `WONDER_PRO_LIMIT_EXTRACT` |
+| Graded free-response answers | 150 | 750 | `WONDER_LIMIT_GRADE` / `WONDER_PRO_LIMIT_GRADE` |
 
   `off` or a negative number removes a cap, and `0` turns that kind off.
 - **Counting.** Counts live in the database (`wonder_usage`, one atomic upsert per request), so they hold across serverless instances.
-- **Over the cap.** A request over its cap gets `429` with `{limited: {kind, max, resetsAt}}`. The browser does not retry it (a plain 429, Claude being busy, still is) and says when the cap resets.
+- **Over the cap.** A request over its cap gets `429` with `{limited: {kind, max, plan, resetsAt}}`. The browser does not retry it (a plain 429, Claude being busy, still is) and says when the cap resets.
 - **Retries.** A dropped stream's automatic retries (same `streamKey`/`turnId`) are free twice within 10 minutes; reusing a key beyond that is charged.
 - **Database errors** fail open and are logged, so a hiccup never locks everyone out.
 - **Where caps don't apply.** Demo mode has no caps, since it costs nothing. Without accounts there is neither sign-in nor caps.
-- **Today's use** comes back from `GET /api/account` (`usage`); the app does not show it.
+- **You page.** The signed-in account card shows the plan, with Upgrade or Manage billing when billing is on; today's use comes back from `GET /api/account` (`usage`) but the app does not show it.
+
+**Plans** (`server/plans.js`). Every signed-in user is on **Free** unless they are on **Pro**. The plan only decides which daily caps apply.
+- **Who is Pro.** A user whose plan record (`wonder_plans`, one row per user) says `pro` with status `active`, `trialing` or `past_due`, until 3 days after its period end (so a late renewal never drops a payer to Free). Or a user id listed in `WONDER_PRO_USERS`, which comps Pro without a record.
+- **Admins.** User ids in `WONDER_ADMIN_USERS` show as Pro ("Admin on this Mull server") and skip the daily caps entirely; their requests are not counted. Find an id with `GET /api/account` while signed in (`userId`).
+- **Plan records** are provider-neutral: `{plan, status, provider, customerId, subscriptionId, periodEnd, cancelAtPeriodEnd}`. `createPlans().setPlan()` validates and stores one.
+- **Failing safe.** A plan lookup that fails is logged and counts as Free.
+
+**Buying Pro** (`server/billing.js`). Pro is sold through [Polar](https://polar.sh), a merchant of record: Polar runs the checkout, charges sales tax and VAT, and pays the seller out (it pays out to many countries Stripe does not, Kazakhstan among them). Off unless all three of `POLAR_ACCESS_TOKEN`, `POLAR_WEBHOOK_SECRET` and `POLAR_PRODUCT_ID` are set; then `/api/account` sends `billing: {provider, sandbox, price, canUpgrade, canManage}` and the You page shows **Upgrade** or **Manage billing**.
+- **Pro products.** `POLAR_PRODUCT_ID` is the Pro product checkout sells; list more (comma separated) and a subscription to any of them is Pro too, such as a yearly price or a product a user switched to.
+- **Checkout.** `POST /api/billing/checkout` makes a Polar checkout for the first Pro product with the user id as Polar's external customer id, and the browser goes there. Opening checkout stores a pending plan record (`incomplete`, still Free), which marks the user as someone who may have a Polar subscription. When Polar already has a live or paused Pro subscription the plan missed, checkout syncs the plan from it instead and answers 409 (`resynced`). Back on `/?checkout_id=…#/you`, the You page calls `POST /api/billing/sync` (which reads the user's subscriptions from Polar now, at most once per 1.5 s per user) for up to 30 seconds until the account is Pro, once per checkout, so a late or lost webhook never leaves a payer on Free.
+- **Manage.** `POST /api/billing/portal` opens Polar's customer portal (card, invoices, cancel) for the stored customer.
+- **Webhook.** `POST /api/billing/webhook` checks the Standard Webhooks signature over the raw body (secrets made since September 2026 and older ones both work). An event only says which user to look at (its customer's external id, or the user id in its metadata): their subscriptions are read from Polar as they are now (by external customer id, plus the stored and the event's subscription when those name the user only in metadata) and the best Pro one becomes the plan record (a live one, renewing first, then latest period end). So late, repeated or out-of-order events cannot leave a stale state, and a user with two subscriptions stays Pro while either lives. Each record is versioned by Polar's latest change time across the user's subscriptions, and an older read never overwrites a newer one. Events naming no user are ignored. A Polar error about the request itself (a 4xx other than 401, 403 and 429) is logged and answered 202, because Polar disables an endpoint after 10 failed deliveries in a row; a bad or under-scoped token, rate limits and server errors answer 500 so Polar redelivers once fixed.
+- **Cancelling.** Cancel at period end keeps Pro until then (`endsAt`); once no Pro subscription is live the account is Free.
+- **Deleting an account.** A user with no plan record never opened checkout, so nothing at Polar is touched. Otherwise every subscription Polar has for the user that is not over (paused, unpaid and not-yet-recorded ones too) is revoked first; a revoke Polar refuses counts only once Polar shows it ended. If Polar cannot be reached or refuses, nothing is deleted and the user is told to try again, so a deleted account is never charged again. Once the data is gone, the Polar customer is deleted and anonymized (best effort).
+- **The price** on the Upgrade button comes from the Pro product, cached for an hour, and is looked up only for users who can upgrade. A cold cache waits at most 1.5 seconds; after that the button reads "Upgrade to Pro" and the price shows next time.
+- **Raw bodies.** Both transports hand routes the exact request text as `t.rawBody` (bodies up to 256 KB), which the webhook signature is checked over.
+- **Sandbox first.** `POLAR_SERVER` is `sandbox` unless set to `production`. Sandbox has its own dashboard (sandbox.polar.sh), tokens and test card (4242 4242 4242 4242).
+- **Setup.**
+  1. Create an organization on [sandbox.polar.sh](https://sandbox.polar.sh) (later the same on polar.sh, with payouts set up under Finance).
+  2. Add a product **Pro** with a monthly price. Copy its id into `POLAR_PRODUCT_ID`.
+  3. Settings → Developers: create an organization access token with `checkouts:write`, `customer_sessions:write`, `customers:write`, `products:read`, `subscriptions:read` and `subscriptions:write` scopes, into `POLAR_ACCESS_TOKEN`.
+  4. Settings → Webhooks: add an endpoint `https://<your domain>/api/billing/webhook`, format **Raw**, with the `subscription.*` events. Copy its secret into `POLAR_WEBHOOK_SECRET`.
+  5. Leave Settings → Subscriptions → **Allow multiple subscriptions** off (the default), so Polar itself stops a second purchase.
+  6. Set the same variables on Vercel (`vercel env add`) and redeploy.
 
 **Tests.**
 - `test/usage.test.js`: caps per user, kind and day; free retries and their bounds; failing open; 401 and 429 over HTTP; demo mode and accounts off; non-retryable errors in the browser.
+- `test/plans.test.js`: who is Pro (status, period and grace, comped users, admins), record validation, Pro caps and their overrides, and Pro vs Free over HTTP with the plan on `/api/account`.
+- `test/billing.test.js`: webhook signatures (both key kinds, replay window), subscription to plan record, picking the deciding subscription, older reads dropped, and against a fake Polar API: checkout and its second-subscription guard, webhook to Pro, portal, cancel, two subscriptions, product switches, ignored events, which errors are retried, account deletion ending every subscription and the customer (and its failure paths), and a slow price lookup.
+- `test/sync-pg.test.js` (with `WONDER_TEST_DATABASE_URL`): plan records round-trip in Postgres, an older read is dropped, and the plan goes with the account.
 - `test/landing.test.js`: who the home page sends to `/welcome`, with account sync on and off, and the signed-out deep link kept for after sign-in.
 - `test/start.test.js`: where `#/start[/<topic>]` goes (sign-in, onboarding, the lesson, home).
 - `test/sync*.test.js`: sync, authorization and statement scoping.

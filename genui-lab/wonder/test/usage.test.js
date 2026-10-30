@@ -31,7 +31,7 @@ test('which requests spend Claude, and the caps (with env overrides)', () => {
   assert.equal(new Date(d.resetsAt).toISOString(), '2026-10-24T00:00:00.000Z');
   const b = limitBody('lesson', 20, Date.UTC(2026, 9, 23, 22, 30));
   assert.match(b.error, /today's 20 lessons\. More in about 2 hours \(midnight UTC\)/);
-  assert.deepEqual(b.limited, { kind: 'lesson', max: 20, resetsAt: '2026-10-24T00:00:00.000Z' });
+  assert.deepEqual(b.limited, { kind: 'lesson', max: 20, plan: 'free', resetsAt: '2026-10-24T00:00:00.000Z' });
   assert.match(limitBody('course', 0).error, /Course plans are turned off/);
 });
 

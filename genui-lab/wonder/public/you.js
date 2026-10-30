@@ -11,8 +11,8 @@ import { accountInfo, signedInAccount, currentSyncStatus, onSyncStatus, syncEngi
 export const TEXT_SIZES = [['0.92', 'Small'], ['1', 'Default'], ['1.1', 'Large'], ['1.2', 'Larger']];
 
 /**
- * Account, at the end of the page: sign in or out, and delete the account. Shown only when the
- * server has accounts configured.
+ * Account, at the end of the page: sign in or out, the plan (upgrade or manage billing), and
+ * delete the account. Shown only when the server has accounts configured.
  */
 function accountPanel(ctx) {
   const body = el('div', { class: 'card settings' });
@@ -28,6 +28,19 @@ function accountPanel(ctx) {
   // being clicked stays put
   let drawn = '';
   const show = (key, ...rows) => { if (key !== drawn) { drawn = key; body.replaceChildren(...rows); } };
+  // the plan, fetched once per sign-in rather than on every sync status change; only the latest
+  // fetch may draw it, so a slow one for an earlier sign-in cannot overwrite a newer one
+  const planEl = el('div', { class: 'setting', hidden: true });
+  let planFor = null;
+  let planRun = 0;
+  const planRow = () => {
+    if (planFor !== accountLabel()) {
+      planFor = accountLabel();
+      const run = ++planRun;
+      showPlan(planEl, btn, () => run === planRun && planEl.isConnected);
+    }
+    return planEl;
+  };
   const draw = () => {
     const info = accountInfo();
     sec.hidden = !info?.sync;
@@ -36,6 +49,7 @@ function accountPanel(ctx) {
     const acct = signedInAccount();
     const st = currentSyncStatus();
     if (!acct) {
+      planFor = null; // signing in again fetches the plan again
       show('signedOut', row('Sign in', 'Use Mull with your Google account. What this browser has comes with you.',
         btn('Sign in', 'btn-primary', signIn)));
     } else if (st.state === 'mismatch') {
@@ -53,9 +67,10 @@ function accountPanel(ctx) {
           : st.state === 'unavailable' ? 'Sync is unavailable on this server right now; this browser keeps your changes.' : null;
       show(`in:${title}:${problem}`,
         row(title, problem, btn('Sign out', 'btn-secondary', async () => { if (await signOut()) toast('Signed out'); })),
+        planRow(),
         row('Delete account', 'Deletes your lessons, cards, progress, memory and material for good.',
           btn('Delete account', 'btn-danger', async () => {
-            if (confirm('Delete your Mull account? Your lessons, cards, progress, memory and material are deleted for good. This cannot be undone.')) await deleteAccount();
+            if (confirm('Delete your Mull account? Your lessons, cards, progress, memory and material are deleted for good, and a Pro subscription ends now. This cannot be undone.')) await deleteAccount();
           }, 'Deleting…')));
     }
   };
@@ -63,6 +78,81 @@ function accountPanel(ctx) {
   const off = onSyncStatus(draw);
   ctx.teardown?.push(off);
   return sec;
+}
+
+const shortDate = (iso) => new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+
+// checkout ids already waited for: the ?checkout_id= Polar returns with stays in the URL (Next's
+// router re-applies a history.replaceState), so each one is handled once per tab
+const CHECKOUTS_SEEN = 'wonder.checkoutsSeen';
+function firstVisitAfterCheckout() {
+  const id = new URLSearchParams(location.search).get('checkout_id');
+  if (!id) return false;
+  let seen = [];
+  try { seen = JSON.parse(sessionStorage.getItem(CHECKOUTS_SEEN) || '[]'); } catch {}
+  if (seen.includes(id)) return false;
+  try { sessionStorage.setItem(CHECKOUTS_SEEN, JSON.stringify([...seen, id].slice(-20))); } catch {}
+  return true;
+}
+
+/**
+ * The account's plan (server/plans.js) from /api/account, with Upgrade (a Polar checkout) or
+ * Manage billing (Polar's customer portal) when the server offers billing (server/billing.js).
+ * Hidden when the server sends no plan. Back from a checkout (?checkout_id=), it asks the server
+ * to read the plan from Polar (POST /api/billing/sync) until it is Pro, so it does not depend on
+ * the webhook arriving first. `live()` turns false once a newer call owns the row.
+ */
+async function showPlan(row, btn, live = () => true) {
+  const load = async () => { try { return await (await fetch('/api/account', { headers: { Accept: 'application/json' } })).json(); } catch { return null; } };
+  let a = await load();
+  if (!a?.plan || !live()) return;
+  if (firstVisitAfterCheckout()) {
+    for (let i = 0; i < 15 && a?.plan?.id !== 'pro'; i++) {
+      row.replaceChildren(el('div', { class: 'setting-text' }, el('strong', null, 'Finishing your upgrade…'), el('p', { class: 'muted small' }, 'Waiting for the payment to come through.')));
+      row.hidden = false;
+      try {
+        const p = (await (await fetch('/api/billing/sync', { method: 'POST', headers: { Accept: 'application/json' } })).json())?.plan;
+        if (p?.id === 'pro') { a = (await load()) || a; break; }
+      } catch {}
+      await new Promise((r) => setTimeout(r, 2000));
+      if (!live()) return;
+      a = (await load()) || a;
+    }
+    toast(a.plan.id === 'pro' ? 'You are on Pro' : 'Payment received? Pro can take a minute to show up. Reload this page soon.');
+  }
+  if (!live()) return;
+  const { plan, billing } = a;
+  const standing = plan.source === 'admin' ? 'Admin on this Mull server: no daily limits.'
+    : plan.source === 'comped' ? 'Given to you by this Mull server.'
+    : plan.endsAt ? `Ends ${shortDate(plan.endsAt)}.`
+      : plan.renewsAt ? `Renews ${shortDate(plan.renewsAt)}.`
+        : plan.id === 'pro' ? '' : 'Every account starts here.';
+  const pitch = plan.id === 'free' && billing?.canUpgrade ? 'Pro gives you more lessons, tutor and Teacher messages each day.' : '';
+  const test = billing?.sandbox && (billing.canUpgrade || billing.canManage) ? 'Test mode: pay with card 4242 4242 4242 4242.' : '';
+  const go = (path) => async () => {
+    const r = await fetch(path, { method: 'POST', headers: { Accept: 'application/json' } });
+    const d = await r.json().catch(() => ({}));
+    // Polar already had a subscription the plan missed: the server synced it, so redraw
+    if (r.status === 409 && d.resynced) { toast(d.error); if (live()) showPlan(row, btn, live); return; }
+    if (!r.ok || !d.url) throw new Error(d.error || 'That did not work');
+    location.href = d.url;
+    // busy while the page leaves. Back restores this page from the bfcache (pageshow), which frees
+    // the button; so does a navigation that never happened (still here and visible after 15 s)
+    await new Promise((resolve) => {
+      window.addEventListener('pageshow', resolve, { once: true });
+      const check = () => (document.visibilityState === 'visible' ? resolve() : setTimeout(check, 15000));
+      setTimeout(check, 15000);
+    });
+  };
+  const actions = [
+    billing?.canUpgrade ? btn(billing.price ? `Upgrade · ${billing.price}` : 'Upgrade to Pro', 'btn-primary', go('/api/billing/checkout'), 'Opening checkout…') : null,
+    billing?.canManage ? btn('Manage billing', 'btn-secondary', go('/api/billing/portal'), 'Opening…') : null,
+  ].filter(Boolean);
+  row.replaceChildren(el('div', { class: 'setting-text' },
+    el('strong', null, `${plan.name} plan`),
+    el('p', { class: 'muted small' }, [standing, pitch, test].filter(Boolean).join(' '))),
+  actions.length ? el('div', { style: { display: 'flex', gap: '8px', flexWrap: 'wrap' } }, ...actions) : null);
+  row.hidden = false;
 }
 
 /** A row with a switch. */
