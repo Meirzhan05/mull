@@ -1,6 +1,6 @@
 // Visual practice types (number_line, chart_select, order_steps): normalization bounds, code
 // grading and its FSRS rating mapping, mastery evidence, the structured-output schema and
-// mapping, demo-mode extraction from lesson widgets, and the sandboxed review widgets.
+// mapping, deterministic extraction from lesson widgets, and the sandboxed review widgets.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
@@ -11,7 +11,7 @@ import { ratingScore, recordEvidence } from '../public/mastery-core.js';
 import { practiceProgram, practiceWidgetProps, practiceResultFor, numberLineLabels, PRACTICE_PRELUDE, PRACTICE_COMPONENT_FOR } from '../public/catalog-practice.js';
 import { extractPracticeDeterministic, itemsFromStructured, visualItemsFromComponents, PRACTICE_EXTRACT_SCHEMA, PRACTICE_EXTRACT_PROMPT, VISUAL_ITEM_PROPERTIES } from '../server/practice.js';
 import { EXTRACT_SCHEMA } from '../server/prompts.js';
-import { demo, DEMO_FILES, runProgram, catalogNodes, click } from './helpers.js';
+import { sampleLesson, LESSON_FILES, runProgram, catalogNodes, click } from './helpers.js';
 
 const NL = { type: 'number_line', prompt: 'Where does the sun turn orange?', min: 0, max: 90, step: 2.5, answer: 10, tolerance: 2.5, unit: '°', concept: 'Sun height' };
 const CHART = { type: 'chart_select', prompt: 'Which color fills the sky?', chart: 'bar', title: 'Scattering', unit: '× red', points: [{ label: 'Violet', value: 7.6 }, { label: 'Blue', value: 4.4 }, { label: 'Red', value: 1 }], answer: 1, concept: 'Rayleigh scattering' };
@@ -145,9 +145,9 @@ test('structured output: visual items map to practice items; invalid ones are dr
   assert.equal(items[1].concept, 'Compounding');
 });
 
-for (const file of DEMO_FILES) {
-  test(`demo extraction: ${file} yields one item of each visual type`, () => {
-    const { items } = extractPracticeDeterministic(demo(file));
+for (const file of LESSON_FILES) {
+  test(`deterministic extraction: ${file} yields one item of each visual type`, () => {
+    const { items } = extractPracticeDeterministic(sampleLesson(file));
     const visual = items.filter((i) => VISUAL_PRACTICE_TYPES.includes(i.type));
     assert.deepEqual(visual.map((i) => i.type), ['number_line', 'chart_select', 'order_steps']);
     assert.ok(items.indexOf(visual[2]) < 12, 'visual items fit in the first 12-card review session');
@@ -161,7 +161,7 @@ for (const file of DEMO_FILES) {
   });
 }
 
-test('demo extraction: a lesson without the source widgets adds no visual items', () => {
+test('deterministic extraction: a lesson without the source widgets adds no visual items', () => {
   assert.deepEqual(visualItemsFromComponents('# Plain\n\nJust text, <KeyTerm term="x" definition="y"/>.'), []);
 });
 

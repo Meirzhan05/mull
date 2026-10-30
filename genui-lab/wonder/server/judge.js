@@ -115,7 +115,7 @@ export function reportMarkdown(report) {
   const lines = [
     `# Mull lesson eval · ${meta.startedAt}`,
     '',
-    `Mode: **${meta.mode}** · model \`${meta.model}\` · ${summary.ok}/${summary.runs} lessons generated · web search ${meta.webSearch ? 'on' : 'off'} · critic ${meta.verify ? 'on' : 'off'} · judge ${meta.judge ? 'on' : 'off'}`,
+    `Model \`${meta.model}\` · ${summary.ok}/${summary.runs} lessons generated · web search ${meta.webSearch ? 'on' : 'off'} · critic ${meta.verify ? 'on' : 'off'} · judge ${meta.judge ? 'on' : 'off'}`,
     '',
     '## Means',
     '',

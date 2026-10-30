@@ -1,4 +1,4 @@
-// Robustness against the kinds of markup a real model produces (not just the hand-written demo lessons).
+// Robustness against the kinds of markup a real model produces (not just the hand-written sample lessons).
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { compileWonder } from '../server/compile.js';

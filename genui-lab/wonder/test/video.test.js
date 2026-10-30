@@ -3,7 +3,7 @@
 // policy and the lesson stream. No network: every lookup here is a stub.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { validateVideo, videoFallback, parseDuration, parseChapters, pickSegment, videoCandidate, pickVideo, createYouTubeLookup, createDemoVideoLookup, createVideoResolver, DEMO_VIDEOS, CLIP } from '../server/videos.js';
+import { validateVideo, videoFallback, parseDuration, parseChapters, pickSegment, videoCandidate, pickVideo, createYouTubeLookup, createVideoResolver, CLIP } from '../server/videos.js';
 import { createFigureResolver } from '../server/figures.js';
 import { combineResolvers } from '../server/media-resolver.js';
 import { validateComponentProps } from '../server/catalog-schema.js';
@@ -16,7 +16,7 @@ import { isVideoId, videoIdsOf } from '../public/video-hosts.js';
 import { LESSON_SYSTEM_PROMPT, TUTOR_SYSTEM_PROMPT } from '../server/prompts.js';
 import { parseConversationSource } from '../../chatgpt-dil/src/stream.js';
 import { createLearningRuntime, createMirror } from '../public/learning-runtime.js';
-import { demo, runProgram, catalogNodes } from './helpers.js';
+import { sampleLesson, runProgram, catalogNodes, fakeClient } from './helpers.js';
 
 const quiet = { warn() {}, error() {}, log() {}, info() {} };
 const CLIP_STATE = { found: true, videoId: 'Ab3_dEf-9hI', start: 65, end: 190, duration: 300, title: 'Why is the sky blue?', channel: 'Physics Girl', chapter: 'Why blue light scatters', pageUrl: 'https://www.youtube.com/watch?v=Ab3_dEf-9hI&t=65s' };
@@ -249,11 +249,12 @@ test('the lesson renderer embeds a player only for ids the server resolved for a
 });
 
 async function lessonRecords(serverOpts) {
-  const server = createWonderServer({ mode: 'demo', demoDelayMs: 0, logger: quiet, memoryFile: null, figureLookup: null, figureSettleMs: 2000, ...serverOpts });
+  // Claude (faked) writes the sky-blue sample
+  const server = createWonderServer({ client: fakeClient({ text: sampleLesson('sky-blue.md') }), logger: quiet, memoryFile: null, figureLookup: null, figureSettleMs: 2000, ...serverOpts });
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   try {
     const base = `http://127.0.0.1:${server.address().port}`;
-    const res = await fetch(`${base}/api/lesson/stream`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ topic: 'why is the sky blue?', useWebSearch: false }) });
+    const res = await fetch(`${base}/api/lesson/stream`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ topic: 'why is the sky blue?', useWebSearch: false, verify: false }) });
     const records = parseConversationSource(await res.text());
     const status = await (await fetch(`${base}/api/status`)).json();
     return { records, status };
@@ -278,27 +279,20 @@ test('lesson stream: the sky-blue Video resolves through the stream; the final r
   assert.equal(catalogNodes(env.mirror, 'VideoPredict').length, 1);
 });
 
-test('no key: demo mode plays the demo clip from its fixture; Claude mode and WONDER_VIDEOS=off leave Videos out', async () => {
-  const demoRun = await lessonRecords({ env: {} });
-  assert.equal(demoRun.status.videos, 'demo');
-  const [r] = videoResults(demoRun.records.filter((x) => x.type === 'content').at(-1));
-  assert.equal(r.status, 'resolved');
-  assert.deepEqual(r.state, DEMO_VIDEOS['sunset in a glass milk water flashlight experiment']);
-  assert.equal(r.state.found, true, 'the demo lesson has a fixture clip');
-  assert.ok(isVideoId(r.state.videoId));
-
-  const off = await lessonRecords({ env: { WONDER_VIDEOS: 'off' } });
-  assert.equal(off.status.videos, 'off');
-  const final = off.records.filter((x) => x.type === 'content').at(-1);
-  assert.equal(final.status, 'complete');
-  assert.deepEqual(videoResults(final).map((x) => x.state), [{ found: false }]);
-  assert.equal(catalogNodes(runProgram(final.dil).mirror, 'Video').length, 0);
-  assert.equal(await createDemoVideoLookup()({ query: 'anything else' }), null, 'the fixture knows only the demo lessons');
+test('no YouTube key, or WONDER_VIDEOS=off: Videos are left out and the lesson still completes', async () => {
+  for (const env of [{}, { WONDER_VIDEOS: 'off', YOUTUBE_API_KEY: 'k' }]) {
+    const run = await lessonRecords({ env });
+    assert.equal(run.status.videos, 'off');
+    const final = run.records.filter((x) => x.type === 'content').at(-1);
+    assert.equal(final.status, 'complete');
+    assert.deepEqual(videoResults(final).map((x) => x.state), [{ found: false }]);
+    assert.equal(catalogNodes(runProgram(final.dil).mirror, 'Video').length, 0);
+  }
 });
 
-test('sky-blue demo: the Video is valid, the lesson lints clean, and a Video is never a page\'s only visual', () => {
-  const md = demo('sky-blue.md');
-  const v = compileWonder(md, { salt: 'demo' }).components.find((c) => c.name === 'Video');
+test('sky-blue sample: the Video is valid, the lesson lints clean, and a Video is never a page\'s only visual', () => {
+  const md = sampleLesson('sky-blue.md');
+  const v = compileWonder(md, { salt: 'sample' }).components.find((c) => c.name === 'Video');
   assert.equal(v.status, 'valid');
   assert.deepEqual(v.props.questions.map((q) => q.when), ['before', 'after']);
   assert.equal(lintLesson(md).score, 1);

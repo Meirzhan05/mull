@@ -80,7 +80,7 @@ test('over HTTP: a Pro user (stored or comped) gets Pro caps, and /api/account s
   const sync = createSyncService({ db: createMemoryDb() });
   await sync.db.setPlan('alice', cleanPlanRecord({ plan: 'pro', status: 'active', periodEnd: Date.now() + 30 * DAY }));
   const server = createWonderServer({
-    mode: 'claude', client: fakeClient({ text: '# T\n\nBody.' }), demoDelayMs: 0, logger: quiet, memory: createMemoryStore({ file: null }), push: null, sync,
+    client: fakeClient({ text: '# T\n\nBody.' }), logger: quiet, memory: createMemoryStore({ file: null }), push: null, sync,
     getUserId: (req) => req.headers['x-test-user'] || null,
     env: { WONDER_LIMIT_LESSON: '1', WONDER_PRO_LIMIT_LESSON: '2', WONDER_PRO_USERS: 'carol', WONDER_ADMIN_USERS: 'dana' },
   });

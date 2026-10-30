@@ -13,32 +13,6 @@
       "port": 8750
     },
     {
-      "name": "wonder-demo-8751",
-      "runtimeExecutable": "/usr/bin/env",
-      "runtimeArgs": [
-        "WONDER_MODE=demo",
-        "WONDER_MEMORY_FILE=genui-lab/wonder/data/memory-demo.json",
-        "genui-lab/wonder/node_modules/.bin/next",
-        "dev",
-        "genui-lab/wonder",
-        "-p",
-        "8751"
-      ],
-      "port": 8751
-    },
-    {
-      "name": "ios-api-demo-8760",
-      "runtimeExecutable": "/usr/bin/env",
-      "runtimeArgs": [
-        "WONDER_MODE=demo",
-        "WONDER_MEMORY_FILE=genui-lab/wonder/data/memory-ios-demo.json",
-        "node",
-        "ios/dev-server.mjs",
-        "8760"
-      ],
-      "port": 8760
-    },
-    {
       "name": "ios-api-8761",
       "runtimeExecutable": "node",
       "runtimeArgs": [

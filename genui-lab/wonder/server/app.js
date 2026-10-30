@@ -2,7 +2,7 @@
 // Next.js route handlers (server/web.js, app/api/[...route]/route.js) and a small node:http
 // server (createWonderServer) that the test suite drives.
 //
-//   GET  /api/status            -> {mode:"claude"|"demo", model}
+//   GET  /api/status            -> {claude, model, error?} (claude:false: no credentials, Claude routes answer 503)
 //   POST /api/lesson/stream     -> conversation-source NDJSON (lesson in markdown + DIL); continueFrom resumes/revises
 //   POST /api/tutor/stream      -> conversation-source NDJSON (tutor reply + followupPrompts)
 //   POST /api/lesson/steer      -> JSON {ok, status: accepted|rejected} (Phase 4 mid-turn steering)
@@ -31,30 +31,27 @@ import path from 'node:path';
 import { WONDER_ROOT, LAB_ROOT } from './paths.js';
 import { CONTENT_TYPE, createTurnWriter } from './ndjson.js';
 import {
-  MODEL, detectMode, createClaudeClient, buildStreamParams, buildStructuredParams, streamText, createStructured,
-  isCredentialError, friendlyError, badRequestMessage, REFUSAL_MESSAGE,
+  MODEL, hasClaudeCredentials, createClaudeClient, buildStreamParams, buildStructuredParams, streamText, createStructured,
+  friendlyError, badRequestMessage, REFUSAL_MESSAGE, CLAUDE_NOT_CONFIGURED,
 } from './claude.js';
-import { createMaterialStore, DEFAULT_MATERIALS_DIR, MATERIAL_BODY_LIMIT, PART_BODY_LIMIT, PART_BYTES, MAX_PARTS, MAX_PDF_BYTES, MAX_MATERIAL_TOKENS, UPLOAD_ID_RE, isBase64, pdfTooLarge, materialCharge, prepareMaterial, extractPdfText, MIN_FALLBACK_CHARS, newUploadId, createPartStore, pruneUploads, takeUpload, documentBlock, materialCitation, demoMaterialLesson, demoMaterialCourse } from './materials.js'; // Phase 10
+import { createMaterialStore, DEFAULT_MATERIALS_DIR, MATERIAL_BODY_LIMIT, PART_BODY_LIMIT, PART_BYTES, MAX_PARTS, MAX_PDF_BYTES, MAX_MATERIAL_TOKENS, UPLOAD_ID_RE, isBase64, pdfTooLarge, materialCharge, prepareMaterial, extractPdfText, MIN_FALLBACK_CHARS, newUploadId, createPartStore, pruneUploads, takeUpload, documentBlock, materialCitation } from './materials.js'; // Phase 10
 import { TEACHER_OPENER } from '../public/teacher-core.js'; // Phase 10
 import { LESSON_SYSTEM_PROMPT, TUTOR_SYSTEM_PROMPT, TEACHER_SYSTEM_PROMPT, COURSE_SYSTEM_PROMPT, COURSE_PLAN_SCHEMA, lessonUserMessage, tutorLessonContext, joinContext, insightsContext } from './prompts.js';
-import { pickDemoLesson, streamDemoText, buildDemoTutorReply, demoCoursePlan } from './demo.js';
 import { extractPracticeDeterministic, extractPracticeWithClaude } from './practice.js';
 import { createWidgetActionHandler } from './widget-actions.js';
 import { createMemoryStore, DEFAULT_MEMORY_FILE } from './memory.js';
 import { normalizeExtractInput, extractMemoryDeterministic, extractMemoryWithClaude, filterNewFacts } from './memory-extract.js';
 import { TEACHER_TOOLS, createCardStore, createTeacherToolkit, runTeacherLoop, newResolutionId, resolved, stripCardMarkup } from './teacher.js';
-import { createDemoTeacherClient } from './teacher-demo.js';
 // Phase 3 (grounded lessons) + Phase 4 (steering)
 import { withWebSearch, streamGrounded, createSourceRegistry, citationAppData, stripGroundingTags, SOURCES_TAG } from './grounding.js';
-import { createSteeringRegistry, cleanInstruction, steeringUserContent, steerDemoRemainder, trimToLastPage, normalizeContinueFrom, createContinuationSources, demoContinuation, createContinuationGuard } from './steering.js';
-import { groundDemoLesson } from './demo-grounding.js';
+import { createSteeringRegistry, cleanInstruction, steeringUserContent, trimToLastPage, normalizeContinueFrom, createContinuationSources, createContinuationGuard } from './steering.js';
 import { masteryContext } from './learner-model.js'; // Phase 6
 import { lintLesson, critiqueLesson, applyQuizFixes, qualityReport } from './critic.js'; // Phase 7
 import { createGrader } from './grader.js'; // Phase 8
 import { SOCRATIC_TUTOR_MODE } from './prompts-extra.js'; // Phase 8
 import { pageCount } from '../public/steering-core.js';
 import { createCommonsLookup, createFigureResolver, createFigureCheck, FIGURE_SETTLE_MS, FIGURE_CHECK_MODEL } from './figures.js'; // media: <Figure/> images
-import { createYouTubeLookup, createDemoVideoLookup, createVideoResolver } from './videos.js'; // media: <Video/> clips
+import { createYouTubeLookup, createVideoResolver } from './videos.js'; // media: <Video/> clips
 import { combineResolvers, withResolved } from './media-resolver.js';
 import { createInflight, createTurnLedger, cleanKey, retryNote } from './retry.js'; // recoverable streams
 // account sync + Web Push
@@ -82,6 +79,8 @@ const DEFAULT_TEACHER_FOLLOWUPS = ['What should I study today?', 'Make me a stud
 // with account sync on: routes that need a signed-in user, and routes that read learner memory
 const SIGNED_IN_ONLY = new Set(['DELETE /api/account', 'POST /api/billing/checkout', 'POST /api/billing/portal', 'POST /api/billing/sync', 'POST /api/sync', 'POST /api/push/subscribe', 'DELETE /api/push/subscribe', 'POST /api/memory', 'DELETE /api/memory', 'POST /api/materials', 'POST /api/materials/part', 'DELETE /api/materials', 'GET /api/materials/file']);
 const MEMORY_PATHS = /^\/api\/(lesson|tutor|teacher|memory|widget_action)(\/|$)/;
+// routes that only Claude can answer: 503 while the server has no credentials
+const NEEDS_CLAUDE = new Set(['POST /api/lesson/stream', 'POST /api/tutor/stream', 'POST /api/teacher/stream', 'POST /api/course/plan']);
 const MEMORY_OFF_CONTEXT = 'The learner turned memory off for this conversation: do not save or forget memory items, and do not assume anything about them beyond this conversation.';
 
 /** History from the client: user/assistant strings, starting with a user turn. */
@@ -190,20 +189,16 @@ function progressNarrator(writer, { first = 'Writing the introduction…', pages
  *   t.openStream(headers)  -> {write(string), signal, onClose(fn)}: start a streamed response
  *   t.send(status, headers, bytes)  send a raw response (a stored material file, Phase 10)
  *   t.end()                   finish the response
- * @param {{client?:object, mode?:'claude'|'demo', env?:object, demoDelayMs?:number, logger?:Console}} [opts]
+ * `client` is the Anthropic client (tests pass a fake); without one, the server makes one when
+ * the environment has credentials, and otherwise runs without Claude (Claude routes answer 503).
+ * @param {{client?:object|null, env?:object, logger?:Console}} [opts]
  */
 export function createWonderCore(opts = {}) {
   const env = opts.env ?? process.env;
   const logger = opts.logger ?? console;
   const state = {
-    mode: opts.mode ?? detectMode(env),
-    client: opts.client ?? null,
-    demoReason: null,
-    demoDelayMs: opts.demoDelayMs ?? 22,
+    client: opts.client !== undefined ? opts.client : hasClaudeCredentials(env) ? createClaudeClient() : null,
   };
-  if (state.mode === 'claude' && !state.client) state.client = createClaudeClient();
-  if (state.mode === 'claude' && !state.client) { state.mode = 'demo'; state.demoReason = 'no-credentials'; }
-  if (state.mode === 'demo' && !state.demoReason) state.demoReason = 'no-credentials';
   const localMemory = opts.memory ?? createMemoryStore({ file: opts.memoryFile === undefined ? (env.WONDER_MEMORY_FILE || DEFAULT_MEMORY_FILE) : opts.memoryFile, logger });
   // Account sync (server/sync/): with it on, memory and material belong to the signed-in user.
   // Each request runs in a scope that holds that user's stores; `memory` and `materials` below
@@ -237,9 +232,8 @@ export function createWonderCore(opts = {}) {
   const materials = scoped('materials', () => localMaterials);
   const uploadParts = scoped('parts', () => localParts);
   const teacherCards = createCardStore();
-  const grade = createGrader({ getClient: () => state.client, getMode: () => state.mode, logger }); // Phase 8
+  const grade = createGrader({ getClient: () => state.client, logger }); // Phase 8
   const widgetAction = createWidgetActionHandler({ cards: teacherCards, memory, grade });
-  const demoTeacher = opts.demoTeacherClient ?? createDemoTeacherClient({ delayMs: state.demoDelayMs });
   const recordDir = opts.recordDir ?? env.WONDER_RECORD_DIR ?? null;
   const memoryContext = (body, { withIds = false } = {}) => (body?.memoryEnabled === false ? '' : memory.promptBlock({ withIds }));
   // Phase 6: the client's mastery summary (personalization, so it follows the memory switch)
@@ -260,10 +254,10 @@ export function createWonderCore(opts = {}) {
    * How many tokens Claude reads for a new material (count_tokens is free), so a document too long
    * for a lesson's request (over MAX_MATERIAL_TOKENS, or over 600 PDF pages) is refused at upload
    * rather than when a course is planned. {error} when Claude can't take it; null when it can't be
-   * counted (demo mode, a network error), and the material is kept anyway.
+   * counted (no Claude, a network error), and the material is kept anyway.
    */
   async function materialTokens(meta, data) {
-    if (state.mode !== 'claude') return null;
+    if (!state.client) return null;
     let tokens;
     try {
       ({ input_tokens: tokens } = await state.client.messages.countTokens({ model: MODEL, messages: [{ role: 'user', content: [documentBlock(meta, data, { citations: false, cache: false }), { type: 'text', text: 'Read this.' }] }] }));
@@ -308,28 +302,19 @@ export function createWonderCore(opts = {}) {
   const figureSettleMs = opts.figureSettleMs ?? FIGURE_SETTLE_MS;
   const figureCache = new Map(); // shared by this core's streams (server/figures.js)
   // The figure vision check: Claude looks at each found image and drops one that does not fit its
-  // caption. On by default in claude mode (it needs the client); figureCheck: false or
+  // caption. On by default when Claude is configured (it needs the client); figureCheck: false or
   // WONDER_FIGURE_CHECK=off turns it off, and a function replaces the check (tests).
   const figureCheckOpt = opts.figureCheck !== undefined ? opts.figureCheck : env.WONDER_FIGURE_CHECK === 'off' ? false : true;
   const figureCheckModel = opts.figureCheckModel || env.WONDER_FIGURE_CHECK_MODEL || FIGURE_CHECK_MODEL;
   const figureVerify = typeof figureCheckOpt === 'function' ? figureCheckOpt : createFigureCheck({ client: () => state.client, model: figureCheckModel });
-  const figureVerifyFor = () => (figureCheckOpt && state.mode === 'claude' && state.client ? figureVerify : null);
+  const figureVerifyFor = () => (figureCheckOpt && state.client ? figureVerify : null);
   // which check runs now (the eval report records it): the model id, 'custom', or null when off
   Object.defineProperty(state, 'figureCheck', { get: () => (figureVerifyFor() ? (typeof figureCheckOpt === 'function' ? 'custom' : figureCheckModel) : null) });
-  // <Video/> clips come from the YouTube Data API (YOUTUBE_API_KEY). Without a key, demo mode
-  // plays the demo lessons' fixture clips and Claude mode leaves Videos out; WONDER_VIDEOS=off
-  // (or videoLookup: null) skips the network.
-  const liveVideoLookup = opts.videoLookup !== undefined ? opts.videoLookup : env.WONDER_VIDEOS === 'off' ? null : createYouTubeLookup({ apiKey: env.YOUTUBE_API_KEY });
-  const demoVideoLookup = opts.videoLookup !== undefined || env.WONDER_VIDEOS === 'off' ? null : createDemoVideoLookup();
-  const videoLookup = () => liveVideoLookup || (state.mode === 'demo' ? demoVideoLookup : null);
-  const videoSource = () => (liveVideoLookup ? 'youtube' : videoLookup() ? 'demo' : 'off');
+  // <Video/> clips come from the YouTube Data API (YOUTUBE_API_KEY). Without a key Videos are left
+  // out; WONDER_VIDEOS=off (or videoLookup: null) skips the network.
+  const videoLookup = opts.videoLookup !== undefined ? opts.videoLookup : env.WONDER_VIDEOS === 'off' ? null : createYouTubeLookup({ apiKey: env.YOUTUBE_API_KEY });
+  const videoSource = () => (videoLookup ? 'youtube' : 'off');
   const videoCache = new Map();
-
-  function switchToDemo(reason) {
-    state.mode = 'demo';
-    state.demoReason = reason;
-    logger.warn?.(`[wonder] switching to demo mode (${reason})`);
-  }
 
   /**
    * Open an NDJSON response. `retryKey` (scope + the client's streamKey) supersedes an older
@@ -355,7 +340,7 @@ export function createWonderCore(opts = {}) {
     }
     const media = combineResolvers([
       createFigureResolver({ lookup: figureLookup, verify: figureVerifyFor(), logger, cache: figureCache, signal }),
-      createVideoResolver({ lookup: videoLookup(), logger, cache: videoCache, signal }),
+      createVideoResolver({ lookup: videoLookup, logger, cache: videoCache, signal }),
     ]);
     writer = createTurnWriter({ write: (s) => { io.write(s); tee?.write(s); }, ...writerOpts, appDataFor: withResolved(appDataFor || (() => appData), media) });
     let queued = false;
@@ -379,7 +364,7 @@ export function createWonderCore(opts = {}) {
     media.finalize();
   }
 
-  /** Run Claude, falling back to demo on missing credentials. Returns 'done' | 'demo' | 'failed'. */
+  /** Run Claude. Returns {status: 'done' | 'aborted' | 'failed' | 'retry'}. */
   /** `retryable(err)`: an error the caller recovers from itself ({status: 'retry', err}, nothing shown). */
   async function runClaude(writer, params, onText, signal, stream = (p, o) => streamText(state.client, p, o), { retryable } = {}) {
     try {
@@ -391,11 +376,6 @@ export function createWonderCore(opts = {}) {
       return { status: 'done', truncated: stopReason === 'max_tokens' };
     } catch (err) {
       if (signal.aborted) return { status: 'aborted' };
-      if (!writer.markdown && isCredentialError(err)) {
-        switchToDemo('credentials-failed');
-        writer.reasoning('Claude credentials were not accepted. Showing demo content…');
-        return { status: 'demo' };
-      }
       if (retryable?.(err)) return { status: 'retry', err };
       const f = friendlyError(err);
       // The API error body (type + message) never contains credentials; log it for diagnosis.
@@ -469,72 +449,48 @@ export function createWonderCore(opts = {}) {
     // never dropped: lessonSteer only says "accepted" while the operation is still open, and the
     // operation stays open until this check fails synchronously right before close().
     const nextSteer = () => (signal.aborted ? null : op.takeSteer());
-    let result = { status: 'demo' };
+    let result;
     try {
-      if (state.mode === 'claude') {
-        const request = lessonUserMessage({ topic, level, course: body.course, lessonTitle: clean(body.lessonTitle, 200), lessonSummary: clean(body.lessonSummary, 400), variant: body.variant, material: material?.meta });
-        const learner = memoryContext(body);
-        if (learner) logger.info?.(`[wonder] lesson request personalized with ${Math.min(memory.size, 15)} memory items`);
-        const context = joinContext(
-          learner && `${learner}\nUse this to pick examples and pacing that fit this learner; the lesson itself stays about the requested topic.`,
-          learnerKnows(body, 'lesson'),
-          body.memoryEnabled !== false ? insightsContext(body.learnerInsights) : '', // Phase 9
-        );
-        const firstMessages = () => (cont
-          ? [{ role: 'user', content: userTurn(steeringUserContent(request, cont.kept, cont.instruction, { mode: cont.mode, fromPage: cont.fromPage })) }]
-          : [{ role: 'user', content: userTurn(request) }]);
-        let messages = firstMessages();
-        for (;;) {
-          const params = withWebSearch(buildStreamParams({ system: LESSON_SYSTEM_PROMPT, context, messages, effort: 'medium' }), useWebSearch);
-          const grounded = useWebSearch || material ? groundedStream(writer, sources, material ? materialCitation([material.meta]) : undefined) : undefined;
-          result = await runClaude(writer, params, onText, op.attempt(), grounded, { retryable: (err) => !writer.markdown && unreadablePdf(err, material) });
-          if (result.status === 'retry') { // the PDF itself was refused: teach from its text layer
-            const text = await pdfAsText(material);
-            if (text.error) { writer.fail(text.error, 'bad_request'); result = { status: 'failed' }; break; }
-            material = text;
-            writer.reasoning("Claude couldn't read the PDF's pages, so this lesson uses the book's text…");
-            messages = firstMessages();
-            continue;
-          }
-          if (result.status === 'done') endAttempt();
-          if (result.status !== 'aborted' && result.status !== 'done') break;
-          const instruction = nextSteer();
-          if (!instruction) break;
-          guard = null;
-          const kept = applySteer(writer, instruction);
-          messages = [{ role: 'user', content: userTurn(steeringUserContent(request, kept, instruction)) }];
+      const request = lessonUserMessage({ topic, level, course: body.course, lessonTitle: clean(body.lessonTitle, 200), lessonSummary: clean(body.lessonSummary, 400), variant: body.variant, material: material?.meta });
+      const learner = memoryContext(body);
+      if (learner) logger.info?.(`[wonder] lesson request personalized with ${Math.min(memory.size, 15)} memory items`);
+      const context = joinContext(
+        learner && `${learner}\nUse this to pick examples and pacing that fit this learner; the lesson itself stays about the requested topic.`,
+        learnerKnows(body, 'lesson'),
+        body.memoryEnabled !== false ? insightsContext(body.learnerInsights) : '', // Phase 9
+      );
+      const firstMessages = () => (cont
+        ? [{ role: 'user', content: userTurn(steeringUserContent(request, cont.kept, cont.instruction, { mode: cont.mode, fromPage: cont.fromPage })) }]
+        : [{ role: 'user', content: userTurn(request) }]);
+      let messages = firstMessages();
+      for (;;) {
+        const params = withWebSearch(buildStreamParams({ system: LESSON_SYSTEM_PROMPT, context, messages, effort: 'medium' }), useWebSearch);
+        const grounded = useWebSearch || material ? groundedStream(writer, sources, material ? materialCitation([material.meta]) : undefined) : undefined;
+        result = await runClaude(writer, params, onText, op.attempt(), grounded, { retryable: (err) => !writer.markdown && unreadablePdf(err, material) });
+        if (result.status === 'retry') { // the PDF itself was refused: teach from its text layer
+          const text = await pdfAsText(material);
+          if (text.error) { writer.fail(text.error, 'bad_request'); result = { status: 'failed' }; break; }
+          material = text;
+          writer.reasoning("Claude couldn't read the PDF's pages, so this lesson uses the book's text…");
+          messages = firstMessages();
+          continue;
         }
-      }
-      if (result.status === 'demo') {
-        let pick = pickDemoLesson(body.lessonTitle || topic);
-        if (material?.meta.kind === 'text') pick = { id: null, title: material.meta.title, matched: true, markdown: demoMaterialLesson(material.meta, material.data) };
-        else if (material) writer.reasoning('Demo mode cannot read PDFs. Showing a sample lesson instead…');
-        else if (!pick.matched) writer.reasoning(`Demo mode: no sample for "${topic}", showing "${pick.title}"`);
-        const ground = (md) => (useWebSearch && pick.id ? groundDemoLesson(pick.id, md, sources) : md);
-        let text;
-        let kept = '';
-        if (cont) {
-          kept = cont.kept;
-          text = kept + demoContinuation(pick.markdown, kept, cont.instruction, { ground });
-        } else text = ground(pick.markdown);
-        let r = await streamDemoText(text.slice(kept.length), { onText, delayMs: state.demoDelayMs, signal: op.attempt(), seed: topic.length });
-        if (!r.aborted) endAttempt();
-        for (let instruction = nextSteer(); instruction && !signal.aborted; instruction = nextSteer()) {
-          guard = null;
-          kept = applySteer(writer, instruction);
-          text = kept + (text.startsWith(kept) ? steerDemoRemainder(text.slice(kept.length), instruction) : demoContinuation(pick.markdown, kept, instruction, { ground }));
-          r = await streamDemoText(text.slice(kept.length), { onText, delayMs: state.demoDelayMs, signal: op.attempt(), seed: topic.length });
-        }
-        result = { status: r.aborted ? 'aborted' : 'done', truncated: false };
+        if (result.status === 'done') endAttempt();
+        if (result.status !== 'aborted' && result.status !== 'done') break;
+        const instruction = nextSteer();
+        if (!instruction) break;
+        guard = null;
+        const kept = applySteer(writer, instruction);
+        messages = [{ role: 'user', content: userTurn(steeringUserContent(request, kept, instruction)) }];
       }
     } finally {
       op.close();
     }
     if (result.status === 'done') {
       finishGrounded(writer, sources);
-      // Phase 7: lint always; the Claude critic only for a whole, non-refused Claude lesson
+      // Phase 7: lint always; the Claude critic only for a whole, non-refused lesson
       if (body.verify !== false && !signal.aborted) {
-        await verifyLesson(writer, { topic, level, sources, signal, useClaude: state.mode === 'claude' && !result.refused && !result.truncated });
+        await verifyLesson(writer, { topic, level, sources, signal, useClaude: !result.refused && !result.truncated });
       }
       await settleMedia(writer, media, signal);
       if (!signal.aborted) writer.complete({ truncated: result.truncated });
@@ -594,21 +550,13 @@ export function createWonderCore(opts = {}) {
     writer.start();
     writer.reasoning('Thinking about your question…');
     const onText = (t) => writer.append(t);
-    let result = { status: 'demo' };
-    if (state.mode === 'claude') {
-      const params = withWebSearch(buildStreamParams({
-        system: TUTOR_SYSTEM_PROMPT,
-        context: joinContext(tutorLessonContext({ ...body.lessonContext, markdown: stripGroundingTags(body.lessonContext?.markdown) }), memoryContext(body), learnerKnows(body, 'tutor'), body.mode === 'socratic' ? SOCRATIC_TUTOR_MODE : ''),
-        messages: [...history, { role: 'user', content: message }],
-        effort: 'medium',
-      }), useWebSearch);
-      result = await runClaude(writer, params, onText, signal, useWebSearch ? groundedStream(writer, sources) : undefined);
-    }
-    if (result.status === 'demo') {
-      const reply = buildDemoTutorReply({ lessonContext: body.lessonContext, message, mode: body.mode });
-      const r = await streamDemoText(reply, { onText, delayMs: state.demoDelayMs, signal, seed: message.length });
-      result = { status: r.aborted ? 'aborted' : 'done', truncated: false };
-    }
+    const params = withWebSearch(buildStreamParams({
+      system: TUTOR_SYSTEM_PROMPT,
+      context: joinContext(tutorLessonContext({ ...body.lessonContext, markdown: stripGroundingTags(body.lessonContext?.markdown) }), memoryContext(body), learnerKnows(body, 'tutor'), body.mode === 'socratic' ? SOCRATIC_TUTOR_MODE : ''),
+      messages: [...history, { role: 'user', content: message }],
+      effort: 'medium',
+    }), useWebSearch);
+    const result = await runClaude(writer, params, onText, signal, useWebSearch ? groundedStream(writer, sources) : undefined);
     if (result.status === 'done') finishGrounded(writer, sources);
     if (result.status === 'done') await settleMedia(writer, media, signal);
     if (result.status === 'done') writer.complete({ truncated: result.truncated, defaultFollowups: result.refused ? [] : DEFAULT_TUTOR_FOLLOWUPS });
@@ -621,47 +569,40 @@ export function createWonderCore(opts = {}) {
     const level = ['beginner', 'intermediate', 'advanced'].includes(body.level) ? body.level : 'beginner';
     let material = await loadMaterial(body.materialId); // Phase 10: a course that follows the learner's material
     if (material?.missing) return t.json(404, { ok: false, error: 'That material is no longer stored on this server.' });
-    if (state.mode === 'claude') {
+    try {
+      const params = buildStructuredParams({ system: COURSE_SYSTEM_PROMPT, schema: COURSE_PLAN_SCHEMA, user: `Topic: ${topic}\nLevel: ${level}`, effort: 'low' });
+      // structured output: the document goes in without citations (they don't combine)
+      const fromMaterial = () => { params.messages = [{ role: 'user', content: [documentBlock(material.meta, material.data, { citations: false }), { type: 'text', text: `Plan a course that teaches the attached material "${material.meta.title}", following its structure and order. Each lesson covers one part of it; lesson summaries name what the learner will be able to explain from that part.\nLevel: ${level}` }] }]; };
+      if (material) fromMaterial();
+      let plan;
       try {
-        const params = buildStructuredParams({ system: COURSE_SYSTEM_PROMPT, schema: COURSE_PLAN_SCHEMA, user: `Topic: ${topic}\nLevel: ${level}`, effort: 'low' });
-        // structured output: the document goes in without citations (they don't combine)
-        const fromMaterial = () => { params.messages = [{ role: 'user', content: [documentBlock(material.meta, material.data, { citations: false }), { type: 'text', text: `Plan a course that teaches the attached material "${material.meta.title}", following its structure and order. Each lesson covers one part of it; lesson summaries name what the learner will be able to explain from that part.\nLevel: ${level}` }] }]; };
-        if (material) fromMaterial();
-        let plan;
-        try {
-          plan = await createStructured(state.client, params);
-        } catch (err) {
-          if (!unreadablePdf(err, material)) throw err;
-          const text = await pdfAsText(material); // the PDF itself was refused: plan from its text layer
-          if (text.error) return t.json(422, { ok: false, error: text.error, code: 'bad_request' });
-          material = text;
-          fromMaterial();
-          plan = await createStructured(state.client, params);
-        }
-        const sections = (plan.sections || []).map((s) => ({ title: clean(s.title, 120), lessons: (s.lessons || []).map((l) => ({ title: clean(l.title, 160), summary: clean(l.summary, 300) })).filter((l) => l.title).slice(0, 4) })).filter((s) => s.title && s.lessons.length).slice(0, 4);
-        if (!sections.length) throw new Error('empty plan');
-        return t.json(200, { ok: true, plan: { title: clean(plan.title, 120) || topic, description: clean(plan.description, 400), level, sections } });
+        plan = await createStructured(state.client, params);
       } catch (err) {
-        if (isCredentialError(err)) switchToDemo('credentials-failed');
-        else if (err?.code === 'refusal') return t.json(200, { ok: false, error: "I can't build a course on that topic. Try something else you're curious about." });
-        else {
-          const f = friendlyError(err);
-          if (f.code !== 'internal') return t.json(502, { ok: false, error: f.message, code: f.code });
-          logger.warn?.('[wonder] course plan fell back to a template');
-        }
+        if (!unreadablePdf(err, material)) throw err;
+        const text = await pdfAsText(material); // the PDF itself was refused: plan from its text layer
+        if (text.error) return t.json(422, { ok: false, error: text.error, code: 'bad_request' });
+        material = text;
+        fromMaterial();
+        plan = await createStructured(state.client, params);
       }
+      const sections = (plan.sections || []).map((s) => ({ title: clean(s.title, 120), lessons: (s.lessons || []).map((l) => ({ title: clean(l.title, 160), summary: clean(l.summary, 300) })).filter((l) => l.title).slice(0, 4) })).filter((s) => s.title && s.lessons.length).slice(0, 4);
+      if (!sections.length) throw new Error('empty plan');
+      return t.json(200, { ok: true, plan: { title: clean(plan.title, 120) || topic, description: clean(plan.description, 400), level, sections } });
+    } catch (err) {
+      if (err?.code === 'refusal') return t.json(200, { ok: false, error: "I can't build a course on that topic. Try something else you're curious about." });
+      const f = friendlyError(err);
+      logger.warn?.(`[wonder] course plan failed: ${f.code}${f.code === 'internal' ? ` (${err?.message})` : ''}`);
+      return t.json(502, { ok: false, error: f.code === 'internal' ? "Couldn't plan that course. Please try again." : f.message, code: f.code });
     }
-    return t.json(200, { ok: true, plan: material?.meta.kind === 'text' ? demoMaterialCourse(material.meta, material.data, level) : demoCoursePlan(topic, level) });
   }
 
   async function practiceExtract(t, body) {
     const markdown = stripGroundingTags(String(body.lessonMarkdown ?? ''));
     if (!markdown.trim()) return t.json(400, { ok: false, error: 'lessonMarkdown is required' });
-    if (state.mode === 'claude') {
+    if (state.client) {
       try {
         return t.json(200, { ok: true, ...(await extractPracticeWithClaude(state.client, markdown)) });
       } catch (err) {
-        if (isCredentialError(err)) switchToDemo('credentials-failed');
         logger.warn?.(`[wonder] structured extraction failed (${friendlyError(err).code}); using lesson components`);
       }
     }
@@ -709,21 +650,14 @@ export function createWonderCore(opts = {}) {
     });
     let result;
     try {
-      result = await run(state.mode === 'claude' ? state.client : demoTeacher);
+      result = await run(state.client);
     } catch (err) {
       if (signal.aborted) return t.end();
-      if (state.mode === 'claude' && !writer.markdown && isCredentialError(err)) {
-        switchToDemo('credentials-failed');
-        writer.reasoning('Claude credentials were not accepted. Showing a demo reply…');
-        try { result = await run(demoTeacher); } catch { if (signal.aborted) return t.end(); }
-      }
-      if (!result) {
-        const f = friendlyError(err);
-        const detail = err?.status ? ` (HTTP ${err.status}: ${err?.error?.error?.message || err.message})` : '';
-        logger.error?.(`[wonder] Teacher request failed: ${f.code}${detail}`);
-        writer.fail(f.message, f.code, f);
-        return t.end();
-      }
+      const f = friendlyError(err);
+      const detail = err?.status ? ` (HTTP ${err.status}: ${err?.error?.error?.message || err.message})` : '';
+      logger.error?.(`[wonder] Teacher request failed: ${f.code}${detail}`);
+      writer.fail(f.message, f.code, f);
+      return t.end();
     }
     if (result.refused) writer.append(REFUSAL_MESSAGE);
     await settleMedia(writer, media, signal);
@@ -759,12 +693,11 @@ export function createWonderCore(opts = {}) {
     const existing = memory.list();
     let facts = null;
     let source = 'quiz-results';
-    if (state.mode === 'claude') {
+    if (state.client) {
       try {
         facts = await extractMemoryWithClaude(state.client, input, existing);
         source = 'claude';
       } catch (err) {
-        if (isCredentialError(err)) switchToDemo('credentials-failed');
         logger.warn?.(`[wonder] memory extraction failed (${err?.code === 'refusal' ? 'refusal' : friendlyError(err).code}); using quiz results`);
       }
     }
@@ -848,13 +781,14 @@ export function createWonderCore(opts = {}) {
   };
 
   // materials: the upload limits public/today.js checks before sending a file
-  const status = () => ({ mode: state.mode, model: MODEL, videos: videoSource(), materials: { maxPdfBytes: MAX_PDF_BYTES, partBytes: PART_BYTES }, ...(state.mode === 'demo' ? { demoReason: state.demoReason } : {}) });
+  const status = () => ({ claude: !!state.client, model: MODEL, ...(state.client ? {} : { error: CLAUDE_NOT_CONFIGURED }), videos: videoSource(), materials: { maxPdfBytes: MAX_PDF_BYTES, partBytes: PART_BYTES } });
 
   /** Run one API request. Resolves when the response has ended; a 404 for unknown API paths. */
   async function handle(method, pathname, body, t) {
     if (pathname === '/api/status' && method === 'GET') return t.json(200, status());
     const route = routes[`${method} ${pathname}`];
     if (!route) return t.json(404, { ok: false, error: 'Not found' });
+    if (!state.client && NEEDS_CLAUDE.has(`${method} ${pathname}`)) return t.json(503, { ok: false, error: CLAUDE_NOT_CONFIGURED, code: 'not_configured' });
     const sync = await syncReady;
     if (!sync) return route(t, body);
     // account sync on: memory and material are the signed-in user's, and nobody else's
@@ -866,7 +800,7 @@ export function createWonderCore(opts = {}) {
     const spend = usageKind(method, pathname, body);
     if (spend) {
       if (!userId) return t.json(401, { ok: false, error: 'Sign in to use Mull: lessons, the tutor and the Teacher need an account.', signedOut: true });
-      if (state.mode === 'claude' && !userPlans(sync).isAdmin(userId)) { // admins have no caps
+      if (state.client && !userPlans(sync).isAdmin(userId)) { // a server without Claude spends nothing; admins have no caps
         const plan = await userPlans(sync).planId(userId);
         const units = body?.materialId ? materialCharge(await userMats.meta(body.materialId)) : 1;
         const r = await usageGate(sync).charge(userId, spend, { retryKey: cleanKey(body?.streamKey) || cleanKey(body?.turnId), units, plan });
@@ -909,7 +843,7 @@ export function createWonderCore(opts = {}) {
       signedIn: !!userId,
       // billing: what the browser may offer (upgrade, manage); null without a payment provider
       ...(userId ? { userId, records: await sync.count(userId), plan, billing: pay ? await pay.offer(record, plan) : null } : {}),
-      ...(userId && state.mode === 'claude' ? { usage: await usageGate(sync).today(userId, plan.id, { unlimited: plan.source === 'admin' }) } : {}),
+      ...(userId && state.client ? { usage: await usageGate(sync).today(userId, plan.id, { unlimited: plan.source === 'admin' }) } : {}),
       push: sync && push ? { publicKey: push.publicKey } : null,
     });
   }

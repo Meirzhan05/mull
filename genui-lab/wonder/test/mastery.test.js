@@ -19,7 +19,7 @@ import {
 import { normalizePracticeItem } from '../public/practice-core.js';
 import { upNext } from '../public/progress-core.js';
 import { mergeStates, emptyState } from '../public/store.js';
-import { fakeClient, demo } from './helpers.js';
+import { fakeClient, sampleLesson } from './helpers.js';
 
 const quiet = { warn() {}, error() {}, log() {}, info() {} };
 const NOW = new Date('2026-10-21T12:00:00Z');
@@ -112,7 +112,7 @@ test('server sanitizes the untrusted summary and builds the prompt block', () =>
 });
 
 async function withServer(opts, fn) {
-  const server = createWonderServer({ demoDelayMs: 0, logger: quiet, memory: createMemoryStore({ file: null }), ...opts });
+  const server = createWonderServer({ client: null, logger: quiet, memory: createMemoryStore({ file: null }), ...opts });
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   const base = `http://127.0.0.1:${server.address().port}`;
   try { return await fn(base); } finally { server.closeAllConnections?.(); await new Promise((r) => server.close(r)); }
@@ -121,7 +121,7 @@ async function withServer(opts, fn) {
 test('mastery goes into lesson, tutor and Teacher prompts after the cache breakpoint; memoryEnabled:false omits it', async () => {
   const mastery = { shaky: [{ concept: 'Variance', mastery: 0.3 }], learning: [], fading: [], mastered: [{ concept: 'Mean', mastery: 0.92 }] };
   const client = fakeClient({ text: '# T\n\nBody.' });
-  await withServer({ mode: 'claude', client }, async (base) => {
+  await withServer({ client }, async (base) => {
     const post = (p, body) => fetch(base + p, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then((r) => r.text());
     await post('/api/lesson/stream', { topic: 'standard deviation', mastery, useWebSearch: false });
     await post('/api/lesson/stream', { topic: 'standard deviation', mastery, memoryEnabled: false, useWebSearch: false });
@@ -156,7 +156,7 @@ test('Teacher get_progress reports mastery (or why it is missing); quiz_me requi
 test('concept tags survive Quiz validation and practice extraction (structured and from lesson components)', () => {
   const r = validateComponentProps('Quiz', { questions: [{ prompt: 'p', question_type: 'true_false', correct_values: ['true'], concept: '  Rayleigh   scattering ' }] });
   assert.equal(r.props.questions[0].concept, 'Rayleigh scattering');
-  const det = extractPracticeDeterministic(demo('sky-blue.md'));
+  const det = extractPracticeDeterministic(sampleLesson('sky-blue.md'));
   assert.ok(det.items.every((i) => i.concept), 'every deterministic item carries a concept');
   assert.ok(det.items.some((i) => i.concept === 'Mie scattering'));
   const items = itemsFromStructured({ items: [{ type: 'flashcard', concept: 'Median', front: 'f', back: 'b', prompt: '', choices: [], correct_index: 0, answer: '', statement: '', is_true: false, explanation: '' }] });

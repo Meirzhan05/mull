@@ -1,5 +1,5 @@
 // /api/practice/extract: finished lesson -> knowledge cards + practice items.
-// Claude path: one structured-output call (effort low). Demo/fallback path: deterministic
+// Claude path: one structured-output call (effort low). Fallback (no Claude, or it failed): deterministic
 // extraction from the lesson's own <KeyTerm> and <Quiz> components.
 
 import { preprocess } from './compile.js';
@@ -123,7 +123,7 @@ export async function extractPracticeWithClaude(client, markdown) {
   return { title: lessonTitle(markdown), cards, items, source: 'claude' };
 }
 
-// ------------------------------------------------------------------ demo-mode visual items
+// ------------------------------------------------------------------ deterministic visual items
 const NICE = [1, 2, 2.5, 5];
 function niceGrid(values) {
   const lo = Math.min(...values);
@@ -145,7 +145,7 @@ const lead = (title, question) => (!title ? question[0].toUpperCase() + question
 const stripNumbering = (s) => plain(s).replace(/^(?:step\s*)?\d+[.):]\s*/i, '');
 
 /**
- * Visual practice items from the lesson's own widgets (demo / fallback path):
+ * Visual practice items from the lesson's own widgets (fallback path):
  *   InputOutputSlider -> number_line  "which input gives this output?"
  *   BarChart          -> chart_select "which bar is described here?" (or the largest)
  *   Cycle / LessonStepper -> order_steps

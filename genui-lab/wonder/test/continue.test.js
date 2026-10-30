@@ -3,19 +3,19 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createWonderServer } from '../server/app.js';
-import { normalizeContinueFrom, createContinuationSources, demoContinuation, steeringUserContent, trimToLastBlock } from '../server/steering.js';
+import { normalizeContinueFrom, createContinuationSources, steeringUserContent, trimToLastBlock } from '../server/steering.js';
 import {
   trimToLastPage, trimBeforePage, sliceFromPage, pageCount, pageTitles, keptForContinue, citeRefsIn, resolutionIdsOf,
   carryOver, mergeContinuedAppData, sourcesFromAppData, lessonPhase, statusAfterStop, isResumableFailure, STEER_CHIPS,
 } from '../public/steering-core.js';
 import { ConversationSourceParser, ConversationTurn, validateRecord } from '../../chatgpt-dil/src/stream.js';
 import { compileWonder, toWonderDil } from '../server/compile.js';
-import { WEB_SEARCH_TOOL } from '../server/grounding.js';
-import { demo, runProgram, catalogNodes, fakeClient } from './helpers.js';
+import { WEB_SEARCH_TOOL, stripGroundingTags } from '../server/grounding.js';
+import { sampleLesson, runProgram, catalogNodes, fakeClient, fakeClientBy, lastUserText, groundedClient, citedBlocks } from './helpers.js';
 
 const quiet = { warn() {}, error() {}, log() {}, info() {} };
 async function withServer(opts, fn) {
-  const server = createWonderServer({ demoDelayMs: 0, logger: quiet, memoryFile: null, ...opts });
+  const server = createWonderServer({ client: null, logger: quiet, memoryFile: null, ...opts });
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   const base = `http://127.0.0.1:${server.address().port}`;
   try { return await fn(base, server); } finally { server.closeAllConnections?.(); await new Promise((r) => server.close(r)); }
@@ -60,7 +60,7 @@ const REST = '## Page three, again\n\nNew third page.\n\n## Check your understan
 test('continueFrom resume (no instruction): complete blocks replace, no prefill, search + memory still applied', async () => {
   const TAIL = 'Third page text.\n\n## Check your understanding\n\nQuiz here.\n';
   const client = fakeClient({ text: TAIL });
-  await withServer({ mode: 'claude', client }, async (base, server) => {
+  await withServer({ client }, async (base, server) => {
     server.memory.add({ fact: 'Learns best with cooking analogies.', kind: 'preference', source: 'user' });
     const res = await post(base, '/api/lesson/stream', { topic: 'steady', continueFrom: { markdown: PARTIAL } });
     assert.equal(res.status, 200);
@@ -94,7 +94,7 @@ test('continueFrom resume (no instruction): complete blocks replace, no prefill,
 
 test('continueFrom revise from page N with an instruction: earlier pages kept, steering records, prompt names the page', async () => {
   const client = fakeClient({ text: REST });
-  await withServer({ mode: 'claude', client }, async (base) => {
+  await withServer({ client }, async (base) => {
     const res = await post(base, '/api/lesson/stream', { topic: 'steady', useWebSearch: false, memoryEnabled: false, continueFrom: { markdown: FULL, fromPage: 3, instruction: 'More examples' } });
     const { recs, turn } = await readStream(res);
     assertWellFormed(recs);
@@ -127,7 +127,7 @@ test('continueFrom validation: sizes, fromPage range, messageId reuse', async ()
   assert.equal(ok.instruction.length, 300);
   assert.equal(ok.messageId, undefined);
   assert.equal(ok.mode, 'revise');
-  await withServer({ mode: 'demo' }, async (base) => {
+  await withServer({ client: fakeClient({ text: 'More text.\n' }) }, async (base) => {
     assert.equal((await post(base, '/api/lesson/stream', { topic: 'x', continueFrom: { markdown: FULL, fromPage: 9 } })).status, 400);
     const res = await post(base, '/api/lesson/stream', { topic: 'compound interest', continueFrom: { markdown: '# T\n\n## A\n\nx\n\n## B\n\ny', messageId: 'msg-continued-1234' } });
     const { recs } = await readStream(res);
@@ -167,7 +167,7 @@ test('race: a steer that lands after Claude finished is applied as a continuatio
   let open;
   const gate = { promise: new Promise((r) => { open = r; }) };
   const client = finishingClient(FULL, REST, gate);
-  await withServer({ mode: 'claude', client }, async (base) => {
+  await withServer({ client }, async (base) => {
     const res = await post(base, '/api/lesson/stream', { topic: 'steady', useWebSearch: false });
     let op = null;
     let steered = null;
@@ -230,76 +230,67 @@ test('steeringUserContent modes: steer, resume, resume with an instruction, revi
   assert.match(steeringUserContent('req', kept, 'Shorter', { mode: 'revise', fromPage: 2 })[1].text, /from page 2 on[\s\S]*"Shorter"[\s\S]*Write page 2 and every page after it/);
 });
 
-// ---------------------------------------------------------------- demo mode over HTTP
+// ---------------------------------------------------------------- whole lessons over HTTP
 
-async function demoLesson(base, topic, body = {}) {
-  const res = await post(base, '/api/lesson/stream', { topic, ...body });
+async function lessonOver(base, topic, body = {}) {
+  const res = await post(base, '/api/lesson/stream', { topic, verify: false, ...body });
   assert.equal(res.status, 200);
   return readStream(res);
 }
 const citeResults = (appData) => Object.values(appData?.opGenui?.componentResults || {}).filter((r) => r?.state?.items);
 
-test('demo continueFrom over HTTP: resume an interrupted grounded lesson, old Cite pills keep resolving', async () => {
-  await withServer({ mode: 'demo' }, async (base) => {
-    const first = await demoLesson(base, 'Why the sky is blue');
-    const full = first.turn.primary;
-    assert.equal(full.status, 'complete');
-    const md = full.markdown;
-    // interrupted inside page 4 ("Sunsets"): pages 1-3 hold two cites, the rest two more
-    const partial = md.slice(0, md.indexOf('## Sunsets') + 40);
-    const kept = trimToLastPage(partial);
-    assert.deepEqual([...citeRefsIn(kept)], ['turn0search0', 'turn0search1']);
-    const sources = sourcesFromAppData(full.dil.appData);
-    assert.equal(sources.length, 4);
+test('continueFrom over HTTP: resume an interrupted cited lesson, old Cite pills keep resolving', async () => {
+  const sky = sampleLesson('sky-blue.md');
+  const first = await withServer({ client: groundedClient([{ stop_reason: 'end_turn', blocks: citedBlocks(sky) }]) }, (base) => lessonOver(base, 'Why the sky is blue'));
+  const full = first.turn.primary;
+  assert.equal(full.status, 'complete');
+  const md = full.markdown;
+  // interrupted inside page 4 ("Sunsets"): pages 1-3 hold two cites, the rest two more
+  const partial = md.slice(0, md.indexOf('## Sunsets') + 40);
+  const kept = normalizeContinueFrom({ markdown: partial }).kept;
+  assert.deepEqual([...citeRefsIn(kept)], ['turn0search0', 'turn0search1']);
+  const sources = sourcesFromAppData(full.dil.appData);
+  assert.equal(sources.length, 4);
 
-    const { recs, turn } = await demoLesson(base, 'Why the sky is blue', { continueFrom: { markdown: partial, messageId: first.recs.find((r) => r.type === 'content').messageId, sources } });
-    assertWellFormed(recs);
-    const out = turn.primary;
-    assert.equal(out.status, 'complete');
-    assert.ok(out.markdown.startsWith(kept));
-    assert.equal(pageCount(out.markdown), pageCount(md), 'the remaining pages were written');
-    assert.equal(out.markdown, md, 'deterministic: resuming the sample reproduces it exactly');
-    // ids: kept refs reused, the new cite numbered after them, Sources lists old + new
-    const allRefs = [...citeRefsIn(out.markdown)];
-    assert.deepEqual(allRefs.sort(), ['turn0search0', 'turn0search1', 'turn0search2', 'turn0search3']);
-    const sourcesList = citeResults(out.dil.appData).find((r) => /^Sources/.test(r.state.sources_title));
-    assert.equal(sourcesList.state.items.length, 4);
-    // the kept program has the same resolution ids as the original (same messageId)
-    const replace = recs.find((r) => r.type === 'content' && r.mode === 'replace' && r.revision > 1);
-    const keptIds = resolutionIdsOf(replace.dil);
-    const origIds = resolutionIdsOf(full.dil);
-    for (const id of keptIds) assert.ok(origIds.has(id), `kept id ${id} is stable`);
-    // every Cite in the result resolves and renders
-    const env = runProgram(out.dil);
-    assert.deepEqual(env.errors, []);
-    assert.equal(catalogNodes(env.mirror, 'Quiz').length, 1);
-  });
+  // Claude continues from the next sentence, citing the last two sources again
+  const client = groundedClient([{ stop_reason: 'end_turn', blocks: citedBlocks(sky.slice(stripGroundingTags(kept).length)) }]);
+  const { recs, turn } = await withServer({ client }, (base) => lessonOver(base, 'Why the sky is blue', { continueFrom: { markdown: partial, messageId: first.recs.find((r) => r.type === 'content').messageId, sources } }));
+  assertWellFormed(recs);
+  const out = turn.primary;
+  assert.equal(out.status, 'complete');
+  assert.ok(out.markdown.startsWith(kept));
+  assert.equal(out.markdown, md, 'the kept pages and the continuation join into the same lesson');
+  // ids: kept refs reused, the new cites numbered after them, Sources lists old + new
+  assert.deepEqual([...citeRefsIn(out.markdown)].sort(), ['turn0search0', 'turn0search1', 'turn0search2', 'turn0search3']);
+  const sourcesList = citeResults(out.dil.appData).find((r) => /^Sources/.test(r.state.sources_title));
+  assert.equal(sourcesList.state.items.length, 4);
+  // the kept program has the same resolution ids as the original (same messageId)
+  const replace = recs.find((r) => r.type === 'content' && r.mode === 'replace' && r.revision > 1);
+  const origIds = resolutionIdsOf(full.dil);
+  for (const id of resolutionIdsOf(replace.dil)) assert.ok(origIds.has(id), `kept id ${id} is stable`);
+  // every Cite in the result resolves and renders
+  const env = runProgram(out.dil);
+  assert.deepEqual(env.errors, []);
+  assert.equal(catalogNodes(env.mirror, 'Quiz').length, 1);
 });
 
-test('demo continueFrom over HTTP: revise a finished lesson from page 3 with "Simpler"', async () => {
-  await withServer({ mode: 'demo' }, async (base) => {
-    const md = (await demoLesson(base, 'compound interest')).turn.primary.markdown;
-    const { recs, turn } = await demoLesson(base, 'compound interest', { continueFrom: { markdown: md, fromPage: 3, instruction: STEER_CHIPS[0].instruction } });
+test('continueFrom over HTTP: revise a finished lesson from page 3 with "Simpler"', async () => {
+  const md = sampleLesson('compound-interest.md');
+  const simpler = `## The simple version\n\n<Callout title="Steered: Simpler" tone="tip">Money grows on money.</Callout>\n\n${sliceFromPage(md, pageCount(md))}`;
+  const client = fakeClientBy((params) => ({ text: /<lesson_so_far>/.test(lastUserText(params)) ? simpler : md }));
+  await withServer({ client }, async (base) => {
+    assert.equal((await lessonOver(base, 'compound interest')).turn.primary.markdown, md);
+    const { recs, turn } = await lessonOver(base, 'compound interest', { continueFrom: { markdown: md, fromPage: 3, instruction: STEER_CHIPS[0].instruction } });
     assertWellFormed(recs);
     const out = turn.primary.markdown;
     const kept = trimBeforePage(md, 3);
-    assert.ok(out.startsWith(kept), 'pages 1-2 untouched');
-    assert.deepEqual(pageTitles(out), pageTitles(md), 'same pages, rewritten from page 3');
-    assert.notEqual(sliceFromPage(out, 3), sliceFromPage(md, 3));
-    assert.match(sliceFromPage(out, 3), /^## [^\n]+\n\n<Callout title="Steered: Simpler" tone="tip">/);
+    assert.equal(out, kept + simpler, 'pages 1-2 untouched, the rest rewritten');
+    assert.match(lastUserText(client.calls.stream[1].params), /rewrite it from page 3 on/);
     assert.ok(recs.some((r) => r.detail?.kind === 'steering-message'));
     const env = runProgram(turn.primary.dil);
     assert.deepEqual(env.errors, []);
     assert.equal(compileWonder(out).components.filter((c) => c.status !== 'valid').length, 0);
   });
-});
-
-test('demoContinuation: resume continues after the kept pages; a complete lesson redoes the last page', () => {
-  const src = demo('sky-blue.md');
-  const kept = trimBeforePage(src, 3);
-  assert.equal(kept + demoContinuation(src, kept, ''), src);
-  assert.equal(demoContinuation(src, src, ''), sliceFromPage(src, pageCount(src)));
-  assert.match(demoContinuation(src, kept, 'Simpler'), /Steered: Simpler/);
 });
 
 // ---------------------------------------------------------------- client helpers (steering-core)

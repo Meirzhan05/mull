@@ -5,16 +5,15 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import Anthropic from '@anthropic-ai/sdk';
 import { createWonderServer } from '../server/app.js';
-import { buildStreamParams, buildStructuredParams, detectMode, isCredentialError, friendlyError } from '../server/claude.js';
+import { buildStreamParams, buildStructuredParams, hasClaudeCredentials, isCredentialError, friendlyError, CLAUDE_NOT_CONFIGURED } from '../server/claude.js';
 import { LESSON_SYSTEM_PROMPT, TUTOR_SYSTEM_PROMPT } from '../server/prompts.js';
 import { parseConversationSource, ConversationTurn } from '../../chatgpt-dil/src/stream.js';
-import { fakeClient, demo, runProgram, catalogNodes } from './helpers.js';
-import { stripGroundingTags } from '../server/grounding.js';
+import { fakeClient, sampleLesson, runProgram, catalogNodes } from './helpers.js';
 
 const quiet = { warn() {}, error() {}, log() {} };
 
 async function withServer(client, fn) {
-  const server = createWonderServer({ mode: 'claude', client, demoDelayMs: 0, logger: quiet, memoryFile: null });
+  const server = createWonderServer({ client, logger: quiet, memoryFile: null });
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   const base = `http://127.0.0.1:${server.address().port}`;
   try { return await fn(base, server); } finally { server.closeAllConnections?.(); await new Promise((r) => server.close(r)); }
@@ -42,7 +41,7 @@ test('stream request: model, adaptive thinking, effort, fallbacks + beta, cached
 });
 
 test('lesson stream via Claude: deltas flow through compile + NDJSON, params are correct', async () => {
-  const md = demo('transformers.md');
+  const md = sampleLesson('transformers.md');
   const client = fakeClient({ text: md });
   await withServer(client, async (base) => {
     const res = await post(base, '/api/lesson/stream', { topic: 'transformers', level: 'intermediate' });
@@ -127,14 +126,37 @@ for (const [name, err, code] of [
   });
 }
 
-test('AuthenticationError before any text -> switches to demo mode and streams demo content', async () => {
+test('AuthenticationError before any text -> control failed (auth_failed), never canned content', async () => {
   const client = fakeClient({ error: apiError(Anthropic.AuthenticationError, 401, 'invalid x-api-key') });
-  await withServer(client, async (base, server) => {
+  await withServer(client, async (base) => {
     const recs = await records(await post(base, '/api/lesson/stream', { topic: 'why is the sky blue' }));
-    assert.equal(stripGroundingTags(fold(recs).markdown), demo('sky-blue.md')); // demo citations (Phase 3) stripped
-    assert.equal(server.wonder.mode, 'demo');
+    const failed = recs.find((r) => r.type === 'control' && r.detail.kind === 'failed');
+    assert.equal(failed.detail.code, 'auth_failed');
+    assert.equal(fold(recs).markdown, '');
+    assert.equal(recs.at(-1).type, 'end');
     const status = await (await fetch(`${base}/api/status`)).json();
-    assert.equal(status.mode, 'demo');
+    assert.equal(status.claude, true, 'the server still has a client: a bad key is reported per request');
+  });
+});
+
+test('no credentials: /api/status says so and Claude routes answer 503; extraction falls back to the lesson', async () => {
+  await withServer(null, async (base) => {
+    const status = await (await fetch(`${base}/api/status`)).json();
+    assert.equal(status.claude, false);
+    assert.equal(status.error, CLAUDE_NOT_CONFIGURED);
+    assert.equal('mode' in status, false);
+    for (const [path, body] of [
+      ['/api/lesson/stream', { topic: 'why is the sky blue' }],
+      ['/api/tutor/stream', { message: 'hi' }],
+      ['/api/teacher/stream', { message: 'hi' }],
+      ['/api/course/plan', { topic: 'optics' }],
+    ]) {
+      const res = await post(base, path, body);
+      assert.equal(res.status, 503, path);
+      assert.deepEqual(await res.json(), { ok: false, error: CLAUDE_NOT_CONFIGURED, code: 'not_configured' });
+    }
+    const data = await (await post(base, '/api/practice/extract', { lessonMarkdown: sampleLesson('sky-blue.md') })).json();
+    assert.equal(data.source, 'lesson-components');
   });
 });
 
@@ -142,16 +164,16 @@ test('missing credentials error (SDK, no HTTP status) is treated like auth failu
   assert.equal(isCredentialError(new Error('Could not resolve authentication method. Expected either apiKey or authToken to be set.')), true);
   assert.equal(isCredentialError(apiError(Anthropic.RateLimitError, 429, 'x')), false);
   assert.equal(friendlyError(apiError(Anthropic.AuthenticationError, 401, 'x')).code, 'auth_failed');
+  assert.equal(friendlyError(new Error('Could not resolve authentication method. Expected either apiKey or authToken to be set.')).code, 'auth_failed');
   // a refused request says Claude's own reason (what to change), not a guess
   const pdf = new Anthropic.BadRequestError(400, { type: 'error', error: { type: 'invalid_request_error', message: 'Could not process PDF' } }, undefined, new Headers());
   assert.equal(friendlyError(pdf).message, 'Claude could not process this request: Could not process PDF.');
 });
 
-test('mode detection never needs key values', () => {
-  assert.equal(detectMode({ WONDER_MODE: 'demo', ANTHROPIC_API_KEY: 'k' }), 'demo');
-  assert.equal(detectMode({ ANTHROPIC_API_KEY: 'k', ANTHROPIC_CONFIG_DIR: '/nonexistent' }), 'claude');
-  assert.equal(detectMode({ ANTHROPIC_AUTH_TOKEN: 't', ANTHROPIC_CONFIG_DIR: '/nonexistent' }), 'claude');
-  assert.equal(detectMode({ ANTHROPIC_CONFIG_DIR: '/nonexistent' }), 'demo');
+test('credential detection never needs key values', () => {
+  assert.equal(hasClaudeCredentials({ ANTHROPIC_API_KEY: 'k', ANTHROPIC_CONFIG_DIR: '/nonexistent' }), true);
+  assert.equal(hasClaudeCredentials({ ANTHROPIC_AUTH_TOKEN: 't', ANTHROPIC_CONFIG_DIR: '/nonexistent' }), true);
+  assert.equal(hasClaudeCredentials({ ANTHROPIC_CONFIG_DIR: '/nonexistent' }), false);
 });
 
 test('practice extract via Claude structured output (effort low, json_schema), validated', async () => {
@@ -166,7 +188,7 @@ test('practice extract via Claude structured output (effort low, json_schema), v
   };
   const client = fakeClient({ structured });
   await withServer(client, async (base) => {
-    const data = await (await post(base, '/api/practice/extract', { lessonMarkdown: demo('sky-blue.md') })).json();
+    const data = await (await post(base, '/api/practice/extract', { lessonMarkdown: sampleLesson('sky-blue.md') })).json();
     assert.equal(data.source, 'claude');
     assert.equal(data.items.length, 3, 'invalid items are dropped');
     assert.equal(data.items[0].choices[1].isCorrect, true);
@@ -181,7 +203,7 @@ test('practice extract via Claude structured output (effort low, json_schema), v
 test('practice extract falls back to lesson components when structured output fails', async () => {
   const client = fakeClient({ error: apiError(Anthropic.BadRequestError, 400, 'nope') });
   await withServer(client, async (base) => {
-    const data = await (await post(base, '/api/practice/extract', { lessonMarkdown: demo('sky-blue.md') })).json();
+    const data = await (await post(base, '/api/practice/extract', { lessonMarkdown: sampleLesson('sky-blue.md') })).json();
     assert.equal(data.ok, true);
     assert.equal(data.source, 'lesson-components');
     assert.ok(data.items.length >= 4);

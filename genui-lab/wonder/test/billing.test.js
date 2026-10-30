@@ -131,7 +131,7 @@ async function withServer(fn, { env = ENV, db = createMemoryDb() } = {}) {
   const polar = fakePolar();
   const sync = createSyncService({ db });
   const server = createWonderServer({
-    mode: 'demo', client: fakeClient({ text: 'x' }), demoDelayMs: 0, logger: quiet, memory: createMemoryStore({ file: null }), push: null, sync,
+    client: fakeClient({ text: 'x' }), logger: quiet, memory: createMemoryStore({ file: null }), push: null, sync,
     getUserId: (req) => req.headers['x-test-user'] || null, deleteAuthUser: async () => true, billingFetch: polar.fetch, env,
   });
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
@@ -406,7 +406,7 @@ test('the account card does not wait long for a slow Polar price', async () => {
 test('over the Next.js adapter: the webhook is verified over the raw body, and checkout uses the request origin', async () => {
   const polar = fakePolar();
   const sync = createSyncService({ db: createMemoryDb() });
-  const core = createWonderCore({ mode: 'demo', logger: quiet, memory: createMemoryStore({ file: null }), push: null, sync, billingFetch: polar.fetch, env: ENV });
+  const core = createWonderCore({ client: null, logger: quiet, memory: createMemoryStore({ file: null }), push: null, sync, billingFetch: polar.fetch, env: ENV });
   polar.subs.set('sub_1', sub());
   const raw = JSON.stringify({ type: 'subscription.active', data: polar.subs.get('sub_1') });
   const res = await handleWebRequest(core, new Request('https://mull.example/api/billing/webhook', { method: 'POST', headers: { 'Content-Type': 'application/json', ...signed(raw, standardKey(ENV.POLAR_WEBHOOK_SECRET)) }, body: raw }), { logger: quiet });

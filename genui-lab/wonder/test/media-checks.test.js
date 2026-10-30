@@ -14,7 +14,7 @@ import { lintLesson, lessonMedia, mediaDigest, criticUserMessage, CRITIC_SYSTEM_
 import { summarizeMedia, reportMarkdown, summarizeRuns } from '../server/judge.js';
 import { parseArgs, runEval, lessonMediaReport } from '../evals/run.js';
 import { parseConversationSource } from '../../chatgpt-dil/src/stream.js';
-import { demo, fakeClient, runProgram } from './helpers.js';
+import { sampleLesson, fakeClient, runProgram } from './helpers.js';
 
 const quiet = { warn() {}, error() {}, log() {}, info() {} };
 const HEART = { found: true, src: 'https://upload.wikimedia.org/wikipedia/commons/1/11/Heart.png', width: 960, height: 800, title: 'Heart numlabels', license: 'CC BY-SA 3.0', author: 'Wapcaplet' };
@@ -190,23 +190,23 @@ test('vision check stays within the settle budget: a slow check is not waited fo
   await assert.rejects(createFigureCheck({ client: hang, timeoutMs: 30 })(HEART, {}), /aborted/);
 });
 
-test('core option: the check is on in claude mode, off in demo mode, off with figureCheck:false or WONDER_FIGURE_CHECK=off', () => {
-  const core = (o) => createWonderCore({ memoryFile: null, logger: quiet, figureLookup: null, ...o });
+test('core option: the check is on with a Claude client, off without one, off with figureCheck:false or WONDER_FIGURE_CHECK=off', () => {
+  const core = (o) => createWonderCore({ client: null, memoryFile: null, logger: quiet, figureLookup: null, ...o });
   const client = fakeClient();
-  assert.equal(core({ mode: 'claude', client, env: {} }).state.figureCheck, FIGURE_CHECK_MODEL);
-  assert.equal(core({ mode: 'claude', client, env: { WONDER_FIGURE_CHECK_MODEL: 'claude-opus-5-5' } }).state.figureCheck, 'claude-opus-5-5');
-  assert.equal(core({ mode: 'claude', client, env: {}, figureCheckModel: 'claude-sonnet-5-5' }).state.figureCheck, 'claude-sonnet-5-5');
-  assert.equal(core({ mode: 'demo', env: {} }).state.figureCheck, null);
-  assert.equal(core({ mode: 'demo', env: {}, figureCheck: true }).state.figureCheck, null, 'no client in demo mode');
-  assert.equal(core({ mode: 'claude', client, env: { WONDER_FIGURE_CHECK: 'off' } }).state.figureCheck, null);
-  assert.equal(core({ mode: 'claude', client, env: {}, figureCheck: false }).state.figureCheck, null);
-  assert.equal(core({ mode: 'claude', client }).state.figureCheck, null, 'tests run with WONDER_FIGURE_CHECK=off');
-  assert.equal(core({ mode: 'claude', client, figureCheck: async () => ({ fits: true }) }).state.figureCheck, 'custom');
+  assert.equal(core({ client, env: {} }).state.figureCheck, FIGURE_CHECK_MODEL);
+  assert.equal(core({ client, env: { WONDER_FIGURE_CHECK_MODEL: 'claude-opus-5-5' } }).state.figureCheck, 'claude-opus-5-5');
+  assert.equal(core({ client, env: {}, figureCheckModel: 'claude-sonnet-5-5' }).state.figureCheck, 'claude-sonnet-5-5');
+  assert.equal(core({ client: null, env: {} }).state.figureCheck, null);
+  assert.equal(core({ client: null, env: {}, figureCheck: true }).state.figureCheck, null, 'no check without a client');
+  assert.equal(core({ client, env: { WONDER_FIGURE_CHECK: 'off' } }).state.figureCheck, null);
+  assert.equal(core({ client, env: {}, figureCheck: false }).state.figureCheck, null);
+  assert.equal(core({ client }).state.figureCheck, null, 'tests run with WONDER_FIGURE_CHECK=off');
+  assert.equal(core({ client, figureCheck: async () => ({ fits: true }) }).state.figureCheck, 'custom');
 });
 
 async function claudeLesson(text, serverOpts) {
   const client = fakeClient({ text, structured: { depicts: 'A diagram of a camera.', fits: false, problem: 'The caption is about clouds; the image shows a camera.' } });
-  const server = createWonderServer({ mode: 'claude', client, demoDelayMs: 0, logger: quiet, memoryFile: null, figureSettleMs: 2000, ...serverOpts });
+  const server = createWonderServer({ client, logger: quiet, memoryFile: null, figureSettleMs: 2000, ...serverOpts });
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   try {
     const res = await fetch(`http://127.0.0.1:${server.address().port}/api/lesson/stream`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ topic: 'why is the sky blue?', useWebSearch: false, verify: false }) });
@@ -218,18 +218,18 @@ async function claudeLesson(text, serverOpts) {
 }
 
 test('lesson stream (claude mode): the vision check runs on the found image and a mismatch leaves the Figure out', async () => {
-  const { client, final } = await claudeLesson(demo('sky-blue.md'), { figureLookup: async () => HEART, figureCheck: true });
+  const { client, final } = await claudeLesson(sampleLesson('sky-blue.md'), { figureLookup: async () => HEART, figureCheck: true });
   assert.equal(final.status, 'complete');
   assert.equal(client.calls.create.length, 1, 'one check (the critic is off for this request)');
   assert.equal(client.calls.create[0].model, FIGURE_CHECK_MODEL);
   assert.deepEqual(client.calls.create[0].messages[0].content[0].source, { type: 'url', url: HEART.src });
-  // the Figure's result only (the sky-blue demo also has a Video, left out here)
+  // the Figure's result only (the sky-blue sample also has a Video, left out here)
   const rid = [...final.dil.code.matchAll(/__dil\.jsx\(Figure,\{[^{}]*"__resolutionId":__dilConstants\["(\d+)"\]/g)].map((m) => final.dil.constants[m[1]]);
   const states = rid.map((r) => final.dil.appData.opGenui.componentResults[r]?.state).filter((s) => s && 'found' in s);
   assert.equal(states.length, 1);
   assert.equal(states[0].found, false);
   assert.match(states[0].rejected.problem, /camera/);
-  const media = lessonMediaReport(demo('sky-blue.md'), final.dil);
+  const media = lessonMediaReport(sampleLesson('sky-blue.md'), final.dil);
   assert.equal(media.figures[0].found, false);
   assert.match(media.figures[0].rejected, /camera/);
 });
@@ -274,7 +274,7 @@ test('lesson stream: the final record of a lesson with a broken tag still has th
 // ---------------------------------------------------------------- lint and critic
 
 test('lint: an invalid Diagram or Figure, or an unclosed tag, fails valid_components with its error', () => {
-  const md = demo('sky-blue.md');
+  const md = sampleLesson('sky-blue.md');
   const badDiagram = md.replace(/(<Diagram [^>]*?)width=\{\d+\}/, '$1width={5000}');
   let c = lintLesson(badDiagram).checks.find((x) => x.id === 'valid_components');
   assert.equal(c.ok, false);
@@ -299,7 +299,7 @@ test('lint: an invalid Diagram or Figure, or an unclosed tag, fails valid_compon
 
 test('critic: the prompt covers diagram parts/steps and figure captions, questions and answers; the message lists their text', () => {
   for (const re of [/Diagram/, /part's text/, /step's label and text/, /<Figure>/, /caption/, /question/, /answer/, /"factual"/, /"widget"/]) assert.match(CRITIC_SYSTEM_PROMPT, re);
-  const md = demo('sky-blue.md');
+  const md = sampleLesson('sky-blue.md');
   const digest = mediaDigest(md);
   assert.match(digest, /- Page 3, Figure:\n  query: cumulus clouds blue sky\n  caption: /);
   assert.match(digest, /question: Look at the clouds/);
@@ -346,7 +346,7 @@ test('eval: per-lesson media (valid, found, dropped, not found) and the aggregat
   assert.deepEqual(m, { lessons: 2, withDiagram: 2, withFigure: 1, withImage: 1, diagrams: { total: 2, valid: 1 }, figures: { total: 4, valid: 3, found: 1, laterChoice: 1, rejected: 1, missing: 1 } });
   const summary = summarizeRuns(runs);
   assert.deepEqual(summary.media, m);
-  const report = reportMarkdown({ meta: { startedAt: 'now', mode: 'claude', model: 'm', webSearch: false, verify: true, judge: false }, summary, runs });
+  const report = reportMarkdown({ meta: { startedAt: 'now', model: 'm', webSearch: false, verify: true, judge: false }, summary, runs });
   assert.match(report, /## Diagrams and figures/);
   assert.match(report, /Diagram in 2\/2 lessons \(1\/2 valid\) · Figure in 1\/2 lessons \(3\/4 valid\) · images found 1\/3 \(1 after the vision check rejected the top result\), 1 dropped by the vision check, 1 not found · a shown image in 1\/2 lessons/);
   assert.match(report, /\| Lens \| 1 valid \(3 parts, 4 steps\) \| – \| – \|/);
@@ -355,7 +355,7 @@ test('eval: per-lesson media (valid, found, dropped, not found) and the aggregat
   assert.match(report, /- Diagram invalid: Shape 1 has unknown type/);
 });
 
-test('eval: --tag picks the physical/spatial topics; a demo run reports the sky-blue Diagram and its found Figure', async () => {
+test('eval: --tag picks the physical/spatial topics; a run reports the sky-blue Diagram and its found Figure', async () => {
   assert.equal(parseArgs(['--tag', 'media']).tag, 'media');
   const topics = JSON.parse(fs.readFileSync(new URL('../evals/topics.json', import.meta.url), 'utf8'));
   const media = topics.filter((t) => t.tags?.includes('media'));
@@ -366,10 +366,11 @@ test('eval: --tag picks the physical/spatial topics; a demo run reports the sky-
   const file = path.join(dir, 'topics.json');
   fs.writeFileSync(file, JSON.stringify([{ topic: 'Why the sky is blue', tags: ['media'] }, { topic: 'Compound interest' }]));
   const CLOUDS = { ...HEART, title: 'Clouds in the sky' };
-  const report = await runEval({ ...parseArgs(['--demo', '--tag', 'media']), topics: file }, { serverOpts: { figureLookup: async () => CLOUDS, figureSettleMs: 2000 }, log() {} });
+  const client = fakeClient({ text: sampleLesson('sky-blue.md') });
+  const report = await runEval({ ...parseArgs(['--tag', 'media', '--no-judge', '--no-verify']), topics: file }, { serverOpts: { client, figureLookup: async () => CLOUDS, figureSettleMs: 2000 }, log() {} });
   assert.equal(report.runs.length, 1, 'only the tagged topic');
   assert.equal(report.meta.tag, 'media');
-  assert.equal(report.meta.figureCheck, null, 'no vision check in demo mode');
+  assert.equal(report.meta.figureCheck, null, 'the tests run with WONDER_FIGURE_CHECK=off');
   const r = report.runs[0];
   assert.deepEqual(r.media.diagrams.map((d) => [d.status, d.parts, d.steps]), [['valid', 4, 3]]);
   assert.deepEqual(r.media.figures.map((f) => [f.status, f.found, f.image]), [['valid', true, 'Clouds in the sky']]);

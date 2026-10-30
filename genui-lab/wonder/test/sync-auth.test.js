@@ -11,13 +11,14 @@ import { createMemoryStore } from '../server/memory.js';
 import { createSyncService } from '../server/sync/service.js';
 import { createMemoryDb } from '../server/sync/memory-db.js';
 import { syncConfig } from '../server/sync/index.js';
+import { fakeClient } from './helpers.js';
 
 const quiet = { warn() {}, error() {}, log() {}, info() {} };
 const NOTES = '# Photosynthesis\n\nPlants turn light, water and carbon dioxide into glucose and oxygen. The light reactions happen in the thylakoids.';
 
 async function withServer(opts, fn) {
   const sync = createSyncService({ db: createMemoryDb() });
-  const server = createWonderServer({ demoDelayMs: 0, logger: quiet, memory: createMemoryStore({ file: null }), sync, push: null, getUserId: (req) => req.headers['x-test-user'] || null, ...opts });
+  const server = createWonderServer({ client: fakeClient({ text: '# T\n\nBody.\n' }), logger: quiet, memory: createMemoryStore({ file: null }), sync, push: null, getUserId: (req) => req.headers['x-test-user'] || null, ...opts });
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   const base = `http://127.0.0.1:${server.address().port}`;
   const as = (user) => async (method, p, body, headers = {}) => {
@@ -77,7 +78,7 @@ test('account sync over HTTP: learner memory belongs to the signed-in user', asy
     assert.equal((await sync.list('alice', ['memory'])).length, 1);
     assert.deepEqual((await alice('POST', '/api/sync', { since: 0, changes: [] })).body.records, []);
     // the Teacher / lesson prompts read the same per-user memory (the lesson route loads it)
-    const lesson = await alice('POST', '/api/lesson/stream', { topic: 'Why the sky is blue' });
+    const lesson = await alice('POST', '/api/lesson/stream', { topic: 'Why the sky is blue', verify: false });
     assert.equal(lesson.status, 200);
     assert.equal((await alice('DELETE', `/api/memory?id=${id}`, { id })).status, 200);
     assert.deepEqual((await sync.list('alice', ['memory'])), []);
@@ -166,7 +167,7 @@ test('delete account: removes only the signed-in user\'s data, then the sign-in;
 
 test('without account sync the server behaves exactly as before (no accounts, local memory)', async () => {
   const memory = createMemoryStore({ file: null });
-  const server = createWonderServer({ demoDelayMs: 0, logger: quiet, memory, getUserId: () => 'ignored' });
+  const server = createWonderServer({ client: null, logger: quiet, memory, getUserId: () => 'ignored' });
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   const base = `http://127.0.0.1:${server.address().port}`;
   try {
@@ -241,7 +242,7 @@ test('recoverable streams with accounts: a streamKey only supersedes the same us
       async finalMessage() { return { stop_reason: 'end_turn', content: [] }; },
     };
   } } } };
-  await withServer({ mode: 'claude', client }, async ({ alice, bob }) => {
+  await withServer({ client }, async ({ alice, bob }) => {
     const body = { topic: 'steady', streamKey: 'lesson-shared-12345678', useWebSearch: false, verify: false };
     const first = alice('POST', '/api/lesson/stream', body);
     for (let i = 0; i < 100 && calls.length < 1; i++) await new Promise((r) => setTimeout(r, 10));

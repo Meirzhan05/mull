@@ -1,4 +1,4 @@
-// Claude access: request builders, streaming, structured output, error mapping, mode detection.
+// Claude access: request builders, streaming, structured output, error mapping, credential detection.
 //
 // The Anthropic client is dependency-injected everywhere (tests pass a fake). Credentials are
 // resolved by the SDK itself (ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN / `ant auth login`
@@ -33,11 +33,13 @@ export function hasProfileCredentials(env = process.env) {
   }
 }
 
-/** 'demo' | 'claude'. WONDER_MODE=demo|claude forces a mode. */
-export function detectMode(env = process.env) {
-  if (env.WONDER_MODE === 'demo' || env.WONDER_MODE === 'claude') return env.WONDER_MODE;
-  return hasEnvCredentials(env) || hasProfileCredentials(env) ? 'claude' : 'demo';
+/** True when Claude can be reached: a key or token in the environment, or a profile credential. */
+export function hasClaudeCredentials(env = process.env) {
+  return hasEnvCredentials(env) || hasProfileCredentials(env);
 }
+
+/** What a Claude route answers when the server has no credentials (HTTP 503). */
+export const CLAUDE_NOT_CONFIGURED = 'Claude is not configured on this server.';
 
 export function createClaudeClient() {
   // Keys that are not scoped to a workspace must name one on every request.
@@ -148,7 +150,7 @@ export async function createStructured(client, params, options) {
   return JSON.parse(block.text);
 }
 
-/** Missing/invalid credentials (before or at the first request): switch to demo mode. */
+/** Missing/invalid credentials (before or at the first request). */
 export function isCredentialError(err) {
   if (err instanceof Anthropic.AuthenticationError) return true;
   if (err instanceof Anthropic.APIError && err.status != null) return false;
@@ -175,7 +177,7 @@ function retryAfterOf(err) {
 
 /** Map an error to a user-facing {code, message, retryAfterMs?}. Most specific class first. */
 export function friendlyError(err) {
-  if (err instanceof Anthropic.AuthenticationError) return { code: 'auth_failed', message: 'Claude rejected the credentials. Check ANTHROPIC_API_KEY in genui-lab/wonder/.env and restart the server.' };
+  if (isCredentialError(err)) return { code: 'auth_failed', message: 'Claude rejected the credentials. Check ANTHROPIC_API_KEY in genui-lab/wonder/.env and restart the server.' };
   if (err instanceof Anthropic.RateLimitError) return { code: 'rate_limited', message: 'Claude is busy right now (rate limit). Wait a few seconds and try again.', ...retryAfterOf(err) };
   // 529, or an `overloaded_error` event mid-stream (no HTTP status): retryable, like a 429
   if (err instanceof Anthropic.APIError && (err.status === 529 || apiErrorType(err) === 'overloaded_error')) return { code: 'overloaded', message: 'Claude is overloaded right now. Wait a moment and try again.', ...retryAfterOf(err) };

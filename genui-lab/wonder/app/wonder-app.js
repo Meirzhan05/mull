@@ -36,7 +36,7 @@ export default function WonderApp() {
         <aside className="sidebar" id="sidebar" aria-label="Main" />
         <div className="main-col">
           <header className="topbar" id="topbar" />
-          <div id="demo-banner" className="demo-banner" hidden role="status" />
+          <div id="setup-banner" className="setup-banner" hidden role="status" />
           <main id="app" tabIndex={-1} />
         </div>
       </div>
