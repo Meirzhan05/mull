@@ -45,6 +45,18 @@ CREATE TABLE IF NOT EXISTS wonder_usage (
   count integer NOT NULL DEFAULT 0,
   PRIMARY KEY (user_id, day, kind)
 );
+CREATE TABLE IF NOT EXISTS wonder_plans (
+  user_id text PRIMARY KEY,
+  plan text NOT NULL,
+  status text NOT NULL,
+  provider text,
+  customer_id text,
+  subscription_id text,
+  period_end timestamptz,
+  cancel_at_period_end boolean NOT NULL DEFAULT false,
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+ALTER TABLE wonder_plans ADD COLUMN IF NOT EXISTS synced_at timestamptz;
 CREATE TABLE IF NOT EXISTS wonder_files (
   user_id text NOT NULL,
   id text NOT NULL,
@@ -79,7 +91,7 @@ export function createPgDb({ pool, blob = null }) {
         rev: async () => rev,
         deletedRev: async () => Number(u.deleted_rev),
         /**
-         * Delete account: the user's records, files, push subscriptions and reminder log. The
+         * Delete account: the user's records, files, push subscriptions, reminder log and plan. The
          * revision counter stays (deleted_rev marks where the delete happened), and so do usage
          * counts, so deleting and signing in again does not reset the day's caps.
          * @returns {Promise<string[]>} Blob paths to delete once this commits
@@ -89,6 +101,7 @@ export function createPgDb({ pool, blob = null }) {
           const { rows } = await client.query('DELETE FROM wonder_files WHERE user_id = $1 RETURNING blob_path', [userId]);
           await client.query('DELETE FROM wonder_push_subscriptions WHERE user_id = $1', [userId]);
           await client.query('DELETE FROM wonder_reminders_sent WHERE user_id = $1', [userId]);
+          await client.query('DELETE FROM wonder_plans WHERE user_id = $1', [userId]);
           await client.query('UPDATE wonder_users SET deleted_rev = rev WHERE id = $1', [userId]);
           return rows.map((r) => r.blob_path).filter(Boolean);
         },
@@ -200,6 +213,25 @@ export function createPgDb({ pool, blob = null }) {
     async quotaUsed(userId, day) {
       const { rows } = await q('SELECT kind, count FROM wonder_usage WHERE user_id = $1 AND day = $2', [userId, day]);
       return Object.fromEntries(rows.map((r) => [r.kind, Number(r.count)]));
+    },
+    // -- Free/Pro plans (server/plans.js)
+    async getPlan(userId) {
+      const { rows: [r] } = await q('SELECT plan, status, provider, customer_id, subscription_id, period_end, cancel_at_period_end, synced_at FROM wonder_plans WHERE user_id = $1', [userId]);
+      const ms = (v) => (v ? new Date(v).getTime() : null);
+      return r ? { plan: r.plan, status: r.status, provider: r.provider, customerId: r.customer_id, subscriptionId: r.subscription_id, periodEnd: ms(r.period_end), cancelAtPeriodEnd: r.cancel_at_period_end, syncedAt: ms(r.synced_at) } : null;
+    },
+    /** Upsert; a record read from the provider before the stored one (synced_at) is dropped: false. */
+    async setPlan(userId, p) {
+      const at = (v) => (v == null ? null : new Date(v));
+      const { rowCount } = await q(
+        `INSERT INTO wonder_plans (user_id, plan, status, provider, customer_id, subscription_id, period_end, cancel_at_period_end, synced_at, updated_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, now())
+         ON CONFLICT (user_id) DO UPDATE SET plan = EXCLUDED.plan, status = EXCLUDED.status, provider = EXCLUDED.provider, customer_id = EXCLUDED.customer_id,
+           subscription_id = EXCLUDED.subscription_id, period_end = EXCLUDED.period_end, cancel_at_period_end = EXCLUDED.cancel_at_period_end,
+           synced_at = EXCLUDED.synced_at, updated_at = now()
+         WHERE wonder_plans.synced_at IS NULL OR EXCLUDED.synced_at IS NULL OR wonder_plans.synced_at <= EXCLUDED.synced_at`,
+        [userId, p.plan, p.status, p.provider, p.customerId, p.subscriptionId, at(p.periodEnd), p.cancelAtPeriodEnd, at(p.syncedAt)]);
+      return rowCount > 0;
     },
     async putFile(userId, id, { bytes, contentType }) {
       let blobPath = null;

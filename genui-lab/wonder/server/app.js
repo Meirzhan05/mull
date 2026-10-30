@@ -12,8 +12,12 @@
 //   POST /api/teacher/stream    -> conversation-source NDJSON (Teacher turn: tool loop, cards in componentResults)
 //   GET/POST/DELETE /api/memory -> learner memory items
 //   POST /api/memory/extract    -> 0-3 new memory facts from a finished lesson
-//   GET  /api/account           -> {sync, signedIn, push} (account sync: server/sync/)
+//   GET  /api/account           -> {sync, signedIn, plan, billing, usage, push} (account sync: server/sync/)
 //   DELETE /api/account         -> delete everything kept for the signed-in user, then the sign-in
+//   POST /api/billing/checkout  -> {url} of a Polar checkout for Pro (signed in; server/billing.js)
+//   POST /api/billing/portal    -> {url} of Polar's customer portal: card, invoices, cancel (signed in)
+//   POST /api/billing/sync      -> {plan}: the plan read from Polar now (signed in; back from checkout)
+//   POST /api/billing/webhook   -> Polar subscription events (signed over t.rawBody) -> plan records
 //   POST /api/sync              -> push changed records, pull newer ones (signed in)
 //   POST/DELETE /api/push/subscribe -> this browser's Web Push subscription (signed in)
 //   GET  /api/cron/reminders    -> daily reminders over Web Push (Vercel Cron, CRON_SECRET)
@@ -56,6 +60,8 @@ import { SYNC_BODY_LIMIT } from './sync/service.js';
 import { loadUserMemory, signedOutMemory, userMaterials, signedOutMaterials, userUploadParts } from './sync/user-stores.js';
 import { pushConfig, webPushSender, sendDueReminders } from './push.js';
 import { usageKind, usageLimits, createUsageGate } from './usage.js'; // sign-in + daily caps for Claude routes
+import { createPlans } from './plans.js'; // Free/Pro: which daily caps apply
+import { polarConfig, createPolarBilling } from './billing.js'; // buying Pro through Polar
 
 export const STATIC_ROOTS = [
   { prefix: '/chatgpt-dil/src/', dir: path.join(LAB_ROOT, 'chatgpt-dil', 'src'), exts: new Set(['.js', '.css']) },
@@ -66,10 +72,12 @@ export const STATIC_ROOTS = [
 ];
 export const MIME = { '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.html': 'text/html; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon', '.json': 'application/json', '.webmanifest': 'application/manifest+json', '.mjs': 'text/javascript; charset=utf-8', '.woff2': 'font/woff2', '.woff': 'font/woff', '.ttf': 'font/ttf' };
 export const MAX_BODY = 2 * 1024 * 1024;
+/** Request bodies up to this size are also kept as raw text (t.rawBody), for signature checks. */
+export const RAW_BODY_KEEP = 256 * 1024;
 const DEFAULT_TUTOR_FOLLOWUPS = ['Quiz me on this lesson', 'Give me a real-world example', 'What should I learn next?'];
 const DEFAULT_TEACHER_FOLLOWUPS = ['What should I study today?', 'Make me a study plan', 'Quiz me'];
 // with account sync on: routes that need a signed-in user, and routes that read learner memory
-const SIGNED_IN_ONLY = new Set(['DELETE /api/account', 'POST /api/sync', 'POST /api/push/subscribe', 'DELETE /api/push/subscribe', 'POST /api/memory', 'DELETE /api/memory', 'POST /api/materials', 'POST /api/materials/part', 'DELETE /api/materials', 'GET /api/materials/file']);
+const SIGNED_IN_ONLY = new Set(['DELETE /api/account', 'POST /api/billing/checkout', 'POST /api/billing/portal', 'POST /api/billing/sync', 'POST /api/sync', 'POST /api/push/subscribe', 'DELETE /api/push/subscribe', 'POST /api/memory', 'DELETE /api/memory', 'POST /api/materials', 'POST /api/materials/part', 'DELETE /api/materials', 'GET /api/materials/file']);
 const MEMORY_PATHS = /^\/api\/(lesson|tutor|teacher|memory|widget_action)(\/|$)/;
 // routes that only Claude can answer: 503 while the server has no credentials
 const NEEDS_CLAUDE = new Set(['POST /api/lesson/stream', 'POST /api/tutor/stream', 'POST /api/teacher/stream', 'POST /api/course/plan']);
@@ -114,7 +122,8 @@ export function bodyLimit(pathname) {
   return pathname === '/api/materials' ? MATERIAL_BODY_LIMIT : MAX_BODY;
 }
 
-function readJson(req, limit = MAX_BODY) {
+/** A JSON request body as {body, raw}: raw is the exact text (up to RAW_BODY_KEEP), for signature checks. */
+function readBody(req, limit = MAX_BODY) {
   return new Promise((resolve, reject) => {
     let size = 0;
     const chunks = [];
@@ -124,8 +133,10 @@ function readJson(req, limit = MAX_BODY) {
       chunks.push(c);
     });
     req.on('end', () => {
-      if (!chunks.length) return resolve({});
-      try { resolve(JSON.parse(Buffer.concat(chunks).toString('utf8'))); } catch { reject(Object.assign(new Error('Body must be JSON'), { status: 400 })); }
+      const text = Buffer.concat(chunks).toString('utf8');
+      const raw = size <= RAW_BODY_KEEP ? text : undefined; // large uploads are not held twice
+      if (!text) return resolve({ body: {}, raw });
+      try { resolve({ body: JSON.parse(text), raw }); } catch { reject(Object.assign(new Error('Body must be JSON'), { status: 400 })); }
     });
     req.on('error', reject);
   });
@@ -197,6 +208,19 @@ export function createWonderCore(opts = {}) {
   const push = opts.push !== undefined ? opts.push : pushConfig(env);
   const scopes = new AsyncLocalStorage();
   let usage = opts.usage ?? null; // per-user daily caps on Claude routes (server/usage.js), made on first use
+  let plans = opts.plans ?? null; // Free/Pro per user (server/plans.js), made on first use
+  const usageGate = (sync) => (usage ??= createUsageGate({ db: sync.db, limits: usageLimits(env), proLimits: usageLimits(env, 'pro'), logger }));
+  const userPlans = (sync) => (plans ??= createPlans({ db: sync.db, env, logger }));
+  // Polar checkout, portal and webhooks (server/billing.js); null when not configured
+  let billing = opts.billing;
+  const billingFor = (sync) => {
+    if (billing === undefined) {
+      const config = polarConfig(env);
+      billing = config ? createPolarBilling({ config, plans: userPlans(sync), fetch: opts.billingFetch, logger }) : null;
+      if (billing) logger.info?.(`[wonder] billing: Polar ${config.server}`);
+    }
+    return billing;
+  };
   const scoped = (name, local) => new Proxy({}, {
     get(_, k) {
       const target = scopes.getStore()?.[name] ?? local();
@@ -750,6 +774,10 @@ export function createWonderCore(opts = {}) {
     'POST /api/push/subscribe': pushSubscribe,
     'DELETE /api/push/subscribe': pushUnsubscribe,
     'GET /api/cron/reminders': cronReminders,
+    'POST /api/billing/checkout': billingCheckout,
+    'POST /api/billing/portal': billingPortal,
+    'POST /api/billing/sync': billingSync,
+    'POST /api/billing/webhook': billingWebhook,
   };
 
   // materials: the upload limits public/today.js checks before sending a file
@@ -772,10 +800,10 @@ export function createWonderCore(opts = {}) {
     const spend = usageKind(method, pathname, body);
     if (spend) {
       if (!userId) return t.json(401, { ok: false, error: 'Sign in to use Mull: lessons, the tutor and the Teacher need an account.', signedOut: true });
-      if (state.client) { // a server without Claude spends nothing
-        usage ??= createUsageGate({ db: sync.db, limits: usageLimits(env), logger });
+      if (state.client && !userPlans(sync).isAdmin(userId)) { // a server without Claude spends nothing; admins have no caps
+        const plan = await userPlans(sync).planId(userId);
         const units = body?.materialId ? materialCharge(await userMats.meta(body.materialId)) : 1;
-        const r = await usage.charge(userId, spend, { retryKey: cleanKey(body?.streamKey) || cleanKey(body?.turnId), units });
+        const r = await usageGate(sync).charge(userId, spend, { retryKey: cleanKey(body?.streamKey) || cleanKey(body?.turnId), units, plan });
         if (!r.ok) return t.json(429, r.body);
       }
     }
@@ -806,12 +834,16 @@ export function createWonderCore(opts = {}) {
   async function account(t) {
     const sync = await syncReady;
     const userId = sync && typeof t.userId === 'string' && t.userId ? t.userId : null;
+    const record = userId ? await userPlans(sync).record(userId) : null;
+    const plan = userId ? await userPlans(sync).describe(userId, record) : null;
+    const pay = userId ? billingFor(sync) : null;
     t.json(200, {
       ok: true,
       sync: !!sync,
       signedIn: !!userId,
-      ...(userId ? { userId, records: await sync.count(userId) } : {}),
-      ...(userId && state.client ? { usage: await (usage ??= createUsageGate({ db: sync.db, limits: usageLimits(env), logger })).today(userId) } : {}),
+      // billing: what the browser may offer (upgrade, manage); null without a payment provider
+      ...(userId ? { userId, records: await sync.count(userId), plan, billing: pay ? await pay.offer(record, plan) : null } : {}),
+      ...(userId && state.client ? { usage: await usageGate(sync).today(userId, plan.id, { unlimited: plan.source === 'admin' }) } : {}),
       push: sync && push ? { publicKey: push.publicKey } : null,
     });
   }
@@ -819,7 +851,36 @@ export function createWonderCore(opts = {}) {
   async function deleteAccount(t) {
     const { userId, sync } = scopes.getStore() || {};
     if (!sync) return t.json(404, { ok: false, error: 'Accounts are not configured on this server' });
-    await sync.deleteAccount(userId);
+    // Pro subscriptions end first, so a deleted account is never charged again; if that fails
+    // nothing is deleted. Only users who ever opened checkout (they have a plan record) can have one.
+    const pay = billingFor(sync);
+    let record = null;
+    let ended = 0;
+    if (pay) {
+      try {
+        record = await userPlans(sync).stored(userId);
+      } catch (e) {
+        logger.error?.(`[wonder] account delete: plan lookup failed: ${e.message}`);
+        return t.json(503, { ok: false, error: 'Could not delete your account right now, so nothing was deleted. Try again in a minute.' });
+      }
+      if (record?.provider === 'polar') {
+        try {
+          ended = await pay.cancelAll(userId, record);
+        } catch (e) {
+          logger.error?.(`[wonder] account delete: could not end the Pro subscription: ${e.message}`);
+          return t.json(502, { ok: false, error: 'Could not reach billing to end your Pro subscription, so nothing was deleted. Try again in a minute.' });
+        }
+      }
+    }
+    try {
+      await sync.deleteAccount(userId);
+    } catch (e) {
+      if (!ended) throw e;
+      logger.error?.(`[wonder] account delete failed after ending its Pro subscription: ${e.message}`);
+      return t.json(500, { ok: false, error: 'Your Pro subscription was canceled, but deleting your data failed. Try deleting again.' });
+    }
+    // the data is gone: now the Polar customer too (best effort)
+    if (pay && record?.provider === 'polar') await pay.forgetCustomer(userId);
     // then the sign-in itself, in the same request, so a closed tab cannot leave it behind
     const authDeleted = (await t.deleteAuthUser?.()) === true;
     logger.info?.(`[wonder] account deleted${authDeleted ? ' with its sign-in' : ''}`);
@@ -862,6 +923,79 @@ export function createWonderCore(opts = {}) {
     logger.info?.(`[wonder] reminders: ${r.sent} sent to ${r.checked} subscribed learners`);
     t.json(200, { ok: true, ...r });
   }
+  /** The billing routes' common start: {userId, sync, pay}, or null once it has answered 404. */
+  async function billingScope(t) {
+    const { userId, sync } = scopes.getStore() || { sync: await syncReady };
+    const pay = sync ? billingFor(sync) : null;
+    if (!pay) { t.json(404, { ok: false, error: 'Billing is not available on this server' }); return null; }
+    return { userId, sync, pay };
+  }
+
+  async function billingCheckout(t) {
+    const b = await billingScope(t);
+    if (!b) return;
+    const plans = userPlans(b.sync);
+    const plan = await plans.describe(b.userId);
+    if (plan.id === 'pro') return t.json(409, { ok: false, error: 'You are already on Pro.', plan });
+    let url;
+    try {
+      url = await b.pay.checkout(b.userId, { origin: t.origin });
+    } catch (e) {
+      if (e.resynced) return t.json(409, { ok: false, error: e.message, resynced: true });
+      logger.error?.(`[wonder] checkout failed: ${e.message}`);
+      return t.json(502, { ok: false, error: 'Could not open checkout. Try again in a minute.' });
+    }
+    // a pending record marks that this user may have a Polar subscription from now on (account
+    // deletion looks for one only then); a real record is never replaced by it
+    try {
+      if (!(await plans.stored(b.userId))) await plans.setPlan(b.userId, { plan: 'pro', status: 'incomplete', provider: 'polar' });
+    } catch (e) {
+      logger.error?.(`[wonder] checkout: could not mark the pending plan: ${e.message}`);
+      return t.json(503, { ok: false, error: 'Could not open checkout. Try again in a minute.' });
+    }
+    t.json(200, { ok: true, url });
+  }
+
+  const lastSync = new Map(); // userId -> time of their last POST /api/billing/sync (per instance)
+  async function billingSync(t) {
+    const b = await billingScope(t);
+    if (!b) return;
+    const at = Date.now();
+    if (at - (lastSync.get(b.userId) || 0) >= 1500) {
+      lastSync.set(b.userId, at);
+      while (lastSync.size > 5000) lastSync.delete(lastSync.keys().next().value);
+      try {
+        await b.pay.sync(b.userId);
+      } catch (e) {
+        logger.warn?.(`[wonder] billing sync failed: ${e.message}`);
+      }
+    }
+    t.json(200, { ok: true, plan: await userPlans(b.sync).describe(b.userId) });
+  }
+
+  async function billingPortal(t) {
+    const b = await billingScope(t);
+    if (!b) return;
+    try {
+      t.json(200, { ok: true, url: await b.pay.portal(b.userId, await userPlans(b.sync).record(b.userId), { origin: t.origin }) });
+    } catch (e) {
+      logger.error?.(`[wonder] billing portal failed: ${e.message}`);
+      t.json(e.status === 404 ? 404 : 502, { ok: false, error: e.status === 404 ? 'No subscription to manage yet.' : 'Could not open billing. Try again in a minute.' });
+    }
+  }
+
+  async function billingWebhook(t) {
+    const b = await billingScope(t);
+    if (!b) return;
+    try {
+      const r = await b.pay.webhook(typeof t.rawBody === 'string' ? t.rawBody : '', t.header);
+      t.json(r.status, { ok: r.status < 300 });
+    } catch (e) {
+      // any other failure is a 500, so Polar delivers the event again
+      logger.error?.(`[wonder] Polar webhook failed: ${e.message}`);
+      t.json(500, { ok: false });
+    }
+  }
   /** Does this method + path have a handler (and therefore a body to read)? */
   const hasRoute = (method, pathname) => (pathname === '/api/status' && method === 'GET') || !!routes[`${method} ${pathname}`];
 
@@ -872,6 +1006,8 @@ export function createWonderCore(opts = {}) {
 function nodeTransport(req, res, userId = null, deleteAuthUser = null) {
   return {
     url: req.url,
+    origin: `http://${req.headers.host || 'localhost'}`,
+    header: (name) => req.headers[name.toLowerCase()] ?? null,
     userId,
     deleteAuthUser,
     authorization: req.headers.authorization || '',
@@ -901,8 +1037,8 @@ export function createWonderServer(opts = {}) {
     const url = new URL(req.url, 'http://localhost');
     try {
       if (core.hasRoute(req.method, url.pathname)) {
-        const body = req.method === 'GET' ? {} : await readJson(req, bodyLimit(url.pathname));
-        return await core.handle(req.method, url.pathname, body, nodeTransport(req, res, (await opts.getUserId?.(req)) || null, opts.deleteAuthUser ?? null));
+        const { body, raw } = req.method === 'GET' ? { body: {}, raw: '' } : await readBody(req, bodyLimit(url.pathname));
+        return await core.handle(req.method, url.pathname, body, { ...nodeTransport(req, res, (await opts.getUserId?.(req)) || null, opts.deleteAuthUser ?? null), rawBody: raw });
       }
       if (url.pathname.startsWith('/api/')) return sendJson(res, 404, { ok: false, error: 'Not found' });
       if ((req.method === 'GET' || req.method === 'HEAD') && serveStatic(req, res, url.pathname)) return;
