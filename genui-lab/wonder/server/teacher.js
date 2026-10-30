@@ -12,7 +12,7 @@
 // resolve_action / undo_action analogue) that return updated componentResults.
 
 import { randomUUID } from 'node:crypto';
-import { Anthropic, reportUsage } from './claude.js';
+import { Anthropic, streamUsage } from './claude.js';
 import { validateComponentProps } from './catalog-schema.js';
 import { MEMORY_KINDS, cleanFact } from './memory.js';
 import { sanitizeMastery } from './learner-model.js';
@@ -478,9 +478,11 @@ export async function runTeacherLoop({ client, params, messages: initial, writer
   while (iterations < maxIterations) {
     iterations++;
     let message;
+    const usage = streamUsage('teacher');
     try {
       const stream = client.beta.messages.stream({ ...params, messages }, signal ? { signal } : undefined);
       for await (const event of stream) {
+        usage.see(event);
         if (event.type === 'content_block_start' && event.content_block?.type === 'tool_use') {
           appendText(strip.flush());
           announced.add(event.content_block.id);
@@ -490,9 +492,10 @@ export async function runTeacherLoop({ client, params, messages: initial, writer
         }
       }
       message = await stream.finalMessage();
-      reportUsage('teacher', message);
+      usage.settle(message);
       jsonRetries = 0;
     } catch (err) {
+      usage.settle(); // stopped, failed, or a turn re-issued below: what was billed so far
       // Eager input streaming: a tool input that is not parseable JSON at all rejects the
       // stream. Re-issue that turn (capped); every other error goes to the caller.
       if (signal?.aborted || !isToolJsonError(err) || jsonRetries++ >= 2) throw err;

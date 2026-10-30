@@ -7,6 +7,10 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createLearningRuntime, createMirror } from '../public/learning-runtime.js';
 import { citeTag } from '../server/grounding.js';
+import { createWonderServer } from '../server/app.js';
+import { createMemoryStore } from '../server/memory.js';
+import { createSyncService } from '../server/sync/service.js';
+import { createMemoryDb } from '../server/sync/memory-db.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 // hand-written lessons in the catalog's format (test/fixtures/lessons), for the compiler, catalog and pipeline tests
@@ -43,9 +47,10 @@ export function click(env, label, root) {
 
 /**
  * Minimal fake Anthropic client: records params, streams the given text deltas (40-char pieces,
- * `delayMs` apart when set: a slow stream that stops when the request is aborted).
+ * `delayMs` apart when set: a slow stream that stops when the request is aborted). With `usage`
+ * (and `model`) the response carries an API usage block, so the server prices it (server/spend.js).
  */
-export function fakeClient({ text = '', chunks, stopReason = 'end_turn', error, errorAfter = -1, structured, delayMs = 0 } = {}) {
+export function fakeClient({ text = '', chunks, stopReason = 'end_turn', error, errorAfter = -1, structured, delayMs = 0, model, usage } = {}) {
   const calls = { stream: [], create: [] };
   const pieces = chunks || (text ? text.match(/[\s\S]{1,40}/g) : []);
   return {
@@ -57,7 +62,7 @@ export function fakeClient({ text = '', chunks, stopReason = 'end_turn', error, 
           return {
             async *[Symbol.asyncIterator]() {
               if (error && errorAfter < 0) throw error;
-              yield { type: 'message_start', message: { id: 'msg_fake' } };
+              yield { type: 'message_start', message: { id: 'msg_fake', ...(usage ? { model, usage: { ...usage, output_tokens: 1 } } : {}) } };
               yield { type: 'content_block_start', index: 0, content_block: { type: 'thinking', thinking: '' } };
               yield { type: 'content_block_delta', index: 0, delta: { type: 'thinking_delta', thinking: '' } };
               yield { type: 'content_block_start', index: 1, content_block: { type: 'text', text: '' } };
@@ -73,7 +78,7 @@ export function fakeClient({ text = '', chunks, stopReason = 'end_turn', error, 
               }
               yield { type: 'message_delta', delta: { stop_reason: stopReason } };
             },
-            async finalMessage() { return { id: 'msg_fake', stop_reason: stopReason, content: [{ type: 'text', text: pieces.join('') }] }; },
+            async finalMessage() { return { id: 'msg_fake', stop_reason: stopReason, content: [{ type: 'text', text: pieces.join('') }], ...(usage ? { model, usage } : {}) }; },
           };
         },
       },
@@ -232,8 +237,11 @@ export function citeLesson(markdown, registry, cites = SKY_CITATIONS) {
 // a lesson cut off mid-page, for steering: steerableClient streams it, then stalls until a steer
 export const STEADY_LESSON = '# Steady lesson\n\nA hook sentence here.\n\n## Page one\n\nFirst page text that is complete.\n\n## Page two\n\nSecond page is still being wr';
 
-/** Fake client: the first stream emits STEADY_LESSON slowly and stalls until aborted; later streams emit `rest`. */
-export function steerableClient(rest) {
+/**
+ * Fake client: the first stream emits STEADY_LESSON slowly and stalls until aborted; later streams
+ * emit `rest`. With `usage` (and `model`) each stream starts with that usage, as the API's does.
+ */
+export function steerableClient(rest, { model, usage } = {}) {
   const calls = [];
   return {
     calls,
@@ -245,6 +253,7 @@ export function steerableClient(rest) {
           const text = n === 1 ? STEADY_LESSON : rest;
           return {
             async *[Symbol.asyncIterator]() {
+              if (usage) yield { type: 'message_start', message: { id: `msg_${n}`, model, usage: { ...usage, output_tokens: 1 } } };
               yield { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } };
               for (const piece of text.match(/[\s\S]{1,12}/g)) {
                 if (signal?.aborted) throw Object.assign(new Error('Request was aborted.'), { name: 'AbortError' });
@@ -258,11 +267,34 @@ export function steerableClient(rest) {
               }
               yield { type: 'content_block_stop', index: 0 };
             },
-            async finalMessage() { return { stop_reason: 'end_turn', content: [{ type: 'text', text }] }; },
+            async finalMessage() { return { stop_reason: 'end_turn', content: [{ type: 'text', text }], ...(usage ? { model, usage } : {}) }; },
           };
         },
       },
     },
     messages: { async create() { throw new Error('unused'); } },
   };
+}
+
+/**
+ * A server with accounts on (memory database unless `db` or `sync` is given); `x-test-user` names
+ * the signed-in user. `fn` gets request helpers for alice, bob and a signed-out visitor, each
+ * resolving {status, body (parsed JSON or null), text}; `.raw` resolves the Response unread.
+ */
+export async function withAccountsServer(opts, fn) {
+  const { db, ...rest } = opts;
+  const sync = rest.sync === undefined ? createSyncService({ db: db ?? createMemoryDb() }) : rest.sync;
+  const quiet = { warn() {}, error() {}, log() {}, info() {} };
+  const server = createWonderServer({ client: null, logger: quiet, memory: createMemoryStore({ file: null }), push: null, getUserId: (req) => req.headers['x-test-user'] || null, ...rest, sync });
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const raw = (user) => (method, p, body) => fetch(base + p, { method, headers: { ...(body ? { 'Content-Type': 'application/json' } : {}), ...(user ? { 'x-test-user': user } : {}) }, body: body ? JSON.stringify(body) : undefined });
+  const as = (user) => Object.assign(async (method, p, body) => {
+    const res = await raw(user)(method, p, body);
+    const text = await res.text();
+    let json = null;
+    try { json = JSON.parse(text); } catch {}
+    return { status: res.status, body: json, text };
+  }, { raw: raw(user) }); // .raw: the fetch Response itself, to read a stream as it arrives
+  try { return await fn({ alice: as('alice'), bob: as('bob'), anon: as(null) }); } finally { server.closeAllConnections?.(); await new Promise((r) => server.close(r)); }
 }

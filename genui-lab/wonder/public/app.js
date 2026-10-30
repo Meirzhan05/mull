@@ -971,7 +971,7 @@ function renderLesson(lessonId) {
       if (dropped) endPanel.hidden = true;
       errorBox.hidden = false;
       errorBox.replaceChildren(
-        el('h2', { class: 'h-md' }, signedOut ? 'Sign in to start this lesson' : limited ? 'Today\u2019s lesson limit is reached' : 'The lesson could not be generated'),
+        el('h2', { class: 'h-md' }, signedOut ? 'Sign in to start this lesson' : limited ? 'Today\u2019s limit is reached' : 'The lesson could not be generated'),
         el('p', { class: 'muted' }, e.message || 'Something went wrong.'),
         signedOut
           ? el('button', { class: 'btn btn-primary', type: 'button', onclick: () => { if (dropped) startAfterSignIn(lesson.topic, lesson.level); signIn().catch((err) => toast(err.message || 'Sign-in is not available right now')); } }, 'Sign in')

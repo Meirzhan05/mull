@@ -18,7 +18,7 @@ const quiet = { warn() {}, error() {}, info() {}, log() {} };
 async function fresh() {
   const { default: pg } = await import('pg');
   const pool = new pg.Pool({ connectionString: URL_, max: 8 });
-  await pool.query('DROP TABLE IF EXISTS wonder_records, wonder_users, wonder_push_subscriptions, wonder_reminders_sent, wonder_usage, wonder_files, wonder_plans');
+  await pool.query('DROP TABLE IF EXISTS wonder_records, wonder_users, wonder_push_subscriptions, wonder_reminders_sent, wonder_usage, wonder_files, wonder_plans, wonder_spend');
   const db = createPgDb({ pool });
   return { db, svc: createSyncService({ db }) };
 }

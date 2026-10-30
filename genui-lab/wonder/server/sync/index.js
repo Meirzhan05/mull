@@ -13,7 +13,10 @@ import { createMemoryDb } from './memory-db.js';
 export function syncConfig(env = process.env) {
   const auth = env.NEON_AUTH_BASE_URL && env.NEON_AUTH_COOKIE_SECRET ? 'neon' : null;
   const db = env.DATABASE_URL ? 'postgres' : env.WONDER_SYNC_DB === 'memory' ? 'memory' : null;
-  return { enabled: !!(auth && db), auth, db };
+  const enabled = !!(auth && db);
+  // some account settings but not all: one went missing (server/app.js refuses to run open then)
+  const partial = !enabled && !!(env.NEON_AUTH_BASE_URL || env.NEON_AUTH_COOKIE_SECRET || env.DATABASE_URL);
+  return { enabled, auth, db, partial };
 }
 
 /** The sync service for this environment, or null when sync is off. Lazy: pg loads on first use. */

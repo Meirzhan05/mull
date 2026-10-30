@@ -3,12 +3,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createWonderServer } from '../server/app.js';
-import { createMemoryStore } from '../server/memory.js';
-import { createSyncService } from '../server/sync/service.js';
 import { createMemoryDb } from '../server/sync/memory-db.js';
-import { usageKind, usageLimits, usageDay, limitBody, createUsageGate, DEFAULT_LIMITS, RETRY_FREE, RETRY_WINDOW_MS } from '../server/usage.js';
+import { usageKind, usageLimits, usageDay, limitBody, createUsageGate, DEFAULT_LIMITS, RETRY_FREE, RETRY_WINDOW_MS, UNCOUNTED } from '../server/usage.js';
 import { streamTurn, classifyFailure, postJson } from '../public/stream-client.js';
-import { fakeClient } from './helpers.js';
+import { fakeClient, withAccountsServer } from './helpers.js';
 import { materialCharge } from '../server/materials.js';
 
 const quiet = { warn() {}, error() {}, log() {}, info() {} };
@@ -62,27 +60,14 @@ test('usage gate: counts per user, per kind and per UTC day; retries of one stre
   assert.equal((await g2.charge('alice', 'lesson', { retryKey: 'L1' })).retried, true);
   assert.equal((await g2.charge('alice', 'lesson', { retryKey: 'L2' })).ok, false, 'cap reached');
 
-  // a database error fails open (logged), never locking everyone out
+  // a database error fails closed (logged): a request that can't be counted could pass any cap
   const warned = [];
   const broken = createUsageGate({ db: { useQuota: async () => { throw new Error('db down'); }, quotaUsed: async () => ({}) }, limits: { lesson: 1 }, logger: { warn: (m) => warned.push(m) } });
-  assert.equal((await broken.charge('alice', 'lesson')).ok, true);
+  assert.deepEqual(await broken.charge('alice', 'lesson'), { ok: false, body: UNCOUNTED });
   assert.match(warned[0], /usage count failed \(lesson\): db down/);
 });
 
-async function withServer(opts, fn) {
-  const sync = opts.sync === undefined ? createSyncService({ db: createMemoryDb() }) : opts.sync;
-  const server = createWonderServer({ client: null, logger: quiet, memory: createMemoryStore({ file: null }), push: null, getUserId: (req) => req.headers['x-test-user'] || null, ...opts, sync });
-  await new Promise((r) => server.listen(0, '127.0.0.1', r));
-  const base = `http://127.0.0.1:${server.address().port}`;
-  const as = (user) => async (method, p, body) => {
-    const res = await fetch(base + p, { method, headers: { ...(body ? { 'Content-Type': 'application/json' } : {}), ...(user ? { 'x-test-user': user } : {}) }, body: body ? JSON.stringify(body) : undefined });
-    const text = await res.text();
-    let json = null;
-    try { json = JSON.parse(text); } catch {}
-    return { status: res.status, body: json, text };
-  };
-  try { return await fn({ alice: as('alice'), bob: as('bob'), anon: as(null) }); } finally { server.closeAllConnections?.(); await new Promise((r) => server.close(r)); }
-}
+const withServer = withAccountsServer;
 
 const LESSON = { topic: 'photosynthesis', useWebSearch: false, verify: false };
 
