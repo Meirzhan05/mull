@@ -7,7 +7,6 @@
 //   --topics <file>    topic list (default evals/topics.json): [{topic, level}]
 //   --limit <n>        first n topics only
 //   --concurrency <n>  lessons generated in parallel (default 2)
-//   --demo             demo mode: no API calls, lint + pipeline only (no critic, no judge)
 //   --no-judge         skip the judge          --no-verify   skip the critic
 //   --web              let lessons use web search (off by default: faster, comparable runs)
 //   --tag <name>       only topics with this tag (e.g. --tag media: the physical/spatial topics)
@@ -23,7 +22,7 @@ import { fileURLToPath } from 'node:url';
 import { createWonderServer } from '../server/app.js';
 import { createMemoryStore } from '../server/memory.js';
 import { loadUserEnv } from '../server/web.js'; // ~/.config/wonder/.env fallback, as for the Next app
-import { MODEL } from '../server/claude.js';
+import { MODEL, CLAUDE_NOT_CONFIGURED } from '../server/claude.js';
 import { judgeLesson, summarizeRuns, reportMarkdown } from '../server/judge.js';
 import { lessonMedia } from '../server/critic.js';
 import { figureRefs } from '../server/figures.js';
@@ -32,14 +31,13 @@ import { ConversationSourceParser, ConversationTurn, CONTENT_TYPE } from '../../
 const here = path.dirname(fileURLToPath(import.meta.url));
 
 export function parseArgs(argv) {
-  const o = { topics: path.join(here, 'topics.json'), limit: Infinity, concurrency: 2, demo: false, judge: true, verify: true, web: false, tag: null, out: path.join(here, 'reports') };
+  const o = { topics: path.join(here, 'topics.json'), limit: Infinity, concurrency: 2, judge: true, verify: true, web: false, tag: null, out: path.join(here, 'reports') };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     const next = () => argv[++i];
     if (a === '--topics') o.topics = path.resolve(next());
     else if (a === '--limit') o.limit = Math.max(1, Number(next()) || 1);
     else if (a === '--concurrency') o.concurrency = Math.max(1, Math.min(8, Number(next()) || 1));
-    else if (a === '--demo') o.demo = true;
     else if (a === '--no-judge') o.judge = false;
     else if (a === '--no-verify') o.verify = false;
     else if (a === '--web') o.web = true;
@@ -107,17 +105,17 @@ async function pool(items, n, fn) {
   return out;
 }
 
-/** Run the eval. `serverOpts` lets tests inject a client / mode. Returns the report object. */
+/** Run the eval. `serverOpts` lets tests inject a client. Returns the report object. */
 export async function runEval(opts, { serverOpts = {}, log = console.log } = {}) {
   const topics = JSON.parse(fs.readFileSync(opts.topics, 'utf8')).filter((t) => !opts.tag || t.tags?.includes(opts.tag)).slice(0, opts.limit);
-  const server = createWonderServer({ memory: createMemoryStore({ file: null }), logger: { info() {}, warn() {}, error: console.error }, ...(opts.demo ? { mode: 'demo', demoDelayMs: 0 } : {}), ...serverOpts });
+  const server = createWonderServer({ memory: createMemoryStore({ file: null }), logger: { info() {}, warn() {}, error: console.error }, ...serverOpts });
+  const client = server.wonder.client;
+  if (!client) throw new Error(`${CLAUDE_NOT_CONFIGURED} Set ANTHROPIC_API_KEY to run the eval.`);
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   const base = `http://127.0.0.1:${server.address().port}`;
-  const mode = server.wonder.mode;
-  const judging = opts.judge && mode === 'claude';
-  const client = serverOpts.client || server.wonder.client;
+  const judging = opts.judge;
   const startedAt = new Date().toISOString();
-  log(`Eval: ${topics.length} topic(s) in ${mode} mode${mode === 'demo' ? ' (no API key found: lint and pipeline only)' : `, judge ${judging ? 'on' : 'off'}, critic ${opts.verify ? 'on' : 'off'}`}`);
+  log(`Eval: ${topics.length} topic(s), judge ${judging ? 'on' : 'off'}, critic ${opts.verify ? 'on' : 'off'}`);
   try {
     const runs = await pool(topics, opts.concurrency, async ({ topic, level = 'beginner' }, i) => {
       const t0 = Date.now();
@@ -135,7 +133,7 @@ export async function runEval(opts, { serverOpts = {}, log = console.log } = {})
         return { topic, level, error: e.message };
       }
     });
-    return { meta: { startedAt, mode, model: MODEL, webSearch: opts.web, verify: opts.verify, judge: judging, topics: path.basename(opts.topics), ...(opts.tag ? { tag: opts.tag } : {}), figureCheck: server.wonder.figureCheck ?? null }, summary: summarizeRuns(runs), runs };
+    return { meta: { startedAt, model: MODEL, webSearch: opts.web, verify: opts.verify, judge: judging, topics: path.basename(opts.topics), ...(opts.tag ? { tag: opts.tag } : {}), figureCheck: server.wonder.figureCheck ?? null }, summary: summarizeRuns(runs), runs };
   } finally {
     server.closeAllConnections?.();
     await new Promise((r) => server.close(r));

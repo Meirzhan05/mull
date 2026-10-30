@@ -23,7 +23,7 @@ To run it:
 cd genui-lab/wonder && npm install && npm run dev
 ```
 
-Then open http://localhost:8750/. For a production build, run `npm run build && npm start`. Put `ANTHROPIC_API_KEY=...` in `genui-lab/wonder/.env` (git ignores it) to use Claude; without it, the app runs in demo mode.
+Then open http://localhost:8750/. For a production build, run `npm run build && npm start`. Put `ANTHROPIC_API_KEY=...` in `genui-lab/wonder/.env` (git ignores it). Wonder needs Claude: without a key, lessons, the tutor and the Teacher answer 503 and the app says Claude is not configured.
 
 ## Reconstructions (`genui-lab/`)
 - `genui-lab/chatgpt-dil/`: DIL markup compiler, sandboxed worker runtime, op-based DOM host, and NDJSON stream replay.

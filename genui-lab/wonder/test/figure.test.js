@@ -12,7 +12,7 @@ import { createFigureImagePolicy } from '../public/dil-surface.js';
 import { isFigureImageUrl, figureImageSrcs } from '../public/figure-hosts.js';
 import { LESSON_SYSTEM_PROMPT, TUTOR_SYSTEM_PROMPT } from '../server/prompts.js';
 import { parseConversationSource } from '../../chatgpt-dil/src/stream.js';
-import { demo, runProgram, catalogNodes, fakeClient } from './helpers.js';
+import { sampleLesson, runProgram, catalogNodes, fakeClient } from './helpers.js';
 
 const quiet = { warn() {}, error() {}, log() {}, info() {} };
 const CLOUDS = { found: true, src: 'https://upload.wikimedia.org/wikipedia/commons/b/b5/Clouds.jpg', width: 960, height: 640, title: 'Clouds', license: 'CC BY-SA 4.0', author: 'Jakec', pageUrl: 'https://commons.wikimedia.org/wiki/File:Clouds.jpg' };
@@ -231,17 +231,18 @@ test('the lesson renderer loads only images the server resolved for a Figure', (
 });
 
 async function lessonRecords(figureLookup, topic = 'why is the sky blue?', extra = {}) {
-  const server = createWonderServer({ mode: 'demo', demoDelayMs: 0, logger: quiet, memoryFile: null, figureLookup, figureSettleMs: 2000 });
+  // Claude (faked) writes the sky-blue sample
+  const server = createWonderServer({ client: fakeClient({ text: sampleLesson('sky-blue.md') }), logger: quiet, memoryFile: null, figureLookup, figureSettleMs: 2000 });
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   try {
-    const res = await fetch(`http://127.0.0.1:${server.address().port}/api/lesson/stream`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ topic, useWebSearch: false, ...extra }) });
+    const res = await fetch(`http://127.0.0.1:${server.address().port}/api/lesson/stream`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ topic, useWebSearch: false, verify: false, ...extra }) });
     return parseConversationSource(await res.text());
   } finally {
     server.closeAllConnections?.();
     await new Promise((r) => server.close(r));
   }
 }
-// the Figures' entries only (the sky-blue demo also has a Video, see video.test.js)
+// the Figures' entries only (the sky-blue sample also has a Video, see video.test.js)
 const figureRids = (dil) => [...String(dil?.code || '').matchAll(/__dil\.jsx\(Figure,\{[^{}]*"__resolutionId":__dilConstants\["(\d+)"\]/g)].map((m) => dil.constants[m[1]]);
 const figureResults = (rec) => figureRids(rec?.dil).map((rid) => rec.dil.appData?.opGenui?.componentResults?.[rid]).filter(Boolean);
 
@@ -270,7 +271,7 @@ test('lesson stream: no network -> the Figure is quietly left out; the lesson st
 
 test('Teacher stream: a Figure in a Teacher reply resolves too (every DIL stream has a resolver)', async () => {
   const client = fakeClient({ text: 'Here is the dam.\n\n<Figure query="Hoover Dam" caption="The dam holds back Lake Mead."/>\n' });
-  const server = createWonderServer({ mode: 'claude', client, demoDelayMs: 0, logger: quiet, memoryFile: null, figureLookup: async () => CLOUDS, figureSettleMs: 2000 });
+  const server = createWonderServer({ client, logger: quiet, memoryFile: null, figureLookup: async () => CLOUDS, figureSettleMs: 2000 });
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   try {
     const res = await fetch(`http://127.0.0.1:${server.address().port}/api/teacher/stream`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message: 'show me the Hoover Dam' }) });
@@ -288,7 +289,7 @@ test('recoverable streams: a lesson with a streamKey and a Teacher turn with a t
   assert.equal(lesson.status, 'complete');
   assert.deepEqual(figureResults(lesson), [{ status: 'resolved', state: CLOUDS }]);
   const client = fakeClient({ text: 'Here is the dam.\n\n<Figure query="Hoover Dam" caption="The dam holds back Lake Mead."/>\n' });
-  const server = createWonderServer({ mode: 'claude', client, demoDelayMs: 0, logger: quiet, memoryFile: null, figureLookup: async () => CLOUDS, figureSettleMs: 2000 });
+  const server = createWonderServer({ client, logger: quiet, memoryFile: null, figureLookup: async () => CLOUDS, figureSettleMs: 2000 });
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   try {
     const res = await fetch(`http://127.0.0.1:${server.address().port}/api/teacher/stream`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message: 'show me the Hoover Dam', turnId: 'turn-retry-1' }) });
@@ -301,16 +302,16 @@ test('recoverable streams: a lesson with a streamKey and a Teacher turn with a t
   }
 });
 
-test('sky-blue demo: the Figure is valid and the lesson lints clean', () => {
-  const md = demo('sky-blue.md');
-  const fg = compileWonder(md, { salt: 'demo' }).components.find((c) => c.name === 'Figure');
+test('sky-blue sample: the Figure is valid and the lesson lints clean', () => {
+  const md = sampleLesson('sky-blue.md');
+  const fg = compileWonder(md, { salt: 'sample' }).components.find((c) => c.name === 'Figure');
   assert.equal(fg.status, 'valid');
   assert.equal(fg.props.query, 'cumulus clouds blue sky');
   assert.equal(lintLesson(md).score, 1);
 });
 
 test('a Figure is never a page\'s only visual, and counts in outcomes only when an image was shown', () => {
-  const md = demo('sky-blue.md').replace(/<CompareToggle[^\n]*\/>\n/, '');
+  const md = sampleLesson('sky-blue.md').replace(/<CompareToggle[^\n]*\/>\n/, '');
   assert.ok(/<Figure /.test(md));
   const visual = lintLesson(md).checks.find((c) => c.id === 'visual_per_page');
   assert.equal(visual.ok, false, visual.detail);

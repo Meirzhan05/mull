@@ -4,7 +4,7 @@ import { emptyDeck, addItems, dueEntries, reviewEntry, deckStats, previewDue, re
 import { normalizePracticeItem, gradePracticeItem, RATING } from '../public/practice-core.js';
 import { createStore } from '../public/store.js';
 import { extractPracticeDeterministic } from '../server/practice.js';
-import { demo } from './helpers.js';
+import { sampleLesson } from './helpers.js';
 
 const T0 = new Date('2026-10-21T09:00:00Z');
 const min = (d, n) => new Date(d.getTime() + n * 60000);
@@ -32,7 +32,7 @@ test('practice-core: normalization and grading for every item type', () => {
 });
 
 test('FSRS deck: new items are due now; Good walks the learning steps then graduates', () => {
-  const { items } = extractPracticeDeterministic(demo('transformers.md'));
+  const { items } = extractPracticeDeterministic(sampleLesson('transformers.md'));
   let { deck, added } = addItems(emptyDeck(), items, { lessonId: 'l1', lessonTitle: 'Transformers', now: T0 });
   assert.equal(added, items.length);
   assert.equal(addItems(deck, items, { now: T0 }).added, 0, 'dedupe by item id');

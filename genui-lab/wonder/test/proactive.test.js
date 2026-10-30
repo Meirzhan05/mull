@@ -200,7 +200,7 @@ test('Teacher check-in: the server sends its own fixed opener turn, never client
     { content: [{ type: 'tool_use', id: 't1', name: 'get_progress', input: {} }], stop_reason: 'tool_use' },
     { content: [{ type: 'text', text: 'Welcome back. Review first.' }], stop_reason: 'end_turn' },
   ]);
-  const server = createWonderServer({ mode: 'claude', client, demoDelayMs: 0, logger: { warn() {}, error() {}, info() {}, log() {} }, memoryFile: null });
+  const server = createWonderServer({ client, logger: { warn() {}, error() {}, info() {}, log() {} }, memoryFile: null });
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   const base = `http://127.0.0.1:${server.address().port}`;
   try {
@@ -216,16 +216,23 @@ test('Teacher check-in: the server sends its own fixed opener turn, never client
   }
 });
 
-test('Teacher check-in (demo): reads progress and proposes relearning a fading lesson', async () => {
-  const server = createWonderServer({ mode: 'demo', demoDelayMs: 0, logger: { warn() {}, error() {}, info() {}, log() {} }, memoryFile: null });
+test('Teacher check-in: the progress snapshot (a fading lesson) reaches Claude, whose suggestion becomes a card', async () => {
+  const client = fakeToolClient([
+    { content: [{ type: 'tool_use', id: 't1', name: 'get_progress', input: {} }], stop_reason: 'tool_use' },
+    { content: [{ type: 'text', text: 'You recalled only **40%** of “Tides”.' }, { type: 'tool_use', id: 't2', name: 'create_lesson', input: { topic: 'Tides', level: 'beginner', reason: 'Relearn it from a different angle.' } }], stop_reason: 'tool_use' },
+    { content: [{ type: 'text', text: 'Start it when you like.' }], stop_reason: 'end_turn' },
+  ]);
+  const server = createWonderServer({ client, logger: { warn() {}, error() {}, info() {}, log() {} }, memoryFile: null });
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   const base = `http://127.0.0.1:${server.address().port}`;
   try {
     const progress = { today: '2026-10-21', streak: 3, deck: { due: 2 }, outcomes: { fading: [{ title: 'Tides', verdict: 'weak', recall: 40, reviews: 10, hardCards: ['Spring tides happen when…'] }] } };
     const res = await fetch(`${base}/api/teacher/stream`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ opener: true, progress }) });
     const recs = parseConversationSource(await res.text());
+    const result = client.calls[1].params.messages.at(-1).content.find((b) => b.type === 'tool_result');
+    const fading = JSON.parse(result.content).outcomes.fading[0];
+    assert.deepEqual([fading.title, fading.recall, fading.hardCards], ['Tides', 40, ['Spring tides happen when…']]);
     const md = recs.filter((r) => r.type === 'content').map((r) => r.markdown).join('');
-    assert.match(md, /recalled only \*\*40%\*\* of “Tides”/);
     assert.match(md, /<TeacherCard kind="approval"/);
   } finally {
     server.closeAllConnections?.();

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { compileWonder, preprocess, scanComponentTags } from '../server/compile.js';
 import { parseLenientJSON, tryParseExpression } from '../server/lenient-json.js';
 import { validateComponentProps, normalizeQuestion } from '../server/catalog-schema.js';
-import { demo, DEMO_FILES, runProgram } from './helpers.js';
+import { sampleLesson, LESSON_FILES, runProgram } from './helpers.js';
 
 const constantsOf = (r) => Object.values(r.constants);
 
@@ -118,9 +118,9 @@ test('Callout keeps markdown children', () => {
   assert.match(env.mirror.text(), /TIP/);
 });
 
-for (const file of DEMO_FILES) {
-  test(`demo ${file}: every streamed prefix compiles to valid, runnable code`, () => {
-    const md = demo(file);
+for (const file of LESSON_FILES) {
+  test(`sample ${file}: every streamed prefix compiles to valid, runnable code`, () => {
+    const md = sampleLesson(file);
     let lastIds = null;
     for (let n = 0; n <= md.length; n++) {
       const prefix = md.slice(0, n);
@@ -138,8 +138,8 @@ for (const file of DEMO_FILES) {
       }
     }
     const full = compileWonder(md, { salt: 'm' });
-    assert.ok(full.components.length >= 8, 'demo lesson uses the catalog');
-    assert.deepEqual(full.components.filter((c) => c.status !== 'valid'), [], 'every demo component validates');
+    assert.ok(full.components.length >= 8, 'sample lesson uses the catalog');
+    assert.deepEqual(full.components.filter((c) => c.status !== 'valid'), [], 'every sample component validates');
     assert.ok(full.fallbackMarkdown.length > 500, 'fallback markdown rendition exists');
   });
 }

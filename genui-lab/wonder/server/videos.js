@@ -201,19 +201,6 @@ export function createYouTubeLookup({ apiKey, fetch = globalThis.fetch, timeoutM
   };
 }
 
-// ---------------------------------------------------------------- demo mode (no key)
-
-// The demo lessons' clips, hand-checked once with the live lookup (so demo mode needs no key and
-// no network for the lookup; the player itself still loads from YouTube). Keyed by query.
-export const DEMO_VIDEOS = Object.freeze({
-  'sunset in a glass milk water flashlight experiment': Object.freeze({ found: true, videoId: '1U9iyTCXGxw', start: 0, end: 196, duration: 196, title: 'Sunset science | Part 1 | Sunset in a glass', channel: "Corey's Curious Science", pageUrl: 'https://www.youtube.com/watch?v=1U9iyTCXGxw' }),
-});
-
-/** A lookup that only knows the demo lessons' clips. */
-export function createDemoVideoLookup(fixtures = DEMO_VIDEOS) {
-  return async ({ query }) => fixtures[String(query || '').toLowerCase()] || null;
-}
-
 // ---------------------------------------------------------------- per-stream resolver
 
 const keyOf = ({ query, shows }) => `${query.toLowerCase()}\u0000${(shows || '').toLowerCase()}`;

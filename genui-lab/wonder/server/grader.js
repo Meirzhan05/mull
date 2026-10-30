@@ -5,9 +5,9 @@
 //   Claude mode  one structured-output call (effort low): a 0-3 score, each criterion met or
 //                missed with evidence quoted from the answer, feedback, the misconception (if
 //                any) and a follow-up question.
-//   Demo mode    a keyword grader: a criterion is met when enough of its content words (by
-//                5-letter stem) appear in the answer. Crude, but deterministic and honest
-//                about being a fallback.
+//   Fallback     a keyword grader (no Claude, or the call failed): a criterion is met when
+//                enough of its content words (by 5-letter stem) appear in the answer. Crude,
+//                but deterministic and honest about being a fallback.
 //
 // The grade becomes mastery evidence (score / 3) and, for practice items, an FSRS rating.
 
@@ -131,14 +131,14 @@ export const gradeRating = (score) => [1, 2, 3, 4][Math.max(0, Math.min(3, Numbe
 
 /**
  * Grader used by the widget actions: Claude when available (falling back to keywords if the
- * call fails), keywords in demo mode. Returns {ok, grade} or {ok:false, error}.
+ * call fails), keywords without Claude. Returns {ok, grade} or {ok:false, error}.
  */
-export function createGrader({ getClient, getMode, logger = console }) {
+export function createGrader({ getClient, logger = console }) {
   return async function grade({ prompt, rubric, sampleAnswer, answer, level }) {
     const a = clip(answer, MAX_ANSWER);
     if (a.length < MIN_ANSWER) return { ok: false, error: 'Write a sentence or two first.' };
     const item = { prompt, rubric, sampleAnswer, answer: a, level };
-    if (getMode() === 'claude' && getClient()) {
+    if (getClient()) {
       try { return { ok: true, grade: await gradeWithClaude(getClient(), item) }; } catch (e) {
         logger.warn?.(`[wonder] free-response grading fell back to keywords: ${e?.status || e?.code || e?.message}`);
       }

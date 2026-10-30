@@ -159,7 +159,7 @@ test('lesson request: the style goes in the user turn, insights after the cache 
   assert.deepEqual(cleanInsights(['a <b>\nc', 7, '', 'x'.repeat(500), 'd', 'e', 'f']), ['a b c', 'x'.repeat(240), 'd', 'e']);
 
   const client = fakeClient({ text: '# T\n\nHook.\n\n## A\n\nText.' });
-  const server = createWonderServer({ mode: 'claude', client, demoDelayMs: 0, logger: { warn() {}, error() {}, info() {}, log() {} }, memoryFile: null });
+  const server = createWonderServer({ client, logger: { warn() {}, error() {}, info() {}, log() {} }, memoryFile: null });
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   const base = `http://127.0.0.1:${server.address().port}`;
   const post = (body) => fetch(`${base}/api/lesson/stream`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then((r) => r.text());

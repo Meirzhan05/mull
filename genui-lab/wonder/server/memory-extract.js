@@ -1,6 +1,6 @@
 // Post-lesson memory extraction (Wondering's `extract-learner-memory`, findings §5):
 // lesson title + quiz results + the learner's tutor questions -> 0-3 new durable facts.
-// Claude path: one structured-output call (effort low). Demo/fallback: a deterministic rule
+// Claude path: one structured-output call (effort low). Fallback: a deterministic rule
 // on the quiz score. New facts are de-duplicated against the store before they are saved.
 
 import { buildStructuredParams, createStructured } from './claude.js';

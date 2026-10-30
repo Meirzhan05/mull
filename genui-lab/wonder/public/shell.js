@@ -1,6 +1,6 @@
 // App shell: the desktop sidebar (sections, then recent lessons and courses to jump back into),
-// the mobile top bar and bottom tabs, the streak mini card, the profile link, the demo
-// notice and the ⌘K (or /) command palette, which also searches the learner's lessons,
+// the mobile top bar and bottom tabs, the streak mini card, the profile link, the
+// "Claude is not configured" notice and the ⌘K (or /) command palette, which also searches the learner's lessons,
 // courses, cards and Teacher chats (search-core.js). Screens render into #app; the shell only
 // reflects the current route and the learner's stats.
 
@@ -33,7 +33,7 @@ export function createShell({ store, getStatus, actions }) {
   const sidebar = document.getElementById('sidebar');
   const topbar = document.getElementById('topbar');
   const tabbar = document.getElementById('tabbar');
-  const banner = document.getElementById('demo-banner');
+  const banner = document.getElementById('setup-banner');
 
   const brand = () => el('a', { class: 'brand', href: '#/', 'aria-label': 'Mull, today' },
     brandMark(), el('span', { class: 'brand-name' }, 'Mull'));
@@ -173,15 +173,16 @@ export function createShell({ store, getStatus, actions }) {
     for (const n of [streakChip, goalMini]) { n.classList.remove('bump'); void n.offsetWidth; n.classList.add('bump'); }
   }
 
-  function showBanner(mode) {
-    banner.hidden = mode !== 'demo';
+  /** /api/status {claude:false}: the server has no Claude credentials, so nothing new can be made. */
+  function showBanner(status) {
+    banner.hidden = status?.claude !== false;
     let dismissed = false;
-    try { dismissed = sessionStorage.getItem('wonder.demoDismissed') === '1'; } catch {}
+    try { dismissed = sessionStorage.getItem('wonder.setupDismissed') === '1'; } catch {}
     if (dismissed) banner.hidden = true;
     banner.replaceChildren(
-      el('strong', null, 'Demo mode'),
-      el('span', null, 'Lessons are pre-written samples. Set ', el('code', null, 'ANTHROPIC_API_KEY'), ' to have Claude write them live.'),
-      el('button', { class: 'icon-btn', type: 'button', 'aria-label': 'Dismiss', onclick: () => { banner.hidden = true; try { sessionStorage.setItem('wonder.demoDismissed', '1'); } catch {} } }, icon('x')));
+      el('strong', null, 'Claude is not configured'),
+      el('span', null, 'This server has no Claude key, so new lessons, the tutor and the Teacher are unavailable.'),
+      el('button', { class: 'icon-btn', type: 'button', 'aria-label': 'Dismiss', onclick: () => { banner.hidden = true; try { sessionStorage.setItem('wonder.setupDismissed', '1'); } catch {} } }, icon('x')));
   }
 
   // -- command palette

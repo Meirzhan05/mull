@@ -159,9 +159,11 @@ export async function streamTurn(url, body, { onContent, onReasoning, onControl,
       let data = null;
       try { data = await res.json(); } catch {}
       const msg = data?.error || '';
-      // accounts on: signed out, or today's cap used up (server/usage.js). Neither is retried.
+      // accounts on: signed out, or today's cap used up (server/usage.js); or the server has no
+      // Claude credentials (503). None of these is retried.
       if (data?.signedOut) fail(classifyFailure({ code: 'signed_out', message: msg || 'Sign in to continue.' }));
       if (data?.limited) fail(classifyFailure({ code: 'daily_limit', message: msg || 'Today\'s limit is reached.' }));
+      if (data?.code === 'not_configured') fail(classifyFailure({ code: 'not_configured', message: msg || 'Claude is not configured on this server.' }));
       fail(classifyFailure({ status: res.status, retryAfter: res.headers.get('retry-after'), message: msg || undefined }));
     }
     if (!(res.headers.get('content-type') || '').startsWith(CONTENT_TYPE)) fail(classifyFailure({ protocol: true, message: 'Unexpected response type' }));

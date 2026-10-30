@@ -1,12 +1,12 @@
 // Phase 10: the learner's own material: store, document blocks, citations to it, lessons and
-// courses taught from it, and the demo fallback.
+// courses taught from it, and the store without Claude.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { createMaterialStore, documentBlock, materialCitation, materialTitle, demoMaterialLesson, demoMaterialCourse, isMaterialUrl, MAX_TEXT_CHARS, PART_BYTES, MAX_PDF_BYTES, MAX_MATERIAL_TOKENS, MAX_OPEN_UPLOADS, UPLOAD_MAX_AGE_MS, newUploadId, createPartStore, pruneUploads, takeUpload, extractPdfText, materialCharge } from '../server/materials.js';
+import { createMaterialStore, documentBlock, materialCitation, materialTitle, isMaterialUrl, MAX_TEXT_CHARS, PART_BYTES, MAX_PDF_BYTES, MAX_MATERIAL_TOKENS, MAX_OPEN_UPLOADS, UPLOAD_MAX_AGE_MS, newUploadId, createPartStore, pruneUploads, takeUpload, extractPdfText, materialCharge } from '../server/materials.js';
 import { createSourceRegistry } from '../server/grounding.js';
 import Anthropic from '@anthropic-ai/sdk';
 import { createWonderServer } from '../server/app.js';
@@ -101,7 +101,7 @@ function citingClient(blocks) {
 }
 
 async function withServer(opts, fn) {
-  const server = createWonderServer({ demoDelayMs: 0, logger: quiet, memoryFile: null, ...opts });
+  const server = createWonderServer({ client: null, logger: quiet, memoryFile: null, ...opts });
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   const base = `http://127.0.0.1:${server.address().port}`;
   try { return await fn(base); } finally { server.closeAllConnections?.(); await new Promise((r) => server.close(r)); }
@@ -113,7 +113,7 @@ test('lesson from material: document block + instruction, no web search, citatio
     { text: '# Photosynthesis\n\nHow plants eat light.\n\n## Light reactions\n\nLight reactions happen in the thylakoids.', cite: { type: 'char_location', document_index: 0, document_title: 'Photosynthesis', start_char_index: 120, end_char_index: 170, cited_text: 'The light reactions happen in the thylakoids.' } },
     { text: '\n\nThen comes the Calvin cycle.\n' },
   ]);
-  await withServer({ mode: 'claude', client }, async (base) => {
+  await withServer({ client }, async (base) => {
     const add = await (await post(base, '/api/materials', { kind: 'text', text: NOTES })).json();
     assert.ok(add.ok);
     const id = add.item.id;
@@ -152,7 +152,7 @@ test('lesson from material: document block + instruction, no web search, citatio
 
 test('course from material: structured plan with the document (no citations), course follows it', async () => {
   const client = citingClient([]);
-  await withServer({ mode: 'claude', client }, async (base) => {
+  await withServer({ client }, async (base) => {
     const { item } = await (await post(base, '/api/materials', { kind: 'text', text: NOTES })).json();
     const r = await (await post(base, '/api/course/plan', { topic: item.title, materialId: item.id })).json();
     assert.equal(r.plan.title, 'Photosynthesis');
@@ -163,20 +163,15 @@ test('course from material: structured plan with the document (no citations), co
   });
 });
 
-test('demo mode: a lesson outline and a course from the material\'s own headings', async () => {
-  const md = demoMaterialLesson({ title: 'Photosynthesis' }, NOTES);
-  assert.match(md, /^# Photosynthesis\n/);
-  assert.match(md, /## The Calvin cycle/);
-  assert.match(md, /<Callout title="Key idea" tone="insight">The Calvin cycle fixes carbon dioxide/);
-  const course = demoMaterialCourse({ title: 'Photosynthesis' }, NOTES);
-  assert.deepEqual(course.sections[0].lessons.map((l) => l.title), ['Photosynthesis', 'The Calvin cycle']);
-  await withServer({ mode: 'demo' }, async (base) => {
+test('without Claude: material is stored, listed and deleted; lessons and courses from it answer 503', async () => {
+  await withServer({}, async (base) => {
     const { item } = await (await post(base, '/api/materials', { kind: 'text', text: NOTES })).json();
-    const recs = parseConversationSource(await (await post(base, '/api/lesson/stream', { topic: item.title, materialId: item.id })).text());
-    const turn = new ConversationTurn();
-    for (const r of recs) turn.apply(r);
-    assert.match(turn.primary.markdown, /Demo mode: a page-by-page outline of your material/);
-    assert.deepEqual(runProgram(turn.primary.dil).errors, []);
+    assert.equal(item.tokens, undefined, 'not counted without Claude');
+    for (const p of ['/api/lesson/stream', '/api/course/plan']) {
+      const res = await post(base, p, { topic: item.title, materialId: item.id });
+      assert.equal(res.status, 503, p);
+      assert.equal((await res.json()).code, 'not_configured');
+    }
     const list = await (await fetch(`${base}/api/materials`)).json();
     assert.equal(list.items.length, 1);
     const del = await (await fetch(`${base}/api/materials?id=${item.id}`, { method: 'DELETE' })).json();
@@ -190,7 +185,7 @@ import { createWonderCore, MAX_BODY } from '../server/app.js';
 import { handleWebRequest } from '../server/web.js';
 
 test('web adapter: a PDF larger than the JSON limit uploads to /api/materials only; the file comes back raw', async () => {
-  const core = createWonderCore({ mode: 'demo', demoDelayMs: 0, logger: quiet, memoryFile: null });
+  const core = createWonderCore({ client: null, logger: quiet, memoryFile: null });
   const big = Buffer.concat([PDF, Buffer.alloc(MAX_BODY, 0x20)]); // base64 of this exceeds MAX_BODY
   const body = JSON.stringify({ kind: 'pdf', base64: big.toString('base64'), filename: 'Big notes.pdf' });
   assert.ok(Buffer.byteLength(body) > MAX_BODY);
@@ -210,7 +205,7 @@ test('web adapter: a PDF larger than the JSON limit uploads to /api/materials on
 
 test('web adapter: a PDF over Vercel\'s 4.5 MB body cap goes up in parts, each request under it', async () => {
   const VERCEL_BODY_CAP = 4.5 * 1024 * 1024;
-  const core = createWonderCore({ mode: 'demo', demoDelayMs: 0, logger: quiet, memoryFile: null });
+  const core = createWonderCore({ client: null, logger: quiet, memoryFile: null });
   const book = Buffer.concat([PDF, Buffer.alloc(7 * 1024 * 1024, 0x20)]);
   const send = async (path, payload) => {
     const b = JSON.stringify(payload);
@@ -266,7 +261,7 @@ test('upload parts: abandoned uploads are pruned; only exactly the stated parts 
 test('Claude mode: a material too long for a lesson is refused at upload, with Claude\'s own reason for an unreadable one', async () => {
   let answer = { input_tokens: MAX_MATERIAL_TOKENS + 1 };
   const client = { messages: { countTokens: async () => { if (answer instanceof Error) throw answer; return answer; } } };
-  const core = createWonderCore({ mode: 'claude', client, demoDelayMs: 0, logger: quiet, memoryFile: null });
+  const core = createWonderCore({ client, logger: quiet, memoryFile: null });
   const add = async () => (await handleWebRequest(core, new Request('http://localhost/api/materials', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ kind: 'pdf', base64: PDF.toString('base64'), filename: 'Book.pdf' }) }), { logger: quiet })).json();
   assert.match((await add()).error, /too long for one lesson .*the limit is 800k/);
   answer = new Anthropic.BadRequestError(400, { type: 'error', error: { type: 'invalid_request_error', message: 'A maximum of 600 PDF pages may be provided.' } }, undefined, new Headers());
@@ -348,7 +343,7 @@ function pdfRefusingClient() {
 
 test('Claude mode: a PDF Claude refuses is taught from its text layer, and stays that way', async () => {
   const client = pdfRefusingClient();
-  const core = createWonderCore({ mode: 'claude', client, demoDelayMs: 0, logger: quiet, memoryFile: null });
+  const core = createWonderCore({ client, logger: quiet, memoryFile: null });
   const post = async (path, body) => handleWebRequest(core, new Request(`http://localhost${path}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }), { logger: quiet });
   const { item } = await (await post('/api/materials', { kind: 'pdf', base64: textPdf(BOOK_PAGES).toString('base64'), filename: 'Field guide.pdf' })).json();
   const lesson = await (await post('/api/lesson/stream', { topic: 'Noticing ethics', materialId: item.id, verify: false })).text();
@@ -367,7 +362,7 @@ test('Claude mode: a PDF Claude refuses is taught from its text layer, and stays
 
 test('Claude mode: a refused PDF without a text layer fails with what to do; other errors show Claude\'s reason', async () => {
   const client = pdfRefusingClient();
-  const core = createWonderCore({ mode: 'claude', client, demoDelayMs: 0, logger: quiet, memoryFile: null });
+  const core = createWonderCore({ client, logger: quiet, memoryFile: null });
   const post = async (path, body) => handleWebRequest(core, new Request(`http://localhost${path}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }), { logger: quiet });
   const { item } = await (await post('/api/materials', { kind: 'pdf', base64: textPdf(['', '']).toString('base64'), filename: 'Scan.pdf' })).json();
   const lesson = await (await post('/api/lesson/stream', { topic: 'Scan', materialId: item.id, verify: false })).text();

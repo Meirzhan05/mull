@@ -3,8 +3,8 @@
 // cannot run up the server's Anthropic bill. Counts live in the sync database
 // (useQuota in memory-db.js / pg-db.js), so they hold across serverless instances. Days are UTC.
 //
-// Limits apply only in Claude mode (demo mode costs nothing) and only with accounts on; a local
-// single-user Wonder without accounts is unchanged. Override a cap with WONDER_LIMIT_<KIND>
+// Limits apply only when Claude is configured and only with accounts on; a local single-user
+// Wonder without accounts is unchanged. Override a cap with WONDER_LIMIT_<KIND>
 // (e.g. WONDER_LIMIT_LESSON=50); "off" or a negative number removes it, 0 blocks the kind.
 
 /** Default daily caps per user. */

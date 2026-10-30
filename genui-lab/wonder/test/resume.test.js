@@ -1,19 +1,18 @@
 // Phase 4c: mid-page resume (paragraph-boundary trimming, seamless continuation prompt,
-// duplicate heading/paragraph guard, demo resume over HTTP) and the cross-tab lesson lock.
+// duplicate heading/paragraph guard, resume over HTTP) and the cross-tab lesson lock.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createWonderServer } from '../server/app.js';
 import {
-  trimToLastBlock, createContinuationGuard, steeringUserContent, normalizeContinueFrom, demoContinuation, currentPageTitle,
+  trimToLastBlock, createContinuationGuard, steeringUserContent, normalizeContinueFrom, currentPageTitle,
 } from '../server/steering.js';
 import { trimToLastPage, pageCount, pageTitles, lessonPhase, STEER_CHIPS } from '../public/steering-core.js';
 import { createLessonLocks, leaseKey, LEASE_TTL_MS, LEASE_RENEW_MS } from '../public/lesson-lock.js';
 import { compileWonder, scanComponentTags } from '../server/compile.js';
 import { protectMath } from '../server/math-spans.js';
-import { groundDemoLesson } from '../server/demo-grounding.js';
 import { createSourceRegistry } from '../server/grounding.js';
 import { ConversationSourceParser, ConversationTurn, validateRecord } from '../../chatgpt-dil/src/stream.js';
-import { demo, DEMO_FILES, fakeClient, runProgram } from './helpers.js';
+import { sampleLesson, LESSON_FILES, fakeClient, fakeClientBy, lastUserText, runProgram, citeLesson } from './helpers.js';
 
 // ---------------------------------------------------------------- trimming: crafted cases
 
@@ -95,14 +94,14 @@ test('trimToLastBlock: never cuts a list, table or blockquote that may still con
   assert.equal(trimToLastBlock(`${P}> quoted\n\n> more`), P);
 });
 
-// ---------------------------------------------------------------- trimming: every prefix of the demo lessons
+// ---------------------------------------------------------------- trimming: every prefix of the sample lessons
 
 function groundedSky() {
-  return groundDemoLesson('sky-blue', demo('sky-blue.md'), createSourceRegistry({ turnIndex: 0 }));
+  return citeLesson(sampleLesson('sky-blue.md'), createSourceRegistry({ turnIndex: 0 }));
 }
 
-test('every prefix of every demo lesson (and the grounded one): kept text compiles cleanly, no half-written tag, resume reproduces the lesson', () => {
-  const lessons = [...DEMO_FILES.map((f) => [f, demo(f)]), ['sky-blue (grounded)', groundedSky()]];
+test('every prefix of every sample lesson (and the grounded one): kept text compiles cleanly, no half-written tag', () => {
+  const lessons = [...LESSON_FILES.map((f) => [f, sampleLesson(f)]), ['sky-blue (grounded)', groundedSky()]];
   for (const [name, md] of lessons) {
     const distinct = new Map();
     for (let i = 0; i <= md.length; i++) {
@@ -121,8 +120,6 @@ test('every prefix of every demo lesson (and the grounded one): kept text compil
       assert.ok(!scanComponentTags(kept).some((t) => t.kind === 'incomplete'), `${where}: no half-written tag`);
       assert.equal(protectMath(kept, { partial: true }).source, protectMath(kept).source, `${where}: no open math span`);
       assert.ok(!/<[A-Za-z][^>]*$/.test(kept.replace(/```[\s\S]*?```/g, '')), `${where}: no dangling "<Tag"`);
-      // demo resume from this exact boundary reproduces the lesson
-      if (!name.includes('grounded')) assert.equal(kept + demoContinuation(md, kept, ''), md, `${where}: demo resume is seamless`);
     }
   }
 });
@@ -195,7 +192,7 @@ test('continuation guard: drops a leading repeated heading and paragraphs, keeps
 
 const quiet = { warn() {}, error() {}, log() {}, info() {} };
 async function withServer(opts, fn) {
-  const server = createWonderServer({ demoDelayMs: 0, logger: quiet, memoryFile: null, ...opts });
+  const server = createWonderServer({ client: null, logger: quiet, memoryFile: null, ...opts });
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   const base = `http://127.0.0.1:${server.address().port}`;
   try { return await fn(base, server); } finally { server.closeAllConnections?.(); await new Promise((r) => server.close(r)); }
@@ -217,7 +214,7 @@ test('Claude path: a resume that repeats the page heading and last paragraph is 
   const LESSON = '# Tides\n\nHook.\n\n## Why tides happen\n\nThe moon pulls the ocean.\n\nThe sun helps a little';
   const kept = '# Tides\n\nHook.\n\n## Why tides happen\n\nThe moon pulls the ocean.\n\n';
   const client = fakeClient({ text: '## Why tides happen\n\nThe moon pulls the ocean.\n\nThe sun helps a little too.\n\n## Check your understanding\n\nQuiz.\n', chunks: undefined });
-  await withServer({ mode: 'claude', client }, async (base) => {
+  await withServer({ client }, async (base) => {
     const { recs, turn } = await readStream(await post(base, '/api/lesson/stream', { topic: 'tides', useWebSearch: false, continueFrom: { markdown: LESSON } }));
     const replace = recs.find((r) => r.type === 'content' && r.mode === 'replace' && r.revision > 1);
     assert.equal(replace.markdown, kept, 'kept up to the last complete paragraph');
@@ -229,29 +226,35 @@ test('Claude path: a resume that repeats the page heading and last paragraph is 
   });
 });
 
-test('demo resume over HTTP from a mid-page paragraph boundary: seamless, no repeated heading, deterministic', async () => {
-  await withServer({ mode: 'demo' }, async (base) => {
-    const full = (await readStream(await post(base, '/api/lesson/stream', { topic: 'compound interest' }))).turn.primary;
-    const md = full.markdown;
-    // cut inside the paragraph after the LessonStepper on "Watching it snowball"
-    const at = md.indexOf('All of that collapses') + 20;
-    const partial = md.slice(0, at);
-    const kept = trimToLastBlock(partial);
+test('resume over HTTP from a mid-page paragraph boundary: seamless, no repeated heading', async () => {
+  const md = sampleLesson('compound-interest.md');
+  // cut inside the paragraph after the LessonStepper on "Watching it snowball"
+  const at = md.indexOf('All of that collapses') + 20;
+  const partial = md.slice(0, at);
+  const kept = trimToLastBlock(partial);
+  const SIMPLER = 'In short: interest earns interest.\n\n';
+  // Claude continues from the next sentence (after a change, with a simpler line first)
+  const client = fakeClientBy((params) => {
+    const ask = lastUserText(params);
+    return { text: !/<lesson_so_far>/.test(ask) ? md : /change course/.test(ask) ? SIMPLER + md.slice(kept.length) : md.slice(kept.length) };
+  });
+  await withServer({ client }, async (base) => {
+    const body = { topic: 'compound interest', verify: false, useWebSearch: false };
+    assert.equal((await readStream(await post(base, '/api/lesson/stream', body))).turn.primary.markdown, md);
     assert.ok(kept.endsWith('}]}/>\n\n'), 'kept ends right after the stepper, mid-page');
     assert.ok(kept.length > trimToLastPage(partial).length);
-    const { recs, turn } = await readStream(await post(base, '/api/lesson/stream', { topic: 'compound interest', continueFrom: { markdown: partial } }));
+    const { recs, turn } = await readStream(await post(base, '/api/lesson/stream', { ...body, continueFrom: { markdown: partial } }));
     const replace = recs.find((r) => r.type === 'content' && r.mode === 'replace' && r.revision > 1);
     assert.equal(replace.markdown, kept);
     assert.equal(turn.primary.status, 'complete');
-    assert.equal(turn.primary.markdown, md, 'resuming mid-page reproduces the sample exactly');
+    assert.equal(turn.primary.markdown, md, 'resuming mid-page joins seamlessly');
     assert.deepEqual(pageTitles(turn.primary.markdown), pageTitles(md));
     assert.deepEqual(runProgram(turn.primary.dil).errors, []);
     // with a change: the current page's complete paragraphs are kept too, the rest steered
-    const steered = await readStream(await post(base, '/api/lesson/stream', { topic: 'compound interest', continueFrom: { markdown: partial, instruction: STEER_CHIPS[0].instruction } }));
+    const steered = await readStream(await post(base, '/api/lesson/stream', { ...body, continueFrom: { markdown: partial, instruction: STEER_CHIPS[0].instruction } }));
     const out = steered.turn.primary.markdown;
-    assert.ok(out.startsWith(kept));
+    assert.equal(out, kept + SIMPLER + md.slice(kept.length));
     assert.equal(pageTitles(out).length, pageTitles(md).length, 'no page heading repeated');
-    assert.match(out, /Steered: Simpler/);
     assert.ok(steered.recs.some((r) => r.detail?.kind === 'steering-message'));
   });
 });

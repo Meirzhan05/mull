@@ -2,16 +2,14 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createWonderServer } from '../server/app.js';
-import { steeringUserContent, steerDemoRemainder, createSteeringRegistry } from '../server/steering.js';
+import { steeringUserContent, createSteeringRegistry } from '../server/steering.js';
 import { trimToLastPage, steerReducer, STEER_CHIPS, pageCount } from '../public/steering-core.js';
 import { ConversationSourceParser, ConversationTurn, validateRecord } from '../../chatgpt-dil/src/stream.js';
 import { compileWonder } from '../server/compile.js';
-import { stripGroundingTags } from '../server/grounding.js';
-import { demo, runProgram, catalogNodes } from './helpers.js';
 
 const quiet = { warn() {}, error() {}, log() {} };
 async function withServer(opts, fn) {
-  const server = createWonderServer({ demoDelayMs: 0, logger: quiet, ...opts });
+  const server = createWonderServer({ client: null, logger: quiet, ...opts });
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   const base = `http://127.0.0.1:${server.address().port}`;
   try { return await fn(base, server); } finally { server.closeAllConnections?.(); await new Promise((r) => server.close(r)); }
@@ -105,7 +103,7 @@ test('continuation user turn: original request + lesson so far (cites stripped) 
 test('steering a Claude lesson: abort, steering controls, replace record, continuation request shape', async () => {
   const rest = '## Page two, simpler\n\nShort and simple.\n\n## Check your understanding\n\nDone.\n';
   const client = steerableClient(rest);
-  await withServer({ mode: 'claude', client }, async (base) => {
+  await withServer({ client }, async (base) => {
     let steered = null;
     const res = await post(base, '/api/lesson/stream', { topic: 'steady', useWebSearch: false });
     let op = null;
@@ -172,39 +170,8 @@ test('client-side tail replacement: ConversationTurn keeps earlier pages and swa
   assert.ok(b.code.length > a.code.length);
 });
 
-test('demo steering over HTTP: remaining pages switch to the simpler variant', async () => {
-  await withServer({ mode: 'demo', demoDelayMs: 2 }, async (base) => {
-    const source = demo('compound-interest.md');
-    let steered = null;
-    const res = await post(base, '/api/lesson/stream', { topic: 'compound interest' });
-    let op = null;
-    const { recs, turn } = await readStream(res, async (rec, t) => {
-      if (rec.type === 'control') op ??= rec.detail.operationId;
-      if (!steered && rec.type === 'content' && pageCount(t.primary.markdown) >= 2) {
-        steered = 'pending';
-        steered = await (await post(base, '/api/lesson/steer', { operationId: op, instruction: STEER_CHIPS[0].instruction })).json();
-      }
-    });
-    assert.equal(steered.status, 'accepted');
-    const md = turn.primary.markdown;
-    assert.equal(turn.primary.status, 'complete');
-    const kept = recs.find((r) => r.type === 'content' && r.mode === 'replace' && r.revision > 1).markdown;
-    assert.ok(source.startsWith(kept) && pageCount(kept) >= 1, 'kept pages are an exact prefix of the lesson');
-    assert.ok(md.startsWith(kept));
-    assert.match(md, /<Callout title="Steered: Simpler" tone="tip">/);
-    assert.ok(md.length < source.length, 'the simpler variant is shorter');
-    assert.match(md, /## Check your understanding\n\n<Quiz /, 'quiz page kept');
-    const out = compileWonder(md);
-    assert.deepEqual(out.components.filter((c) => c.status !== 'valid'), []);
-    const env = runProgram(turn.primary.dil);
-    assert.deepEqual(env.errors, []);
-    assert.equal(catalogNodes(env.mirror, 'Quiz').length, 1);
-    assert.ok(recs.some((r) => r.detail?.kind === 'steering-message'));
-  });
-});
-
 test('steer endpoint validates input; a second steer while one is applying is rejected', async () => {
-  await withServer({ mode: 'demo' }, async (base) => {
+  await withServer({}, async (base) => {
     assert.equal((await post(base, '/api/lesson/steer', { operationId: 'x', instruction: '' })).status, 400);
     const r = await post(base, '/api/lesson/steer', { operationId: 'nope', instruction: 'Simpler' });
     assert.equal(r.status, 409);
@@ -221,16 +188,4 @@ test('steer endpoint validates input; a second steer while one is applying is re
   assert.equal(op.takeSteer(), 'a');
   op.close();
   assert.equal(reg.get('op1'), null);
-});
-
-test('steerDemoRemainder keeps headings, visuals and the quiz; trims extra prose', () => {
-  const src = demo('sky-blue.md');
-  const kept = trimToLastPage(src.slice(0, src.indexOf('## Air scatters') + 5));
-  const rest = src.slice(kept.length);
-  const out = steerDemoRemainder(rest, 'Simpler');
-  assert.equal(pageCount(out), pageCount(rest));
-  assert.ok(out.length < rest.length);
-  assert.match(out, /<LessonStepper /);
-  assert.ok(out.includes(rest.slice(rest.indexOf('## Check your understanding'))), 'quiz page untouched');
-  assert.equal(stripGroundingTags(out), out);
 });

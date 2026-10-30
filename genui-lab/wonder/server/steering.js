@@ -1,7 +1,7 @@
 // Phase 4: mid-turn steering for lessons (ChatGPT steer_turn, chatgpt-findings §1.5).
 //
 //   POST /api/lesson/steer {operationId, instruction}
-//     -> the in-flight lesson operation aborts its current Claude (or demo) stream
+//     -> the in-flight lesson operation aborts its current Claude stream
 //     -> the open NDJSON response emits control steering-status accepted + steering-message,
 //        a `replace` content record with the kept pages (trimmed to the last complete "## ")
 //     -> a continuation request streams the rest: the original lesson request + a user turn
@@ -17,7 +17,7 @@
 //        heading/paragraph at its start is dropped.
 
 import {
-  trimToLastPage, trimBeforePage, pageCount, pageOffsets, pageTitles, citeRefsIn, MAX_STEER_CHARS, STEER_CHIPS,
+  trimToLastPage, trimBeforePage, pageCount, pageTitles, citeRefsIn, MAX_STEER_CHARS,
   MAX_CONTINUE_MARKDOWN, MAX_CONTINUE_SOURCES,
 } from '../public/steering-core.js';
 import { stripGroundingTags, isRepeat, trimRepeatedLead, splitSentences, createSourceRegistry, domainOf } from './grounding.js';
@@ -479,71 +479,4 @@ export function createContinuationSources({ turnIndex = 0, kept = '', seed = [] 
     toJSON() { return { turnIndex, sources: reg.list() }; },
   };
   return reg;
-}
-
-// ---------------------------------------------------------------- demo mode
-
-const isProse = (block) => !/^\s*[<|>#-]/.test(block) && !/^\s*\d+\.\s/.test(block);
-
-function shorten(paragraph) {
-  if (/[<{]/.test(paragraph)) return paragraph; // tags inside: keep intact
-  const sentences = paragraph.split(/(?<=[.!?])\s+(?=[A-Z])/);
-  return sentences.slice(0, 2).join(' ');
-}
-
-/**
- * Deterministic "steered" rewrite of the remaining demo pages: each page keeps its heading,
- * its first prose paragraph (two sentences at most) and every visual; extra prose is dropped.
- * The quiz page is kept as is. A tip callout acknowledges the request on the first page.
- */
-export function steerDemoRemainder(remaining, instruction) {
-  const text = String(remaining ?? '');
-  const pages = text.split(/\n(?=## )/);
-  const chip = STEER_CHIPS.find((c) => c.instruction === instruction || c.label.toLowerCase() === String(instruction || '').trim().toLowerCase());
-  const label = (chip ? chip.label : String(instruction || 'Simpler')).replace(/["<>{}\\]/g, '').slice(0, 60);
-  let acknowledged = false;
-  const out = pages.map((page) => {
-    const lines = page.split('\n');
-    if (!/^## /.test(lines[0]) || /^## Check your understanding/i.test(lines[0])) return page;
-    const blocks = lines.slice(1).join('\n').split(/\n{2,}/);
-    const kept = [];
-    let prose = 0;
-    for (const b of blocks) {
-      if (!b.trim()) continue;
-      if (isProse(b)) { if (prose++ === 0) kept.push(shorten(b.trim())); continue; }
-      kept.push(b.trim());
-    }
-    if (!acknowledged) acknowledged = true, kept.unshift(`<Callout title="Steered: ${label}" tone="tip">Got it. The rest of this lesson keeps each page to its core idea, in fewer words.</Callout>`);
-    return `${lines[0]}\n\n${kept.join('\n\n')}\n`;
-  });
-  return out.join('\n');
-}
-
-/**
- * Demo continuation (deterministic): the sample's text after the kept part, grounded with the
- * continuation registry, rewritten with steerDemoRemainder when there is an instruction.
- * When the kept text (Cite tags removed) is a prefix of the sample, the continuation starts
- * exactly at that paragraph boundary, mid-page included; otherwise it continues after the kept
- * text's last block if the sample contains it, else from the page after the last kept heading.
- * A complete lesson (nothing left) redoes its last page.
- */
-export function demoContinuation(sample, keptMarkdown, instruction, { ground } = {}) {
-  const md = String(sample ?? '');
-  const kept = String(keptMarkdown ?? '');
-  const raw = stripGroundingTags(kept);
-  const heads = pageOffsets(md);
-  let rest;
-  if (md.startsWith(raw)) rest = md.slice(raw.length);
-  else {
-    const lastBlock = splitBlocks(raw).pop();
-    const at = lastBlock && !/^#{1,2} /.test(lastBlock) ? md.indexOf(lastBlock) : -1;
-    if (at >= 0) rest = md.slice(at + lastBlock.length).replace(/^[ \t]*\n(?:[ \t]*\n)*/, '');
-    else {
-      const pages = pageCount(kept);
-      rest = pages < heads.length ? md.slice(heads[pages]) : '';
-    }
-  }
-  if (!rest.trim() && heads.length) rest = md.slice(heads[heads.length - 1]); // every page kept: redo the last one
-  if (ground) rest = ground(rest);
-  return instruction ? steerDemoRemainder(rest, instruction) : rest;
 }

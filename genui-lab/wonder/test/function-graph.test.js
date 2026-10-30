@@ -5,7 +5,7 @@ import { validateFunctionGraph, functionGraphFallback } from '../server/function
 import { validateComponentProps } from '../server/catalog-schema.js';
 import { compileWonder } from '../server/compile.js';
 import { LESSON_SYSTEM_PROMPT, TUTOR_SYSTEM_PROMPT } from '../server/prompts.js';
-import { demo, runProgram, catalogNodes } from './helpers.js';
+import { sampleLesson, runProgram, catalogNodes } from './helpers.js';
 
 const SINE = { fn: 'a*sin(b*x)', params: [{ name: 'a', min: 0, max: 3, step: 0.5, value: 1, label: 'amplitude' }, { name: 'b', min: 0.5, max: 3, step: 0.5, value: 1 }], xRange: [-6.28, 6.28], yRange: [-3, 3], title: 'Sine waves', caption: 'Change a and b.', points: [{ x: 0, y: 0, label: 'origin' }] };
 const tag = (p) => `<FunctionGraph ${Object.entries(p).map(([k, v]) => (typeof v === 'string' ? `${k}="${v}"` : `${k}={${JSON.stringify(v)}}`)).join(' ')}/>`;
@@ -112,9 +112,9 @@ test('sandbox: asymptotes break the path; mobile layout is narrower; multiple cu
   assert.deepEqual(curves(mobile).map((c) => c.props.stroke), ['brand-strong', 'warning']);
 });
 
-test('compound-interest demo: FunctionGraph renders and the r slider bends the curve', () => {
-  const md = demo('compound-interest.md');
-  const out = compileWonder(md, { salt: 'demo' });
+test('compound-interest sample: FunctionGraph renders and the r slider bends the curve', () => {
+  const md = sampleLesson('compound-interest.md');
+  const out = compileWonder(md, { salt: 'sample' });
   const fg = out.components.find((c) => c.name === 'FunctionGraph');
   assert.equal(fg.status, 'valid');
   const env = runProgram(out);
@@ -127,12 +127,12 @@ test('compound-interest demo: FunctionGraph renders and the r slider bends the c
   assert.ok(end() > at7 + 100, 'lower rate -> lower end point');
 });
 
-test('every streamed prefix of the compound-interest demo keeps FunctionGraph valid or absent', () => {
-  const md = demo('compound-interest.md');
+test('every streamed prefix of the compound-interest sample keeps FunctionGraph valid or absent', () => {
+  const md = sampleLesson('compound-interest.md');
   const start = md.indexOf('<FunctionGraph');
   const stop = md.indexOf('/>', start) + 2;
   for (let i = start - 2; i <= stop + 2; i += 3) {
-    const out = compileWonder(md.slice(0, i), { partial: true, salt: 'demo' });
+    const out = compileWonder(md.slice(0, i), { partial: true, salt: 'sample' });
     const fg = out.components.filter((c) => c.name === 'FunctionGraph');
     assert.ok(fg.every((c) => c.status !== 'invalid'), `prefix ${i}`);
     assert.doesNotMatch(out.code, /FunctionGraph title=|fns=\{/, 'raw tag text never leaks into the program');

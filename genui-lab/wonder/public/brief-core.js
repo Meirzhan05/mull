@@ -1,5 +1,5 @@
 // Phase 10: the Teacher's daily brief. Ranked from local state only (deck, plan, outcomes,
-// streak), so it costs no model call, works in demo mode and offline, and is what a reminder
+// streak), so it costs no model call, works without Claude and offline, and is what a reminder
 // notification says. Pure, tested under node:test.
 //
 //   {headline, urgent, items:[{kind, title, why, action:{type, …}}]}   at most 3 items, best first

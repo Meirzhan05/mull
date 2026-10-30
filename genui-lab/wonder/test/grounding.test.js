@@ -9,11 +9,11 @@ import {
 import { buildStreamParams } from '../server/claude.js';
 import { compileWonder } from '../server/compile.js';
 import { parseConversationSource, ConversationTurn } from '../../chatgpt-dil/src/stream.js';
-import { fakeClient, demo, runProgram, catalogNodes } from './helpers.js';
+import { fakeClient, sampleLesson, runProgram, catalogNodes, groundedClient, citedBlocks } from './helpers.js';
 
 const quiet = { warn() {}, error() {}, log() {} };
 async function withServer(opts, fn) {
-  const server = createWonderServer({ demoDelayMs: 0, logger: quiet, ...opts });
+  const server = createWonderServer({ client: null, logger: quiet, ...opts });
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   const base = `http://127.0.0.1:${server.address().port}`;
   try { return await fn(base, server); } finally { server.closeAllConnections?.(); await new Promise((r) => server.close(r)); }
@@ -24,49 +24,6 @@ const fold = (recs) => { const t = new ConversationTurn(); for (const r of recs)
 
 const RAYLEIGH = { type: 'web_search_result_location', url: 'https://en.wikipedia.org/wiki/Rayleigh_scattering', title: 'Rayleigh scattering - Wikipedia', encrypted_index: 'x', cited_text: 'The intensity of Rayleigh scattering is inversely proportional to the fourth power of wavelength.' };
 const NASA = { type: 'web_search_result_location', url: 'https://www.nasa.gov/sky', title: 'Why is the sky blue', encrypted_index: 'y', cited_text: 'Blue light is scattered more.' };
-
-/**
- * Fake client for server-tool turns: each element of `turns` is one API response, a list of
- * content blocks ({type:'text', text, citations?} | {type:'server_tool_use', id, name, input} |
- * {type:'web_search_tool_result', tool_use_id, content}) streamed as SDK events, plus stop_reason.
- */
-function groundedClient(turns) {
-  const calls = [];
-  return {
-    calls,
-    beta: {
-      messages: {
-        stream(params, opts) {
-          const turn = turns[Math.min(calls.length, turns.length - 1)];
-          calls.push({ params: structuredClone(params), opts });
-          return {
-            async *[Symbol.asyncIterator]() {
-              yield { type: 'message_start', message: { id: `msg_${calls.length}` } };
-              for (const [index, b] of turn.blocks.entries()) {
-                if (b.type === 'text') {
-                  yield { type: 'content_block_start', index, content_block: { type: 'text', text: '', citations: null } };
-                  for (const c of b.citations || []) yield { type: 'content_block_delta', index, delta: { type: 'citations_delta', citation: c } };
-                  for (const piece of b.text.match(/[\s\S]{1,7}/g) || []) yield { type: 'content_block_delta', index, delta: { type: 'text_delta', text: piece } };
-                } else if (b.type === 'server_tool_use') {
-                  yield { type: 'content_block_start', index, content_block: { type: 'server_tool_use', id: b.id, name: b.name, input: {} } };
-                  const json = JSON.stringify(b.input);
-                  yield { type: 'content_block_delta', index, delta: { type: 'input_json_delta', partial_json: json.slice(0, 5) } };
-                  yield { type: 'content_block_delta', index, delta: { type: 'input_json_delta', partial_json: json.slice(5) } };
-                } else {
-                  yield { type: 'content_block_start', index, content_block: b };
-                }
-                yield { type: 'content_block_stop', index };
-              }
-              yield { type: 'message_delta', delta: { stop_reason: turn.stop_reason } };
-            },
-            async finalMessage() { return { id: `msg_${calls.length}`, stop_reason: turn.stop_reason, content: turn.blocks }; },
-          };
-        },
-      },
-    },
-    messages: { async create() { throw new Error('unused'); } },
-  };
-}
 
 const SEARCH_TURN = {
   stop_reason: 'pause_turn',
@@ -101,7 +58,7 @@ test('web_search tool is added only when enabled (and never code_execution)', ()
 
 test('lesson requests search by default; useWebSearch:false and the tutor (unless asked) do not', async () => {
   const client = fakeClient({ text: '# T\n\nHello.\n' });
-  await withServer({ mode: 'claude', client }, async (base) => {
+  await withServer({ client }, async (base) => {
     await records(await post(base, '/api/lesson/stream', { topic: 'sky' }));
     await records(await post(base, '/api/lesson/stream', { topic: 'sky', useWebSearch: false }));
     await records(await post(base, '/api/tutor/stream', { message: 'why?', lessonContext: { title: 'T', markdown: '# T <Cite refs={["turn0search0"]}/>' } }));
@@ -119,7 +76,7 @@ test('lesson requests search by default; useWebSearch:false and the tutor (unles
 
 test('citations become <Cite/> after the cited span; pause_turn continues with the paused content', async () => {
   const client = groundedClient([SEARCH_TURN, ANSWER_TURN]);
-  await withServer({ mode: 'claude', client }, async (base) => {
+  await withServer({ client }, async (base) => {
     const recs = await records(await post(base, '/api/lesson/stream', { topic: 'why is the sky blue' }));
     const msg = fold(recs);
     assert.equal(msg.status, 'complete');
@@ -168,7 +125,7 @@ test('citations become <Cite/> after the cited span; pause_turn continues with t
 
 test('a streamed partial dil already carries the resolved cite (no unresolved flash)', async () => {
   const client = groundedClient([ANSWER_TURN]);
-  await withServer({ mode: 'claude', client }, async (base) => {
+  await withServer({ client }, async (base) => {
     const recs = await records(await post(base, '/api/lesson/stream', { topic: 'sky' }));
     const withCite = recs.filter((r) => r.type === 'content' && r.dil && /Cite/.test(r.dil.code));
     assert.ok(withCite.length >= 1);
@@ -251,17 +208,15 @@ test('Cite pill opens a card with title/domain/snippet and an open_url action; S
   assert.match(bare.mirror.text(), /Text more\./);
 });
 
-test('demo mode: the sky lesson streams deterministic citations; useWebSearch:false turns them off', async () => {
-  await withServer({ mode: 'demo' }, async (base) => {
-    const msg = fold(await records(await post(base, '/api/lesson/stream', { topic: 'why is the sky blue?' })));
+test('a whole cited lesson: four citations become numbered Cite pills and a Sources list', async () => {
+  const client = groundedClient([{ stop_reason: 'end_turn', blocks: citedBlocks(sampleLesson('sky-blue.md')) }]);
+  await withServer({ client }, async (base) => {
+    const msg = fold(await records(await post(base, '/api/lesson/stream', { topic: 'why is the sky blue?', verify: false })));
     assert.equal((msg.markdown.match(/<Cite /g) || []).length, 4);
-    assert.equal(stripGroundingTags(msg.markdown), demo('sky-blue.md'));
+    assert.equal(stripGroundingTags(msg.markdown), sampleLesson('sky-blue.md'));
     const env = runProgram(msg.dil);
     assert.deepEqual(env.errors, []);
     assert.deepEqual(catalogNodes(env.mirror, 'Cite').map((n) => env.mirror.text(n)), ['1', '2', '3', '4']);
     assert.match(env.mirror.text(catalogNodes(env.mirror, 'Sources')[0]), /Sources \(4\).*spaceplace\.nasa\.gov/);
-
-    const off = fold(await records(await post(base, '/api/lesson/stream', { topic: 'why is the sky blue?', useWebSearch: false })));
-    assert.equal(off.markdown, demo('sky-blue.md'));
   });
 });

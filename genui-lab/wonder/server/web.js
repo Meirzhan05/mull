@@ -125,8 +125,8 @@ export function getWonderCore() {
   if (!g.__wonderCore) {
     loadUserEnv();
     g.__wonderCore = createWonderCore();
-    const { mode, videos } = g.__wonderCore.status();
-    console.log(`[wonder] API ready (${mode === 'claude' ? 'Claude mode' : 'demo mode: set ANTHROPIC_API_KEY to use Claude'}; videos: ${videos === 'youtube' ? 'YouTube' : videos === 'demo' ? 'demo clips (set YOUTUBE_API_KEY for live search)' : 'off'})`);
+    const { claude, videos } = g.__wonderCore.status();
+    console.log(`[wonder] API ready (${claude ? 'Claude' : 'Claude not configured: set ANTHROPIC_API_KEY'}; videos: ${videos === 'youtube' ? 'YouTube' : 'off'})`);
   }
   return g.__wonderCore;
 }

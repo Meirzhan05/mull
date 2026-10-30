@@ -52,7 +52,7 @@ function syncLessonFromStorage(lessonId) {
   } catch { return false; }
 }
 const app = document.getElementById('app');
-let status = { mode: 'demo', model: 'claude-opus-5-5' };
+let status = { claude: true, model: 'claude-opus-5-5' };
 let teardown = [];
 
 // ------------------------------------------------------------------ actions shared by screens
@@ -230,8 +230,8 @@ async function loadStatus() {
   try {
     const r = await fetch('/api/status');
     status = await r.json();
-  } catch { status = { mode: 'demo', model: 'claude-opus-5-5' }; }
-  shell.showBanner(status.mode);
+  } catch { status = { claude: true, model: 'claude-opus-5-5' }; } // offline: the routes say what failed
+  shell.showBanner(status);
 }
 
 const memoryEnabled = () => store.data.settings?.memoryEnabled !== false;
@@ -1061,7 +1061,7 @@ function createTutor(lessonId) {
     el('header', { class: 'tutor-head' },
       el('div', { class: 'tutor-head-id' },
         el('span', { class: 'tutor-avatar small', 'aria-hidden': 'true' }, icon('quote')),
-        el('div', null, el('strong', null, 'Tutor'), el('span', { class: 'muted small' }, status.mode === 'claude' ? 'Knows this lesson · Claude' : 'Knows this lesson · demo replies'))),
+        el('div', null, el('strong', null, 'Tutor'), el('span', { class: 'muted small' }, 'Knows this lesson · Claude'))),
       el('div', { class: 'tutor-head-actions' }, guideBtn, closeBtn)),
     el('div', { class: 'tutor-scroll' }, empty, log, followups),
     form);

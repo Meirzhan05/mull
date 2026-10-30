@@ -10,7 +10,7 @@ import {
   fold, queryTokens, markdownToText, lessonText, buildIndex, searchIndex, searchGroups, groupResults, createSearcher, SEARCH_TYPES,
 } from '../public/search-core.js';
 
-const DEMO = path.join(path.dirname(fileURLToPath(import.meta.url)), '../server/demo');
+const LESSONS = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'lessons');
 const plain = (parts) => parts.map((p) => (p.hit ? `[${p.text}]` : p.text)).join('');
 
 const BAYES = `# Bayes' rule
@@ -201,9 +201,9 @@ test('search: the searcher caches the index per store revision', () => {
   assert.deepEqual(s.search(d, '', { revision: 2 }), []);
 });
 
-test('search: demo lessons index cleanly', () => {
+test('search: sample lessons index cleanly', () => {
   const d = { ...emptyState(), lessons: {} };
-  for (const f of ['compound-interest', 'sky-blue', 'transformers']) d.lessons[f] = { id: f, title: f, markdown: fs.readFileSync(path.join(DEMO, `${f}.md`), 'utf8'), updatedAt: '2026-10-01T00:00:00Z' };
+  for (const f of ['compound-interest', 'sky-blue', 'transformers']) d.lessons[f] = { id: f, title: f, markdown: fs.readFileSync(path.join(LESSONS, `${f}.md`), 'utf8'), updatedAt: '2026-10-01T00:00:00Z' };
   const idx = buildIndex(d);
   for (const doc of idx.docs) {
     const body = doc.fields.find((f) => f.name === 'body').text;

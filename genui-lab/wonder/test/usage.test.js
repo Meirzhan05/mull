@@ -71,7 +71,7 @@ test('usage gate: counts per user, per kind and per UTC day; retries of one stre
 
 async function withServer(opts, fn) {
   const sync = opts.sync === undefined ? createSyncService({ db: createMemoryDb() }) : opts.sync;
-  const server = createWonderServer({ demoDelayMs: 0, logger: quiet, memory: createMemoryStore({ file: null }), push: null, getUserId: (req) => req.headers['x-test-user'] || null, ...opts, sync });
+  const server = createWonderServer({ client: null, logger: quiet, memory: createMemoryStore({ file: null }), push: null, getUserId: (req) => req.headers['x-test-user'] || null, ...opts, sync });
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   const base = `http://127.0.0.1:${server.address().port}`;
   const as = (user) => async (method, p, body) => {
@@ -88,7 +88,7 @@ const LESSON = { topic: 'photosynthesis', useWebSearch: false, verify: false };
 
 test('accounts on, Claude mode: signed out gets 401 on every Claude route; caps give 429 with `limited`', async () => {
   const client = fakeClient({ text: '# T\n\nBody.' });
-  await withServer({ mode: 'claude', client, env: { WONDER_LIMIT_LESSON: '1', WONDER_LIMIT_TUTOR: '2' } }, async ({ alice, bob, anon }) => {
+  await withServer({ client, env: { WONDER_LIMIT_LESSON: '1', WONDER_LIMIT_TUTOR: '2' } }, async ({ alice, bob, anon }) => {
     for (const [p, body] of [['/api/lesson/stream', LESSON], ['/api/tutor/stream', { message: 'why?', lessonContext: { title: 'T', markdown: '# T' } }], ['/api/teacher/stream', { message: 'hi' }], ['/api/course/plan', { topic: 'x' }], ['/api/practice/extract', { lessonMarkdown: '# T' }], ['/api/memory/extract', {}]]) {
       const r = await anon('POST', p, body);
       assert.equal(r.status, 401, p);
@@ -117,7 +117,7 @@ test('accounts on, Claude mode: signed out gets 401 on every Claude route; caps 
 test('a lesson from a long material counts as several against the cap', async () => {
   const fake = fakeClient({ text: '# T\n\nBody.' });
   const client = { ...fake, messages: { ...fake.messages, countTokens: async () => ({ input_tokens: 600_000 }) } };
-  await withServer({ mode: 'claude', client, env: { WONDER_LIMIT_LESSON: '5' } }, async ({ alice }) => {
+  await withServer({ client, env: { WONDER_LIMIT_LESSON: '5' } }, async ({ alice }) => {
     const { item } = (await alice('POST', '/api/materials', { kind: 'text', text: 'Plants turn light, water and carbon dioxide into glucose and oxygen. '.repeat(3) })).body;
     assert.equal(item.tokens, 600_000);
     assert.equal(materialCharge(item), 3);
@@ -130,18 +130,22 @@ test('a lesson from a long material counts as several against the cap', async ()
   });
 });
 
-test('demo mode has no caps (it costs nothing); accounts off keeps the single-user app open', async () => {
-  await withServer({ mode: 'demo', env: { WONDER_LIMIT_LESSON: '0' } }, async ({ alice, anon }) => {
-    assert.equal((await alice('POST', '/api/lesson/stream', LESSON)).status, 200, 'cap 0 ignored in demo mode');
-    assert.equal((await anon('POST', '/api/lesson/stream', LESSON)).status, 401, 'but sign-in is still required with accounts on');
+test('without Claude nothing is charged; accounts off keeps the single-user app open', async () => {
+  await withServer({ client: null, env: { WONDER_LIMIT_EXTRACT: '0' } }, async ({ alice, anon }) => {
+    assert.equal((await alice('POST', '/api/lesson/stream', LESSON)).status, 503, 'Claude routes say Claude is not configured');
+    assert.equal((await anon('POST', '/api/lesson/stream', LESSON)).status, 503);
+    const extract = await alice('POST', '/api/practice/extract', { lessonMarkdown: '# T\n\n## A\n\n<KeyTerm term="Tide" definition="The rise and fall of the sea."/>\n' });
+    assert.equal(extract.status, 200, 'the lesson-components fallback costs nothing, so cap 0 does not apply');
+    assert.equal((await alice('GET', '/api/account')).body.usage, undefined);
+    assert.equal((await anon('POST', '/api/practice/extract', { lessonMarkdown: '# T' })).status, 401, 'sign-in is still required with accounts on');
   });
   const client = fakeClient({ text: '# T\n\nBody.' });
-  await withServer({ mode: 'claude', client, sync: null, env: { WONDER_LIMIT_LESSON: '0' } }, async ({ anon }) => {
+  await withServer({ client, sync: null, env: { WONDER_LIMIT_LESSON: '0' } }, async ({ anon }) => {
     assert.equal((await anon('POST', '/api/lesson/stream', LESSON)).status, 200, 'no accounts: no sign-in, no caps');
   });
 });
 
-test('browser: signed out and a used-up cap are not retried, and say so', async () => {
+test('browser: signed out, a used-up cap and a server without Claude are not retried, and say so', async () => {
   const reply = (status, body) => async () => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
   const err = async (status, body) => { try { await streamTurn('/api/lesson/stream', {}, { fetch: reply(status, body) }); } catch (e) { return e; } return null; };
   const out = await err(401, { ok: false, error: 'Sign in to use Mull', signedOut: true });
@@ -152,6 +156,8 @@ test('browser: signed out and a used-up cap are not retried, and say so', async 
   assert.equal(lim.code, 'daily_limit');
   assert.equal(lim.retryable, false, 'a 429 that carries `limited` is final, unlike Claude being busy');
   assert.equal(classifyFailure({ status: 429 }).retryable, true, 'a plain 429 (busy) is still retried');
+  const off = await err(503, { ok: false, error: 'Claude is not configured on this server.', code: 'not_configured' });
+  assert.deepEqual([off.code, off.retryable, off.message], ['not_configured', false, 'Claude is not configured on this server.'], 'a server without Claude is not retried');
   const realFetch = globalThis.fetch;
   globalThis.fetch = reply(429, limitBody('course', 10));
   try { await assert.rejects(postJson('/api/course/plan', {}), (e) => e.code === 'daily_limit' && /course plans/.test(e.message)); } finally { globalThis.fetch = realFetch; }

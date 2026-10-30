@@ -25,13 +25,13 @@ const nextConfig = {
   outputFileTracingRoot: labRoot,
   // The module mounts read files at request time (server/app.js STATIC_ROOTS), which tracing can't
   // see, so a deployment (Vercel) would ship none of them and the client fails to start. Name them.
-  // server/demo comes along everywhere because server/paths.js finds the app root by it.
+  // server/paths.js comes along everywhere because it finds the app root by itself.
   outputFileTracingIncludes: {
     // keys are globs: "[...path]" would be a character class, so match the catch-all with "*"
-    '/chatgpt-dil/src/*': ['../chatgpt-dil/src/**/*', './server/demo/**/*'],
-    '/wondering-genui/src/*': ['../wondering-genui/src/**/*', './server/demo/**/*'],
-    '/vendor/katex/*': ['./node_modules/katex/dist/**/*', './server/demo/**/*'],
-    '/api/*': ['./server/demo/**/*'],
+    '/chatgpt-dil/src/*': ['../chatgpt-dil/src/**/*', './server/paths.js'],
+    '/wondering-genui/src/*': ['../wondering-genui/src/**/*', './server/paths.js'],
+    '/vendor/katex/*': ['./node_modules/katex/dist/**/*', './server/paths.js'],
+    '/api/*': ['./server/paths.js'],
   },
   // the Anthropic SDK, pg, web-push and unpdf (a PDF's text layer, server/materials.js) stay plain
   // Node dependencies of the route handlers
