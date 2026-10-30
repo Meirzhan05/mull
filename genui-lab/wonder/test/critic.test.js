@@ -1,10 +1,9 @@
 // Phase 7: lesson quality. The deterministic lint, the critic call (structured output, fixes
 // applied to Quiz props only when they still validate), the quality-report control and the
 // replace record in /api/lesson/stream, and the eval harness (judge,
-// summary, markdown report, an end-to-end demo and fake-Claude run).
+// summary, markdown report, a fake-Claude run end to end).
 
 import { test } from 'node:test';
-import Anthropic from '@anthropic-ai/sdk';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -16,15 +15,15 @@ import { normalizeJudgement, summarizeRuns, reportMarkdown, RUBRIC_KEYS, JUDGE_S
 import { componentsOf } from '../server/practice.js';
 import { parseArgs, runEval, writeReport, createUsageTally } from '../evals/run.js';
 import { ConversationSourceParser, ConversationTurn } from '../../chatgpt-dil/src/stream.js';
-import { fakeClient, demo, DEMO_FILES } from './helpers.js';
+import { fakeClient, sampleLesson, LESSON_FILES } from './helpers.js';
 
 const quiet = { warn() {}, error() {}, log() {}, info() {} };
 
 const QUIZ = (key = 'b') => `<Quiz title="Check" questions={[{"id":"q1","prompt":"2 + 2?","question_type":"single_select","options":[{"value":"a","label":"3"},{"value":"b","label":"4"}],"correct_values":["${key}"],"hint":"Count.","explanation":"Two and two make four.","concept":"Addition"}]}/>`;
 
-test('lint: the demo lessons follow the format; a broken lesson fails the right checks', () => {
-  for (const f of DEMO_FILES) {
-    const r = lintLesson(demo(f));
+test('lint: the sample lessons follow the format; a broken lesson fails the right checks', () => {
+  for (const f of LESSON_FILES) {
+    const r = lintLesson(sampleLesson(f));
     assert.ok(r.score >= 0.9, `${f}: ${JSON.stringify(r.checks.filter((c) => !c.ok))}`);
     assert.equal(r.stats.questions, 3);
   }
@@ -72,7 +71,7 @@ test('critic: response is bounded and cleaned; the user message carries level, l
 });
 
 async function withServer(opts, fn) {
-  const server = createWonderServer({ demoDelayMs: 0, logger: quiet, memory: createMemoryStore({ file: null }), ...opts });
+  const server = createWonderServer({ client: null, logger: quiet, memory: createMemoryStore({ file: null }), ...opts });
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   const base = `http://127.0.0.1:${server.address().port}`;
   try { return await fn(base); } finally { server.closeAllConnections?.(); await new Promise((r) => server.close(r)); }
@@ -88,10 +87,10 @@ async function lessonTurn(base, body) {
 }
 
 test('lesson stream: the critic fixes a wrong answer key with one replace record, then reports', async () => {
-  const lesson = `${demo('sky-blue.md').replace(/<Quiz[\s\S]*?\/>/, QUIZ('a'))}`;
+  const lesson = `${sampleLesson('sky-blue.md').replace(/<Quiz[\s\S]*?\/>/, QUIZ('a'))}`;
   const critique = { verdict: 'major_issues', summary: 'Wrong key.', issues: [{ severity: 'major', kind: 'quiz_key', page: 5, problem: 'q1 key is 3', suggestion: 'use 4' }], quizFixes: [{ question_id: 'q1', correct_values: ['b'], explanation: 'Two and two make four.' }] };
   const client = fakeClient({ text: lesson, structured: critique });
-  await withServer({ mode: 'claude', client }, async (base) => {
+  await withServer({ client }, async (base) => {
     const { records, turn, report } = await lessonTurn(base, { topic: 'sky', useWebSearch: false });
     assert.equal(client.calls.create.length, 1, 'one critic call');
     const replaces = records.filter((r) => r.type === 'content' && r.mode === 'replace' && r.markdown);
@@ -104,18 +103,20 @@ test('lesson stream: the critic fixes a wrong answer key with one replace record
   });
 });
 
-test('lesson stream: demo mode lints only; verify:false skips the check; a failing critic still completes', async () => {
-  await withServer({ mode: 'demo' }, async (base) => {
-    const { report } = await lessonTurn(base, { topic: 'Why the sky is blue' });
+test('lesson stream: a truncated lesson lints only; verify:false skips the check; a failing critic still completes', async () => {
+  const truncated = fakeClient({ text: sampleLesson('sky-blue.md'), stopReason: 'max_tokens' });
+  await withServer({ client: truncated }, async (base) => {
+    const { report } = await lessonTurn(base, { topic: 'Why the sky is blue', useWebSearch: false });
     assert.equal(report.critic.skipped, true);
     assert.equal(report.lint.total, 12);
-    const off = await lessonTurn(base, { topic: 'Why the sky is blue', verify: false });
+    assert.equal(truncated.calls.create.length, 0, 'no critic call');
+    const off = await lessonTurn(base, { topic: 'Why the sky is blue', useWebSearch: false, verify: false });
     assert.equal(off.report, undefined);
     assert.equal(off.turn.primary.status, 'complete');
   });
-  const failing = fakeClient({ text: demo('sky-blue.md') });
+  const failing = fakeClient({ text: sampleLesson('sky-blue.md') });
   failing.messages.create = async () => { throw new Error('boom'); };
-  await withServer({ mode: 'claude', client: failing }, async (base) => {
+  await withServer({ client: failing }, async (base) => {
     const { report, turn } = await lessonTurn(base, { topic: 'sky', useWebSearch: false });
     assert.equal(turn.primary.status, 'complete');
     assert.equal(report.critic.skipped, true);
@@ -140,30 +141,25 @@ test('judge: scores are bounded, the mean skips missing ones; runs summarize int
   assert.equal(s.means.issues, 0);
   assert.deepEqual(s.failedChecks, { pages: 1 });
   for (const k of RUBRIC_KEYS) assert.ok(k in s.means);
-  const md = reportMarkdown({ meta: { startedAt: 'now', mode: 'claude', model: 'm', webSearch: false, verify: true, judge: true }, summary: s, runs });
+  const md = reportMarkdown({ meta: { startedAt: 'now', model: 'm', webSearch: false, verify: true, judge: true }, summary: s, runs });
   assert.match(md, /\| 0\.9 \| 4 \|/);
   assert.match(md, /B\\\|x/);
   assert.match(md, /error: HTTP 500/);
   assert.match(md, /`pages` ×1/);
 });
 
-test('eval harness: args, a demo run end to end, and a fake-Claude run with critic + judge', async () => {
-  assert.deepEqual((({ limit, demo: d, judge, web }) => ({ limit, d, judge, web }))(parseArgs(['--limit', '2', '--demo', '--no-judge', '--web'])), { limit: 2, d: true, judge: false, web: true });
+test('eval harness: args, no run without Claude, and a fake-Claude run with critic + judge', async () => {
+  assert.deepEqual((({ limit, judge, web }) => ({ limit, judge, web }))(parseArgs(['--limit', '2', '--no-judge', '--web'])), { limit: 2, judge: false, web: true });
   assert.throws(() => parseArgs(['--bogus']), /Unknown option/);
+  assert.throws(() => parseArgs(['--demo']), /Unknown option/);
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wonder-eval-'));
   const topics = path.join(dir, 'topics.json');
   fs.writeFileSync(topics, JSON.stringify([{ topic: 'Why the sky is blue' }, { topic: 'Compound interest', level: 'intermediate' }]));
-  const demoReport = await runEval({ ...parseArgs(['--demo']), topics }, { log() {} });
-  assert.equal(demoReport.meta.mode, 'demo');
-  assert.equal(demoReport.summary.ok, 2);
-  assert.equal(demoReport.meta.judge, false);
-  assert.ok(demoReport.runs.every((r) => r.lint && r.critic.skipped));
-  const files = writeReport(demoReport, path.join(dir, 'out'));
-  assert.match(fs.readFileSync(files.md, 'utf8'), /# Mull lesson eval/);
+  await assert.rejects(runEval({ ...parseArgs([]), topics }, { serverOpts: { client: null }, log() {} }), /Claude is not configured/);
 
   const structured = { verdict: 'pass', summary: 'fine', issues: [], quizFixes: [], scores: Object.fromEntries(RUBRIC_KEYS.map((k) => [k, { score: 4, rationale: 'r' }])), overall: 'Solid.' };
-  const client = fakeClient({ text: demo('transformers.md'), structured });
-  const r = await runEval({ ...parseArgs([]), topics, limit: 1 }, { serverOpts: { mode: 'claude', client, demoDelayMs: 0 }, log() {} });
+  const client = fakeClient({ text: sampleLesson('transformers.md'), structured });
+  const r = await runEval({ ...parseArgs([]), topics, limit: 1 }, { serverOpts: { client }, log() {} });
   assert.equal(r.meta.judge, true);
   assert.equal(r.runs[0].judge.mean, 4);
   assert.equal(r.runs[0].critic.verdict, 'pass');
@@ -172,18 +168,8 @@ test('eval harness: args, a demo run end to end, and a fake-Claude run with crit
   assert.deepEqual(r.meta.models, { lesson: 'claude-opus-5-5', critic: 'claude-opus-5-5', judge: 'claude-opus-5-5' });
   assert.equal(client.calls.stream[0].params.model, 'claude-opus-5-5');
   assert.deepEqual(client.calls.create.map((p) => p.model), ['claude-opus-5-5', 'claude-opus-5-5'], 'critic and judge on Opus');
-});
-
-test('eval: rejected credentials are reported, not scored as Claude lessons', async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wonder-eval-'));
-  const topics = path.join(dir, 'topics.json');
-  fs.writeFileSync(topics, JSON.stringify([{ topic: 'Why the sky is blue' }]));
-  const err = new Anthropic.AuthenticationError(401, { type: 'error', error: { type: 'authentication_error', message: 'invalid x-api-key' } }, 'invalid x-api-key', new Headers());
-  const lines = [];
-  const r = await runEval({ ...parseArgs(['--no-judge']), topics }, { serverOpts: { mode: 'claude', client: fakeClient({ error: err }), demoDelayMs: 0 }, log: (l) => lines.push(l) });
-  assert.equal(r.meta.mode, 'demo');
-  assert.equal(r.meta.demoReason, 'credentials-failed');
-  assert.ok(lines.some((l) => /WARNING: Claude credentials failed/.test(l)));
+  const files = writeReport(r, path.join(dir, 'out'));
+  assert.match(fs.readFileSync(files.md, 'utf8'), /# Mull lesson eval/);
 });
 
 test('eval usage tally: tokens per task and model, priced; the judge is left out of the per-lesson cost', () => {
@@ -199,7 +185,7 @@ test('eval usage tally: tokens per task and model, priced; the judge is left out
   assert.equal(s.byTask.find((r) => r.task === 'figure').usd, null);
   assert.equal(s.usd, 8);
   assert.equal(s.lessonUsd, 2);
-  const md = reportMarkdown({ meta: { startedAt: 'now', mode: 'claude', models: { lesson: 'claude-sonnet-5-5', judge: 'claude-opus-5-5' }, webSearch: false, verify: true, judge: true }, summary: summarizeRuns([]), usage: s, runs: [] });
-  assert.match(md, /lesson `claude-sonnet-5-5` · judge `claude-opus-5-5`/);
+  const md = reportMarkdown({ meta: { startedAt: 'now', models: { lesson: 'claude-sonnet-5-5', judge: 'claude-opus-5-5' }, webSearch: false, verify: true, judge: true }, summary: summarizeRuns([]), usage: s, runs: [] });
+  assert.match(md, /Lesson `claude-sonnet-5-5` · Judge `claude-opus-5-5`/);
   assert.match(md, /About \*\*\$2\*\* per lesson/);
 });

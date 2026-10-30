@@ -2,15 +2,26 @@ import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { createWonderServer } from '../server/app.js';
 import { parseConversationSource, ConversationTurn, CONTENT_TYPE } from '../../chatgpt-dil/src/stream.js';
-import { demo, runProgram, catalogNodes } from './helpers.js';
-import { stripGroundingTags } from '../server/grounding.js';
+import { sampleLesson, runProgram, catalogNodes, fakeClientBy, lastUserText } from './helpers.js';
 
 let server;
 let base;
 const quiet = { warn() {}, error() {}, log() {} };
 
+// Claude (faked) writes the sample lesson whose title the request names; the tutor replies with
+// the sky lesson's quiz
+const LESSONS = { 'How transformers predict the next word': 'transformers.md', 'why is the sky blue?': 'sky-blue.md', 'compound interest': 'compound-interest.md' };
+const QUIZ_REPLY = `Here is a quick check.\n\n${sampleLesson('sky-blue.md').match(/<Quiz[\s\S]*?\/>/)[0]}\n\n<Followups items={["Give me a similar question","Explain it with an analogy","Quiz me on this lesson"]}/>\n`;
+const client = fakeClientBy((params) => {
+  if (params.tools?.length && !params.tools.every((t) => /web_search/.test(t.type || t.name))) return { text: 'Hi.' };
+  const ask = lastUserText(params);
+  if (/Quiz me/.test(ask)) return { text: QUIZ_REPLY };
+  const topic = Object.keys(LESSONS).find((t) => ask.includes(t));
+  return { text: topic ? sampleLesson(LESSONS[topic]) : '' };
+});
+
 before(async () => {
-  server = createWonderServer({ mode: 'demo', demoDelayMs: 0, logger: quiet, memoryFile: null });
+  server = createWonderServer({ client, logger: quiet, memoryFile: null });
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   base = `http://127.0.0.1:${server.address().port}`;
 });
@@ -25,17 +36,17 @@ async function streamRecords(path, body) {
   return parseConversationSource(await res.text()); // validates every record, requires `end`
 }
 
-test('GET /api/status reports demo mode and the models', async () => {
+test('GET /api/status reports Claude and the models', async () => {
   const s = await (await fetch(`${base}/api/status`)).json();
-  assert.equal(s.mode, 'demo');
+  assert.equal(s.claude, true);
   assert.equal(s.model, 'claude-opus-5-5');
   assert.equal(s.models.tutor, 'claude-sonnet-5-5');
   assert.equal(s.models.extract, 'claude-haiku-5-5');
 });
 
 for (const [topic, file] of [['How transformers predict the next word', 'transformers.md'], ['why is the sky blue?', 'sky-blue.md'], ['compound interest', 'compound-interest.md']]) {
-  test(`POST /api/lesson/stream (demo): "${topic}" streams valid conversation-source NDJSON`, async () => {
-    const records = await streamRecords('/api/lesson/stream', { topic });
+  test(`POST /api/lesson/stream: "${topic}" streams valid conversation-source NDJSON`, async () => {
+    const records = await streamRecords('/api/lesson/stream', { topic, verify: false });
     assert.equal(records[0].type, 'control');
     assert.equal(records[0].detail.kind, 'started');
     assert.equal(records.at(-1).type, 'end');
@@ -48,8 +59,6 @@ for (const [topic, file] of [['How transformers predict the next word', 'transfo
     const contents = records.filter((r) => r.type === 'content');
     assert.equal(contents[0].mode, 'replace');
     assert.ok(contents.slice(1).every((r) => r.mode === 'append' && r.baseRevision === r.revision - 1));
-    const deltas = contents.slice(1, -1).filter((r) => !r.markdown.includes('<Sources/>')).map((r) => r.markdown.length); // Sources list is appended separately
-    assert.ok(Math.max(...deltas) <= 60 && Math.min(...deltas.slice(0, -1)) >= 20, 'demo chunks are 20-60 chars');
     const withDil = contents.filter((r) => r.dil);
     assert.ok(withDil.length >= 5 && withDil.length < contents.length, 'dil recompiled periodically, not on every record');
 
@@ -57,7 +66,7 @@ for (const [topic, file] of [['How transformers predict the next word', 'transfo
     for (const r of records) turn.apply(r);
     const msg = turn.primary;
     assert.equal(msg.status, 'complete');
-    assert.equal(stripGroundingTags(msg.markdown), demo(file), 'final markdown is exactly the demo source (+ Phase 3 demo citations)');
+    assert.equal(msg.markdown, sampleLesson(file), 'final markdown is exactly what Claude wrote');
 
     const env = runProgram({ code: msg.dil.code, constants: msg.dil.constants, appData: msg.dil.appData });
     assert.deepEqual(env.errors, []);
@@ -71,8 +80,8 @@ test('POST /api/lesson/stream validates input', async () => {
   assert.equal(res.status, 400);
 });
 
-test('POST /api/tutor/stream (demo): quiz reply with followupPrompts', async () => {
-  const records = await streamRecords('/api/tutor/stream', { message: 'Quiz me please', history: [], lessonContext: { title: 'Why the sky is blue', markdown: demo('sky-blue.md') } });
+test('POST /api/tutor/stream: quiz reply with followupPrompts', async () => {
+  const records = await streamRecords('/api/tutor/stream', { message: 'Quiz me please', history: [], lessonContext: { title: 'Why the sky is blue', markdown: sampleLesson('sky-blue.md') } });
   const final = records.filter((r) => r.type === 'content').at(-1);
   assert.equal(final.status, 'complete');
   assert.equal(final.followupPrompts.length, 3);
@@ -80,14 +89,6 @@ test('POST /api/tutor/stream (demo): quiz reply with followupPrompts', async () 
   const env = runProgram(final.dil);
   assert.equal(catalogNodes(env.mirror, 'Quiz').length, 1);
   assert.doesNotMatch(env.mirror.text(), /Followups/);
-});
-
-test('POST /api/tutor/stream (demo): "Explain this" from a missed quiz question', async () => {
-  const message = 'I answered "Clouds absorb the blue light" to "Why does the setting sun look red?" but the answer is "Its light crosses much more air, so most blue is scattered away". Can you explain why?';
-  const records = await streamRecords('/api/tutor/stream', { message, lessonContext: { title: 'Sky', markdown: demo('sky-blue.md') } });
-  const turn = new ConversationTurn();
-  for (const r of records) turn.apply(r);
-  assert.match(turn.primary.markdown, /~38× more air/);
 });
 
 test('POST /api/widget_action grades quiz answers and returns componentResults', async () => {
@@ -114,8 +115,8 @@ test('POST /api/widget_action grades quiz answers and returns componentResults',
   assert.equal((await post('/api/widget_action', { action_type: 'nope' })).status, 400);
 });
 
-test('POST /api/practice/extract (demo) builds cards and items from KeyTerm + Quiz', async () => {
-  const data = await (await post('/api/practice/extract', { lessonMarkdown: demo('compound-interest.md') })).json();
+test('POST /api/practice/extract builds cards and items from KeyTerm + Quiz when structured output fails', async () => {
+  const data = await (await post('/api/practice/extract', { lessonMarkdown: sampleLesson('compound-interest.md') })).json();
   assert.equal(data.ok, true);
   assert.equal(data.source, 'lesson-components');
   assert.deepEqual(data.cards.map((c) => c.term), ['principal', 'simple interest', 'compound interest', 'Rule of 72']);
@@ -125,13 +126,6 @@ test('POST /api/practice/extract (demo) builds cards and items from KeyTerm + Qu
   assert.equal(mcq.choices.filter((c) => c.isCorrect).length, 1);
   assert.ok(data.items.every((i) => i.id));
   assert.equal((await post('/api/practice/extract', {})).status, 400);
-});
-
-test('POST /api/course/plan (demo) returns a course outline', async () => {
-  const data = await (await post('/api/course/plan', { topic: 'compound interest', level: 'beginner' })).json();
-  assert.equal(data.ok, true);
-  assert.ok(data.plan.sections.length >= 2);
-  assert.equal(data.plan.sections[0].lessons[0].title, 'Compound interest');
 });
 
 test('client modules and read-only module mounts are served; traversal is refused', async () => {

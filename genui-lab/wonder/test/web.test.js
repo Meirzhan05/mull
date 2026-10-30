@@ -6,9 +6,13 @@ import { createWonderCore } from '../server/app.js';
 import { handleWebRequest, staticResponse } from '../server/web.js';
 import { createMemoryStore } from '../server/memory.js';
 import { ConversationSourceParser, ConversationTurn, CONTENT_TYPE } from '../../chatgpt-dil/src/stream.js';
+import { fakeClient, sampleLesson } from './helpers.js';
 
 const quiet = { warn() {}, error() {}, log() {}, info() {} };
-const core = (opts = {}) => createWonderCore({ mode: 'demo', demoDelayMs: 0, logger: quiet, memory: createMemoryStore({ file: null, logger: quiet }), ...opts });
+const PLAN = { title: 'Optics', description: 'Light.', sections: [{ title: 'Basics', lessons: [{ title: 'Why the sky is blue', summary: 'Scattering.' }] }] };
+// Claude (faked) writes the compound-interest sample, `delayMs` apart per 40-char piece
+const lessonClient = (delayMs = 0) => fakeClient({ text: sampleLesson('compound-interest.md'), structured: PLAN, delayMs });
+const core = (opts = {}) => createWonderCore({ client: lessonClient(), logger: quiet, memory: createMemoryStore({ file: null, logger: quiet }), ...opts });
 const req = (path, { method = 'POST', body, signal } = {}) => new Request(`http://localhost${path}`, {
   method, signal, headers: body ? { 'Content-Type': 'application/json' } : undefined, body: body ? JSON.stringify(body) : undefined,
 });
@@ -26,7 +30,7 @@ test('web: status, 404s and JSON errors', async () => {
   const c = core();
   const s = await handleWebRequest(c, req('/api/status', { method: 'GET' }), { logger: quiet });
   assert.equal(s.status, 200);
-  assert.equal((await s.json()).mode, 'demo');
+  assert.equal((await s.json()).claude, true);
   assert.equal((await handleWebRequest(c, req('/api/nope', { method: 'GET' }))).status, 404);
   assert.equal((await handleWebRequest(c, req('/api/lesson/stream', { method: 'GET' }))).status, 404, 'wrong method');
   const bad = await handleWebRequest(c, new Request('http://localhost/api/course/plan', { method: 'POST', body: '{not json' }));
@@ -36,8 +40,8 @@ test('web: status, 404s and JSON errors', async () => {
   assert.match((await missing.json()).error, /topic/);
 });
 
-test('web: a demo lesson streams as conversation-source NDJSON and completes', async () => {
-  const res = await handleWebRequest(core(), req('/api/lesson/stream', { body: { topic: 'Why the sky is blue' } }));
+test('web: a lesson streams as conversation-source NDJSON and completes', async () => {
+  const res = await handleWebRequest(core(), req('/api/lesson/stream', { body: { topic: 'Compound interest', verify: false } }));
   assert.equal(res.status, 200);
   assert.ok(res.headers.get('content-type').startsWith(CONTENT_TYPE));
   const { recs, turn } = await records(res);
@@ -60,8 +64,8 @@ test('web: memory CRUD and widget actions go through the same core', async () =>
 });
 
 test('web: a live steer reaches the in-flight lesson stream (shared core)', async () => {
-  const c = core({ demoDelayMs: 5 });
-  const res = await handleWebRequest(c, req('/api/lesson/stream', { body: { topic: 'Compound interest' } }));
+  const c = core({ client: lessonClient(5) });
+  const res = await handleWebRequest(c, req('/api/lesson/stream', { body: { topic: 'Compound interest', verify: false } }));
   const reader = res.body.getReader();
   const dec = new TextDecoder();
   let text = '';
@@ -83,7 +87,7 @@ test('web: a live steer reaches the in-flight lesson stream (shared core)', asyn
 
 test('web: a client disconnect aborts the turn and closes the stream', async () => {
   const ac = new AbortController();
-  const res = await handleWebRequest(core({ demoDelayMs: 20 }), req('/api/tutor/stream', { body: { message: 'Explain it again', lessonContext: { title: 'T', markdown: '# T\n\n## A\n\nText.' } }, signal: ac.signal }));
+  const res = await handleWebRequest(core({ client: lessonClient(20) }), req('/api/tutor/stream', { body: { message: 'Explain it again', lessonContext: { title: 'T', markdown: '# T\n\n## A\n\nText.' } }, signal: ac.signal }));
   const reader = res.body.getReader();
   await reader.read();
   ac.abort();

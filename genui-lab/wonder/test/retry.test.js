@@ -1,7 +1,7 @@
 // Recoverable streams: client-side failure classification, Retry-After / backoff, streamTurn's
 // failure paths (it always aborts its own request before throwing), the server's supersede
 // registry and keep-alive, a lesson continued after a real mid-stream drop (no duplicate
-// pages, Claude path and demo path), and Teacher tool calls replayed, not re-run, on a retry.
+// pages on the Claude path), and Teacher tool calls replayed, not re-run, on a retry.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import Anthropic from '@anthropic-ai/sdk';
@@ -10,18 +10,17 @@ import { createMemoryStore } from '../server/memory.js';
 import { friendlyError } from '../server/claude.js';
 import { createTurnWriter } from '../server/ndjson.js';
 import { createInflight, createTurnLedger, toolCallKey, retryNote } from '../server/retry.js';
-import { stripGroundingTags } from '../server/grounding.js';
 import {
   streamTurn, classifyFailure, parseRetryAfter, retryDelay, failureError, StreamError, isRetryableStatus, wait,
 } from '../public/stream-client.js';
-import { sourcesFromAppData, pageCount, pageTitles, statusAfterStop } from '../public/steering-core.js';
+import { sourcesFromAppData, pageTitles, statusAfterStop } from '../public/steering-core.js';
 import { CONTENT_TYPE } from '../../chatgpt-dil/src/stream.js';
-import { demo, fakeClient, fakeToolClient } from './helpers.js';
+import { fakeToolClient } from './helpers.js';
 
 const quiet = { warn() {}, error() {}, log() {}, info() {} };
 async function withServer(opts, fn) {
   const memory = opts.memory ?? createMemoryStore({ file: null });
-  const server = createWonderServer({ demoDelayMs: 0, logger: quiet, memoryFile: null, memory, ...opts });
+  const server = createWonderServer({ client: null, logger: quiet, memoryFile: null, memory, ...opts });
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   const base = `http://127.0.0.1:${server.address().port}`;
   try { return await fn(base, server, memory); } finally { server.closeAllConnections?.(); await new Promise((r) => server.close(r)); }
@@ -226,7 +225,7 @@ test('Claude lesson: a mid-stream drop, then the client\'s retry continues it wi
   // first sentence; the continuation guard drops the repeat
   const REST = '## Page two\n\nSecond page text, which is long enough to be cut partway through.\n\n## Page three\n\nThird page text.\n\n## Check your understanding\n\nQuiz here.\n';
   const client = droppingClient(HEAD, REST);
-  await withServer({ mode: 'claude', client }, async (base) => {
+  await withServer({ client }, async (base) => {
     const body = { topic: 'steady', level: 'beginner', variant: 'story', streamKey: 'lesson-abc-12345678', useWebSearch: false };
     let latest = null;
     let messageId = null;
@@ -255,28 +254,9 @@ test('Claude lesson: a mid-stream drop, then the client\'s retry continues it wi
   });
 });
 
-test('demo lesson: a drop mid-stream, then a resume, reproduces the lesson exactly once', async () => {
-  const full = demo('sky-blue.md');
-  await withServer({ mode: 'demo', demoDelayMs: 1 }, async (base) => {
-    const body = { topic: 'why is the sky blue', streamKey: 'lesson-sky-12345678', useWebSearch: false };
-    let latest = null;
-    let messageId = null;
-    const err = await streamTurn(`${base}/api/lesson/stream`, body, {
-      fetch: droppingFetch((seen) => (seen.match(/\\n## /g) || []).length >= 2),
-      onContent: (msg, r) => { latest = msg; messageId = r.messageId; },
-    }).catch((e) => e);
-    assert.ok(err?.retryable);
-    assert.ok(pageCount(latest.markdown) >= 1 && latest.markdown.length < full.length);
-    const r = await streamTurn(`${base}/api/lesson/stream`, { ...body, continueFrom: { markdown: latest.markdown, messageId } });
-    assert.equal(stripGroundingTags(r.message.markdown), full);
-    const titles = pageTitles(r.message.markdown);
-    assert.equal(new Set(titles).size, titles.length, 'no duplicate pages');
-  });
-});
-
 test('a new request with the same streamKey aborts the older one on the server before it streams', async () => {
   const client = droppingClient('# Old\n\nOld text.\n\n', '# New\n\nNew text.\n');
-  await withServer({ mode: 'claude', client }, async (base) => {
+  await withServer({ client }, async (base) => {
     const body = { topic: 'steady', streamKey: 'lesson-same-12345678', useWebSearch: false, verify: false };
     const ac = new AbortController();
     const old = streamTurn(`${base}/api/lesson/stream`, body, { signal: ac.signal }).catch((e) => e); // never aborted by the client
@@ -291,7 +271,7 @@ test('a new request with the same streamKey aborts the older one on the server b
 
 test('the server writes a blank keep-alive line while a stream is quiet', async () => {
   const client = droppingClient('# T\n\n', '');
-  await withServer({ mode: 'claude', client, heartbeatMs: 20 }, async (base) => {
+  await withServer({ client, heartbeatMs: 20 }, async (base) => {
     const ac = new AbortController();
     const res = await fetch(`${base}/api/lesson/stream`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ topic: 'x', useWebSearch: false }), signal: ac.signal });
     const reader = res.body.getReader();
@@ -344,7 +324,7 @@ test('Teacher retry after a mid-reply failure: remember is not saved twice, the 
   let added = 0;
   const add = memory.add.bind(memory);
   memory.add = (x) => { added++; return add(x); };
-  await withServer({ mode: 'claude', client, memory }, async (base) => {
+  await withServer({ client, memory }, async (base) => {
     const body = { message: 'I study on the train', turnId: 'turn-train-12345678', history: [] };
     const r1 = await streamTurn(`${base}/api/teacher/stream`, body);
     assert.equal(r1.failure.code, 'overloaded');

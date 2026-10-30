@@ -14,10 +14,9 @@ import { createWidgetActionHandler } from '../server/widget-actions.js';
 import { extractPracticeDeterministic, itemsFromStructured } from '../server/practice.js';
 import { TUTOR_SYSTEM_PROMPT, LESSON_SYSTEM_PROMPT } from '../server/prompts.js';
 import { SOCRATIC_TUTOR_MODE } from '../server/prompts-extra.js';
-import { buildDemoTutorReply } from '../server/demo.js';
 import { normalizePracticeItem, gradePracticeItem } from '../public/practice-core.js';
 import { explainEvidence, recordEvidence, estimateConcept } from '../public/mastery-core.js';
-import { fakeClient, demo, runProgram, catalogNodes, click } from './helpers.js';
+import { fakeClient, sampleLesson, runProgram, catalogNodes, click } from './helpers.js';
 
 const quiet = { warn() {}, error() {}, log() {}, info() {} };
 const SKY = {
@@ -67,7 +66,7 @@ test('Claude grader: structured call with the answer fenced as data; failure fal
   assert.match(graderUserMessage({ ...SKY, answer: 'a' }), /Model answer: Air scatters/);
   const broken = fakeClient({});
   broken.messages.create = async () => { throw new Error('down'); };
-  const grade = createGrader({ getClient: () => broken, getMode: () => 'claude', logger: quiet });
+  const grade = createGrader({ getClient: () => broken, logger: quiet });
   assert.equal((await grade({ ...SKY, answer: GOOD })).grade.source, 'keywords');
   assert.deepEqual(await grade({ ...SKY, answer: 'too short' }), { ok: false, error: 'Write a sentence or two first.' });
 });
@@ -97,7 +96,7 @@ test('explain practice items: normalized, graded from a server grade, extracted 
   assert.equal(normalizePracticeItem({ type: 'explain', prompt: 'p', rubric: [] }), null);
   assert.deepEqual(gradePracticeItem(item, { score: 2 }), { correct: true, rating: 3, expected: 'S' });
   assert.deepEqual(gradePracticeItem(item, { score: 0 }).rating, 1);
-  const det = extractPracticeDeterministic(demo('sky-blue.md'));
+  const det = extractPracticeDeterministic(sampleLesson('sky-blue.md'));
   const ex = det.items.find((i) => i.type === 'explain');
   assert.equal(ex.concept, 'Rayleigh scattering');
   assert.equal(ex.rubric.length, 3);
@@ -153,7 +152,7 @@ test('prompts teach ExplainBack; Guide me adds the Socratic block after the cach
   assert.match(LESSON_SYSTEM_PROMPT, /exactly one <ExplainBack>/);
   assert.match(TUTOR_SYSTEM_PROMPT, /<ExplainBack>/);
   const client = fakeClient({ text: 'What do you think?' });
-  const server = createWonderServer({ mode: 'claude', client, demoDelayMs: 0, logger: quiet, memory: createMemoryStore({ file: null }) });
+  const server = createWonderServer({ client, logger: quiet, memory: createMemoryStore({ file: null }) });
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   const base = `http://127.0.0.1:${server.address().port}`;
   try {
@@ -169,17 +168,4 @@ test('prompts teach ExplainBack; Guide me adds the Socratic block after the cach
     server.closeAllConnections?.();
     await new Promise((r) => server.close(r));
   }
-});
-
-test('demo Guide me: a guiding question about a lesson term, the answer only when asked outright', () => {
-  const lessonContext = { title: 'Sky', markdown: demo('sky-blue.md') };
-  const q = buildDemoTutorReply({ lessonContext, message: 'Why is Rayleigh scattering stronger for blue?', mode: 'socratic' });
-  assert.match(q, /Think about \*\*Rayleigh scattering\*\*/);
-  assert.match(q, /<Followups items=\{\["Give me a hint"/);
-  const tell = buildDemoTutorReply({ lessonContext, message: 'just tell me about Mie scattering', mode: 'socratic' });
-  assert.match(tell, /\*\*Mie scattering\*\*: /);
-  const direct = buildDemoTutorReply({ lessonContext, message: 'Why is Rayleigh scattering stronger for blue?' });
-  assert.doesNotMatch(direct, /Before I answer/);
-  const compiled = compileWonder(q, { salt: 's' });
-  assert.deepEqual(compiled.followups, ['Give me a hint', "I think it's because…", 'Just tell me']);
 });

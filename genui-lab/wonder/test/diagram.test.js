@@ -6,7 +6,7 @@ import { validateComponentProps } from '../server/catalog-schema.js';
 import { compileWonder } from '../server/compile.js';
 import { lintLesson } from '../server/critic.js';
 import { LESSON_SYSTEM_PROMPT, TUTOR_SYSTEM_PROMPT } from '../server/prompts.js';
-import { demo, runProgram, catalogNodes } from './helpers.js';
+import { sampleLesson, runProgram, catalogNodes } from './helpers.js';
 
 const SCENE = {
   title: 'Light meets air', width: 400, height: 220,
@@ -189,9 +189,9 @@ test('sandbox: labels grow on phones so they stay readable', () => {
   assert.equal(size(runProgram(compileWonder(tag(SCENE)), { viewportWidth: 390 })), 18.8);
 });
 
-test('sky-blue demo: the sunset Diagram is valid, steps through, and the lesson still lints clean', () => {
-  const md = demo('sky-blue.md');
-  const out = compileWonder(md, { salt: 'demo' });
+test('sky-blue sample: the sunset Diagram is valid, steps through, and the lesson still lints clean', () => {
+  const md = sampleLesson('sky-blue.md');
+  const out = compileWonder(md, { salt: 'sample' });
   const dg = out.components.find((c) => c.name === 'Diagram');
   assert.equal(dg.status, 'valid');
   const env = runProgram(out);
@@ -203,18 +203,18 @@ test('sky-blue demo: the sunset Diagram is valid, steps through, and the lesson 
   assert.equal(lintLesson(md).score, 1);
 });
 
-test('every streamed prefix of the sky-blue demo keeps Diagram valid or absent', () => {
-  const md = demo('sky-blue.md');
+test('every streamed prefix of the sky-blue sample keeps Diagram valid or absent', () => {
+  const md = sampleLesson('sky-blue.md');
   const start = md.indexOf('<Diagram');
   const stop = md.indexOf('/>', md.indexOf('caption=', start)) + 2;
   for (let i = start - 2; i <= stop + 2; i += 37) {
-    const out = compileWonder(md.slice(0, i), { partial: true, salt: 'demo' });
+    const out = compileWonder(md.slice(0, i), { partial: true, salt: 'sample' });
     assert.ok(out.components.filter((c) => c.name === 'Diagram').every((c) => c.status !== 'invalid'), `prefix ${i}`);
     assert.doesNotMatch(out.code, /Diagram title=|shapes=\{/, 'raw tag text never leaks into the program');
     const env = runProgram(out);
     assert.deepEqual(env.errors, [], `prefix ${i}`);
   }
-  const env = runProgram(compileWonder(md.slice(0, stop), { partial: true, salt: 'demo' }));
+  const env = runProgram(compileWonder(md.slice(0, stop), { partial: true, salt: 'sample' }));
   assert.equal(catalogNodes(env.mirror, 'Diagram').length, 1);
 });
 

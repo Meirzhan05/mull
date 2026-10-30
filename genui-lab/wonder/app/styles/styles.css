@@ -368,14 +368,13 @@ main { display: block; padding: 20px 16px calc(var(--tabbar-h) + 32px + env(safe
 .ledger-bar.met i { background: var(--success); }
 .small-progress { height: 4px; }
 
-.demo-banner {
+.setup-banner {
   display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; align-items: center; margin: 0; padding: 8px 16px;
   background: var(--brand-subtle); color: var(--ink); font-size: 0.8125rem; text-align: center; border-bottom: 1px solid var(--line);
 }
-.demo-banner strong { font-weight: 600; color: var(--accent); }
-.demo-banner code { font-family: var(--font-mono); font-size: 0.75rem; padding: 1px 5px; border-radius: var(--r-xs); background: var(--surface); border: 1px solid var(--line); }
-.demo-banner .icon-btn { width: 24px; height: 24px; border: 0; background: transparent; }
-.demo-banner .icon-btn svg { width: 14px; height: 14px; }
+.setup-banner strong { font-weight: 600; color: var(--accent); }
+.setup-banner .icon-btn { width: 24px; height: 24px; border: 0; background: transparent; }
+.setup-banner .icon-btn svg { width: 14px; height: 14px; }
 
 /* ---------------------------------------------------------------- generic */
 .card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-lg); box-shadow: var(--shadow-card); }

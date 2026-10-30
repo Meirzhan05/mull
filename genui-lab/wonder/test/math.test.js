@@ -9,7 +9,7 @@ import { protectMath } from '../server/math-spans.js';
 import { tryParseExpression, parseLenientJSON, LATEX_COMMANDS } from '../server/lenient-json.js';
 import { createWonderServer } from '../server/app.js';
 import { prettyLatex, KATEX_OPTIONS } from '../public/math.js';
-import { runProgram, catalogNodes, demo, DEMO_FILES } from './helpers.js';
+import { runProgram, catalogNodes, sampleLesson, LESSON_FILES } from './helpers.js';
 
 /** Every math node of a compiled program, as {latex, display}. */
 function mathNodes(src, opts) {
@@ -170,10 +170,10 @@ test('catalog inline math in a LessonStepper step and a Quiz option', () => {
   assert.match(qenv.mirror.text(), /\$3, \$4/);
 });
 
-test('every math formula in the demo lessons typesets with KaTeX', () => {
+test('every math formula in the sample lessons typesets with KaTeX', () => {
   let count = 0;
-  for (const file of DEMO_FILES) {
-    const { env } = mathNodes(demo(file), { salt: file });
+  for (const file of LESSON_FILES) {
+    const { env } = mathNodes(sampleLesson(file), { salt: file });
     for (const m of env.mirror.findAll((n) => n.type === 'math')) {
       const latex = env.mirror.text(m);
       const html = katex.renderToString(latex, { ...KATEX_OPTIONS, throwOnError: true, displayMode: !!m.props.display });
@@ -182,7 +182,7 @@ test('every math formula in the demo lessons typesets with KaTeX', () => {
     }
   }
   assert.ok(count >= 4, `found ${count} formulas`);
-  const sky = mathNodes(demo('sky-blue.md')).math;
+  const sky = mathNodes(sampleLesson('sky-blue.md')).math;
   assert.deepEqual(sky.slice(0, 3), [
     { latex: String.raw`\text{scattering} \propto \frac{1}{\lambda^4}`, display: true },
     { latex: String.raw`\lambda`, display: false },
@@ -198,7 +198,7 @@ test('Unicode fallback stays readable when KaTeX is unavailable', () => {
 let server;
 let base;
 before(async () => {
-  server = createWonderServer({ mode: 'demo', demoDelayMs: 0, logger: { warn() {}, error() {}, log() {} }, memoryFile: null });
+  server = createWonderServer({ client: null, logger: { warn() {}, error() {}, log() {} }, memoryFile: null });
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   base = `http://127.0.0.1:${server.address().port}`;
 });

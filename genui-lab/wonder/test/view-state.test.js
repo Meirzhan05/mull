@@ -11,7 +11,7 @@ import {
 import { resolutionIdsOf } from '../public/steering-core.js';
 import { createStore } from '../public/store.js';
 import { createSourceRegistry, citeComponentResults } from '../server/grounding.js';
-import { demo, catalogNodes } from './helpers.js';
+import { sampleLesson, catalogNodes } from './helpers.js';
 
 const SALT = 'msg-view-state';
 const STEPPER = '<LessonStepper title="Steps" steps={[{"label":"One","text":"First step."},{"label":"Two","text":"Second step."},{"label":"Three","text":"Third step."}]}/>';
@@ -265,8 +265,8 @@ test('Cite popover is ephemeral; KeyTerm and other selections are not persisted'
   assert.match(text(b, 'LessonStepper'), /2 \/ 3/);
 });
 
-test('FunctionGraph slider value round-trips through a snapshot (compound-interest demo)', () => {
-  const prog = compileWonder(demo('compound-interest.md'), { salt: SALT });
+test('FunctionGraph slider value round-trips through a snapshot (compound-interest sample)', () => {
+  const prog = compileWonder(sampleLesson('compound-interest.md'), { salt: SALT });
   const a = mount(prog);
   const graph = () => card(a, 'FunctionGraph');
   assert.match(a.mirror.text(graph()), /r = 0\.07/);
@@ -280,7 +280,7 @@ test('FunctionGraph slider value round-trips through a snapshot (compound-intere
   assert.match(b.mirror.text(g), /1000·\(1\+0\.05\)\^x/, 'formula uses the restored value');
   assert.ok(b.mirror.findAll((n) => n.props?.ariaLabel === 'Set r to 0.05' && n.props.ariaPressed === true, g).length, 'track shows the restored stop');
   assert.ok(b.mirror.findAll((n) => n.props?.onClick && b.mirror.text(n) === 'Reset', g).length, 'Reset (changed) button shown');
-  // the demo's flashcards and stepper round-trip too
+  // the sample's flashcards and stepper round-trip too
   clickIn(b, card(b, 'Flashcards'), 'Next');
   clickAria(b, card(b, 'Flashcards'), 'Flip card');
   clickIn(b, card(b, 'LessonStepper'), 'Next step');

@@ -79,7 +79,7 @@ export function renderTeacher(ctx, threadId) {
       toggleThreads,
       el('div', { class: 'teacher-head-mid' },
         el('strong', { class: 'teacher-title' }, thread?.title || 'New chat'),
-        el('span', { class: 'muted small' }, status.mode === 'claude' ? 'Teacher · Claude' : 'Teacher · demo replies')),
+        el('span', { class: 'muted small' }, 'Teacher · Claude')),
       memChip,
       ctxToggle),
     scroller,

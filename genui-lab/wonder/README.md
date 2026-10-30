@@ -5,10 +5,10 @@ Mull is a working learning app that combines the two systems reverse-engineered 
 - **wondering.app's product loop.** You pick a topic or plan a course. You get a short paged lesson with interactive widgets and a tutor you can ask about it. When you finish, knowledge cards are revealed in a "pack opening", and spaced-repetition review is scheduled with FSRS. A daily streak is tracked throughout. A **Teacher** agent plans your study, proposes lessons, quizzes you and remembers what matters, and a **learner memory** personalizes every lesson, tutor reply and Teacher turn.
 - **ChatGPT's "intelligent UI" (DIL).** The model writes JSX-like UI tags inline in its markdown. The server recompiles the growing message into a DIL program on every revision and streams it as `conversation-source` NDJSON. The browser runs the program in a sandboxed Web Worker and applies the resulting render ops to the DOM.
 
-The models are Claude: `claude-opus-5-5` for lessons, `claude-sonnet-5-5` for the tutor and the Teacher, and `claude-haiku-5-5` for the extractions after each lesson (see [Models](#models)). Without credentials the app runs in **demo mode**, streaming pre-written lessons through exactly the same pipeline.
+The models are Claude: `claude-opus-5-5` for lessons, `claude-sonnet-5-5` for the tutor and the Teacher, and `claude-haiku-5-5` for the extractions after each lesson (see [Models](#models)). The app needs them: without credentials, the routes that write lessons, tutor replies, Teacher turns and course plans answer `503` (see [Without a Claude key](#without-a-claude-key)).
 
 ```
-Claude (or demo/*.md)  ──text deltas──▶  server/compile.js  (chatgpt-dil compiler + learning-catalog pass:
+Claude                 ──text deltas──▶  server/compile.js  (chatgpt-dil compiler + learning-catalog pass:
                                           lenient-JSON props → validated → hoisted constants; invalid → fallback md)
                                               │ full `dil` every ~150 ms or when a tag closes
                                               ▼
@@ -33,20 +33,17 @@ cp .env.example .env        # then put your key after ANTHROPIC_API_KEY=
 npm run dev                 # next dev → http://localhost:8750
 ```
 
-For production, `npm run build && npm start` (`next start -p 8750`). `ANTHROPIC_API_KEY=... npm run dev` also works, as does an `ant auth login` profile. The server never reads, prints or logs the key. `GET /api/status` returns only `{mode: "claude"|"demo", model, videos: "youtube"|"demo"|"off"}`. Pass `-p <port>` to `next` to change the port. `WONDER_MODE=demo` forces demo mode even when credentials exist. `WONDER_MEMORY_FILE` moves the learner memory file. `WONDER_FIGURES=off` stops `<Figure/>` from looking images up on Wikimedia Commons, and `WONDER_FIGURE_CHECK=off` skips the Figure vision check. `YOUTUBE_API_KEY` lets `<Video/>` search YouTube, and `WONDER_VIDEOS=off` turns videos off (see [Credentials](#credentials)). `WONDER_RECORD_DIR=<dir>` writes each lesson, tutor and Teacher stream's NDJSON to a file there; that is how the fixtures were captured, and the records contain no credentials.
+For production, `npm run build && npm start` (`next start -p 8750`). `ANTHROPIC_API_KEY=... npm run dev` also works, as does an `ant auth login` profile. The server never reads, prints or logs the key. `GET /api/status` returns only `{claude, model, videos: "youtube"|"off", materials}`, plus `error` when `claude` is false. Pass `-p <port>` to `next` to change the port. `WONDER_MEMORY_FILE` moves the learner memory file. `WONDER_FIGURES=off` stops `<Figure/>` from looking images up on Wikimedia Commons, and `WONDER_FIGURE_CHECK=off` skips the Figure vision check. `YOUTUBE_API_KEY` lets `<Video/>` search YouTube, and `WONDER_VIDEOS=off` turns videos off (see [Credentials](#credentials)). `WONDER_RECORD_DIR=<dir>` writes each lesson, tutor and Teacher stream's NDJSON to a file there; that is how the fixtures were captured, and the records contain no credentials.
 
-### Demo mode
+### Without a Claude key
 
-If there is no `ANTHROPIC_API_KEY`/`ANTHROPIC_AUTH_TOKEN` and no profile credential file, the server starts in demo mode. It also switches to demo mode when the first Claude call fails with `AuthenticationError` or a missing-credentials error before any text was produced. The UI then shows a "Demo mode — set ANTHROPIC_API_KEY to use Claude" banner.
+If there is no `ANTHROPIC_API_KEY`/`ANTHROPIC_AUTH_TOKEN` and no profile credential file, the server starts without Claude:
 
-Demo mode streams these through the real compile + NDJSON pipeline in 20–60 character chunks:
+- `GET /api/status` says `{claude: false, error: "Claude is not configured on this server."}`, and the app shows that in a banner.
+- `POST /api/lesson/stream`, `/api/tutor/stream`, `/api/teacher/stream` and `/api/course/plan` answer `503` with `{ok: false, error, code: "not_configured"}` before anything else (sign-in, daily caps). The browser shows the message and does not retry.
+- Everything that does not need Claude still works: saved lessons, review, memory, materials, sync. Practice and memory extraction fall back to their deterministic rules (cards and items from the lesson's `<KeyTerm>` and `<Quiz>` components; a struggle noted when you miss at least a third of a quiz), and free-response grading falls back to the keyword grader. Nothing is charged against the daily caps.
 
-- **Lessons** in `server/demo/`: *How transformers predict the next word*, *Why the sky is blue* and *Compound interest*. The topic is matched by keyword, and any other topic falls back to one of the three.
-- **Tutor replies.** `tutor-explain.md` and `tutor-quiz.md` are templates. The quiz reply is a `<Quiz>` built from the lesson's own `<KeyTerm>`s. "Explain this" on a missed quiz question gets a reply built from that question's explanation and hint.
-
-- **Teacher turns.** `server/teacher-demo.js` is a scripted stand-in for Claude that speaks the Messages streaming event protocol (text deltas, `tool_use` blocks with `input_json_delta`, stop reasons). The real tool loop drives it, so demo turns go through the same validation, tool execution, card splicing and NDJSON path. It answers goals/plans (remember → get_progress → plan_study + create_lesson), "quiz me" (a Quiz from your last lesson), "how am I doing", "forget that", facts about yourself, and anything else with a lesson suggestion.
-
-Practice extraction in demo mode is deterministic, built from the lesson's `<KeyTerm>` and `<Quiz>` components. Memory extraction in demo mode notes a struggle when you miss at least a third of a lesson's quiz.
+A key that Claude rejects is reported per request: the stream ends with `control failed` code `auth_failed`.
 
 ## The app
 
@@ -83,7 +80,7 @@ Five sections, in a sidebar on desktop (with the streak and a link to your profi
 | How the model asks for UI | Inline JSX-like tags in markdown, e.g. `<box padding={4}>`, `<StockChart …/>` (chatgpt-findings §8.2) | `{{interactive:name data='…'}}` markers, or `embed` JSON spliced after paragraph *n* (wondering-findings §1.1, §1.3) | The ChatGPT way: inline tags. Wondering's widgets become **Capitalized catalog components** with JSON props: `<Quiz questions={[…]}/>`, `<Flowchart nodes={…}/>` |
 | Compilation | Server recompiles the whole message into `dil.code` + `constants` each revision | Client-side marker parsing to React components | `server/compile.js` wraps `chatgpt-dil/src/compiler.js` (byte-exact for the captured stream) with a pre-pass that parses `{…}` props as lenient JSON, validates them, and hoists them into `__dilConstants` |
 | Prop validation | Unknown | `validateVoiceVisualPayload` bounds, alias-tolerant normalizers (§1.4, §3.5) | `server/catalog-schema.js`. Visual bounds come from wondering-genui's `voice-visuals.js` (Flowchart 3–8 nodes, Timeline 3–7, BarChart 2–6 with a required unit, and so on). Invalid → component dropped, fallback markdown in its place |
-| Streaming robustness | Half-written tags dropped; unclosed elements auto-closed | `removeUnrenderableInteractiveMarkers` trims partial markers | Same as ChatGPT. A half-written catalog tag at the tail is cut. Tested on **every prefix** of every demo lesson |
+| Streaming robustness | Half-written tags dropped; unclosed elements auto-closed | `removeUnrenderableInteractiveMarkers` trims partial markers | Same as ChatGPT. A half-written catalog tag at the tail is cut. Tested on **every prefix** of every sample lesson |
 | Transport | `conversation-source+ndjson` v2: content append/replace, `dil`, `followupPrompts`, controls, reasoning (§1.2) | SSE `content` / `status` / `quick_replies` / `final` (§2.1) | NDJSON v2. Every record is validated with chatgpt-dil's `validateRecord` before writing. Reasoning records narrate "Planning the lesson…" and "Writing page N…" |
 | Rendering | Sandboxed worker, hooks runtime, binary op buffer, `data-d-*` host primitives (§3.1–3.3) | React components | chatgpt-dil `runtime.js` + `host.js`, unchanged. The learning catalog is injected **into the sandbox** as a program prelude (`public/learning-runtime.js`) and built only from DIL primitives + `DIL.useState` |
 | Widget actions | `GenUI.dispatchWidgetAction` → `/backend-api/widget_server_action`; client actions such as `issue_new_turn` (§3.6) | Teacher `answer_quiz`, chat quick-reply actions | `POST /api/widget_action`: `quiz_answer` / `quiz_restart` return `componentResults` merged into `appData.opGenui`; `explain_more` returns a tutor turn; `practice_grade`. Client actions: `issue_new_turn` → tutor message, `quiz_complete` → XP, `save_flashcards` → deck |
@@ -273,7 +270,7 @@ Memory holds free-text facts. The learner model tracks what the learner actually
   - It also checks the words inside Diagrams and Figures. The props are long JSON, so after the lesson the message lists, by page, each valid Diagram's title, labels, part texts, step labels and texts, and caption, and each Figure's query, caption, alt, question and answer (`mediaDigest`). A false claim there is a `factual` issue. A mislabeled part, steps out of order, or a Figure question its answer does not answer is a `widget` issue. The critic cannot see Figure images; that is the vision check's job.
   - It returns issues and `quizFixes`. A fix is applied to the Quiz props only if the rewritten Quiz still validates, and the lesson is then updated with one `replace` record.
   - A `quality-report` control record carries the lint result, the critic verdict, the issues and the fixes. The client does not show or keep it; when the critic corrected quiz answers it says so in a toast ("1 quiz answer corrected.").
-  - Demo mode runs the lint only. `verify: false` on the request skips both checks.
+  - A refused or truncated lesson gets the lint only. `verify: false` on the request skips both checks.
 - **Eval harness (`npm run eval`).**
   - Generates a lesson per topic in `evals/topics.json` through an in-process server, so it runs the real prompts, compile, lint and critic. It uses an empty in-memory learner memory, and web search is off unless `--web` is passed.
   - Scores each lesson with an LLM judge (`server/judge.js`), 1–5 with a rationale on accuracy, clarity, level fit, interactivity and quiz quality.
@@ -284,7 +281,7 @@ Memory holds free-text facts. The learner model tracks what the learner actually
     - for a Figure, whether the final record has an image (`found`, with the Commons title), the vision check dropped it (`rejected`, with why), or nothing was found.
   - The summary aggregates these: lessons with a Diagram, with a Figure and with a shown image, plus valid, found, dropped and missing counts.
   - Five topics tagged `media` are physical or spatial (heart, camera lens, plate tectonics, water cycle, Moon phases). `--tag media` runs only those.
-  - Options: `--limit n`, `--concurrency n`, `--topics file`, `--tag name`, `--no-judge`, `--no-verify`, `--web`, `--out dir`. `--demo` runs with no API calls.
+  - Options: `--limit n`, `--concurrency n`, `--topics file`, `--tag name`, `--no-judge`, `--no-verify`, `--web`, `--out dir`. Without a Claude key the eval stops before it starts.
   - A Claude run costs about 3 calls per lesson: lesson, critic and judge. Each found Figure adds a vision check on Haiku.
   - Lessons and the critic use the app's [models](#models); the judge stays on Opus. `WONDER_MODEL_LESSON=claude-sonnet-5-5 npm run eval` writes the lessons on Sonnet instead, to compare.
   - Tokens per task and model, and an estimated cost from list prices (`PRICES` in `evals/run.js`), go into `usage` in the JSON and a "Tokens and cost" table in the markdown. `lessonUsd` is the cost per lesson without the judge.
@@ -299,12 +296,12 @@ WONDER_MODEL_LESSON=claude-sonnet-5-5 WONDER_MODEL_CRITIC=claude-sonnet-5-5 npm 
 
 - **`text-input` primitive.** A Mull extension to the chatgpt-dil host, rendered as a `textarea`. Typing reaches the program through `onChange`. The host never overwrites the value while the field has focus.
 - **`<ExplainBack prompt concept rubric={[…]} sampleAnswer/>`.** The learner explains the idea in their own words and taps "Check my answer", which sends `explain_grade` to `/api/widget_action`. `server/grader.js` grades the answer:
-  - **Claude mode:** one structured call at effort low, with the answer fenced as data. It returns a 0–3 score, each rubric criterion met or missed with quoted evidence, feedback, the misconception and a follow-up question.
-  - **Demo mode,** or when the call fails: a keyword grader.
+  - **With Claude:** one structured call at effort low, with the answer fenced as data. It returns a 0–3 score, each rubric criterion met or missed with quoted evidence, feedback, the misconception and a follow-up question.
+  - **Without Claude,** or when the call fails: a keyword grader.
 
   The widget then shows the score, criteria, feedback, "Show a model answer", "Ask the tutor" and "Try again". The first attempt counts toward the day's activity and becomes mastery evidence. Lessons include one ExplainBack on their last content page.
 - **Review.** Extraction adds one `explain` practice item per lesson. The review screen grades it through the same grader (`practice_grade`), and the score maps to an FSRS rating (0 Again … 3 Easy).
-- **"Guide me."** A switch in the tutor header (saved as `settings.tutorMode`) sends `mode: "socratic"`. The tutor then asks one guiding question at a time and gives the answer only after two real tries or when asked outright. The rules (`SOCRATIC_TUTOR_MODE`) go after the cache breakpoint, so the cached tutor prompt is the same in both modes. Demo replies follow the same pattern.
+- **"Guide me."** A switch in the tutor header (saved as `settings.tutorMode`) sends `mode: "socratic"`. The tutor then asks one guiding question at a time and gives the answer only after two real tries or when asked outright. The rules (`SOCRATIC_TUTOR_MODE`) go after the cache breakpoint, so the cached tutor prompt is the same in both modes.
 
 ## Tests
 
@@ -312,7 +309,7 @@ WONDER_MODEL_LESSON=claude-sonnet-5-5 WONDER_MODEL_CRITIC=claude-sonnet-5-5 npm 
 node --test genui-lab/wonder/test/index.js      # no network (Figure and Video lookups are stubbed)
 ```
 
-- **`mastery.test.js`, `critic.test.js`, `freeresponse.test.js`** cover phases 6–8: the estimator and decay, evidence, prompt injection, the lint, quiz fixes and the `replace` record, the eval harness end to end (demo and fake Claude), the grader, the ExplainBack widget in the sandbox, explain practice items and Guide me.
+- **`mastery.test.js`, `critic.test.js`, `freeresponse.test.js`** cover phases 6–8: the estimator and decay, evidence, prompt injection, the lint, quiz fixes and the `replace` record, the eval harness end to end (fake Claude, and no run without a key), the grader, the ExplainBack widget in the sandbox, explain practice items and Guide me.
 
 - **`compile.test.js`**
   - Lenient JSON, and proof that it never evaluates code.
@@ -321,17 +318,18 @@ node --test genui-lab/wonder/test/index.js      # no network (Figure and Video l
   - Voice-visual bounds.
   - Followups lifted out of the program.
   - Code fences ignored.
-  - **Every prefix of every demo lesson** compiles to valid JavaScript, and sampled prefixes run without runtime errors.
-- **`catalog.test.js`** runs each demo in the chatgpt-dil runtime with the learning catalog. It drives Stepper, Quiz (answer, hint, server action, "Explain this", results, retry, restore from `componentResults`), KeyTerm/explain_more, Reveal, CompareToggle, Slider and Flashcards. It also checks mobile layouts and that component state survives a streamed recompile.
-- **`server.test.js`** runs the demo-mode HTTP server end to end.
-  - Records are parsed with chatgpt-dil's parser, the stream ends with `end`, and the final markdown equals the demo source.
+  - **Every prefix of every sample lesson** (`test/fixtures/lessons/`) compiles to valid JavaScript, and sampled prefixes run without runtime errors.
+- **`catalog.test.js`** runs each sample lesson in the chatgpt-dil runtime with the learning catalog. It drives Stepper, Quiz (answer, hint, server action, "Explain this", results, retry, restore from `componentResults`), KeyTerm/explain_more, Reveal, CompareToggle, Slider and Flashcards. It also checks mobile layouts and that component state survives a streamed recompile.
+- **`server.test.js`** runs the HTTP server end to end with a fake client that writes the sample lessons.
+  - Records are parsed with chatgpt-dil's parser, the stream ends with `end`, and the final markdown equals what the client wrote.
   - The final dil renders Quiz, Stepper and Flowchart nodes.
-  - Also covered: the tutor and its followups, widget_action grading, practice extract, course plan, static serving and path traversal.
+  - Also covered: the tutor and its followups, widget_action grading, practice extract, static serving and path traversal.
 - **`claude.test.js`** uses a fake client to check:
   - Request params: model, adaptive thinking, effort, `fallbacks:"default"` + beta, `cache_control`, no sampling params or prefill.
   - Streaming, tutor context and history, followups.
   - Refusal and max_tokens handling.
-  - Rate-limit, bad-request and API errors, plus the switch to demo on auth failure.
+  - Rate-limit, bad-request, auth and API errors.
+  - No credentials: `/api/status` says so and the Claude routes answer 503.
   - Structured extraction and the course plan.
 - **`teacher.test.js`** drives the Teacher loop with a scripted streaming fake (`fakeToolClient` in `helpers.js`):
   - Request params: model, adaptive thinking, effort, `fallbacks` + beta, `cache_control` with memory after it, every tool strict + `eager_input_streaming` with `additionalProperties:false` everywhere, no `tool_choice`, static tools.
@@ -342,19 +340,19 @@ node --test genui-lab/wonder/test/index.js      # no network (Figure and Video l
   - Unparseable-JSON retry, API errors, and the 6-request cap.
   - History cleaning; memory off.
   - All card widget actions, including after a restart.
-  - The demo Teacher end to end over HTTP.
+  - A multi-step Teacher turn end to end over HTTP (remember, get_progress, plan_study, create_lesson, quiz_me, forget).
   - Client history and progress helpers.
-- **`memory.test.js`** covers the store (CRUD, atomic file, caps, de-duplication, corrupt file), `/api/memory` endpoints, Claude and demo extraction (effort low, json_schema, cap 3, de-dup), and memory injection into lesson and tutor prompts after the breakpoint (left out when `memoryEnabled:false`).
+- **`memory.test.js`** covers the store (CRUD, atomic file, caps, de-duplication, corrupt file), `/api/memory` endpoints, Claude and deterministic extraction (effort low, json_schema, cap 3, de-dup), and memory injection into lesson and tutor prompts after the breakpoint (left out when `memoryEnabled:false`).
 - **`catalog.test.js`** also renders TeacherCard (approval/plan/memory/skeleton, desktop and 390 px) from `componentResults`, presses every button and checks the dispatched widget actions and the re-render with new state.
 - **`real-claude-teacher.test.js`** replays a recorded real Teacher turn (`test/fixtures/claude-teacher-statistics.ndjson`) through the browser client's `streamTurn` in uneven chunks, and renders every streamed revision and the final program.
 - **`math.test.js`**:
   - The real Claude `<math>` example keeps every brace; `$$`, `\[ \]`, `\( \)` and `$…$` become math nodes; prices (`$40,000 … $3, $4`, `$6.`, `costs $5 and $10`) stay text; math in code fences and spans is untouched.
   - Every prefix of a math-heavy sample compiles and runs, text outside math never holds raw LaTeX, and every math node is a complete formula.
   - LaTeX-aware JSON escapes, with ordinary `\n`/`\t`/`\"` still decoding.
-  - Inline math in a LessonStepper step and Quiz options; every demo formula typesets with KaTeX (`throwOnError: true`); the Unicode fallback.
+  - Inline math in a LessonStepper step and Quiz options; every sample-lesson formula typesets with KaTeX (`throwOnError: true`); the Unicode fallback.
   - `/vendor/katex/` serves css, js and fonts (200) and refuses traversal and other files (404).
 - **`view-state.test.js`** covers widget state persistence: a snapshot restores every persisted widget on the first render (also via `setStateSnapshot`), one debounced message per burst of clicks (mock timers), live state and the snapshot survive streamed recompiles, unknown ids/keys and invalid values are ignored, a revision that rewrites or removes a widget drops its state while unchanged widgets keep theirs, reset, server-graded Quiz state wins over local progress, Cite/KeyTerm stay ephemeral, the compound-interest FunctionGraph slider, Stepper and Flashcards round-trip (desktop and 390 px), size caps and eviction, and store persistence with corrupted snapshots.
-- **`web.test.js`** drives the Fetch-API adapter used by the Next route handlers: status and 404s, a demo lesson as NDJSON, memory and course plans, a live steer reaching the in-flight stream, client-disconnect aborts, and the read-only static mounts.
+- **`web.test.js`** drives the Fetch-API adapter used by the Next route handlers: status and 404s, a lesson as NDJSON, memory and course plans, a live steer reaching the in-flight stream, client-disconnect aborts, and the read-only static mounts.
 - **`progress.test.js`** covers the Today and You helpers: studied today, the week strip, the activity grid, topic suggestions from interests, the Up next order and the palette matcher.
 - **`deck.test.js`** covers practice grading, FSRS deck scheduling (learning steps, graduation, growing intervals, lapses), activity/streak rules, and localStorage persistence when storage is blocked or corrupted.
 
@@ -368,10 +366,10 @@ server/paths.js           app root on disk (also inside a Next bundle)
 server/claude.js          Claude params/stream/errors server/prompts.js     system prompts + JSON schemas
 server/compile.js         compiler extension         server/lenient-json.js JSON5-ish prop parser
 server/catalog-schema.js  prop validators/fallbacks  server/ndjson.js       conversation-source writer
-server/demo.js, demo/*.md demo mode                  server/practice.js     practice extraction
+server/practice.js        practice extraction
 server/widget-actions.js  /api/widget_action
 server/teacher.js         Teacher tools, validation, loop, card store + actions
-server/teacher-demo.js    scripted demo "model"      server/memory.js       learner memory store
+server/memory.js          learner memory store
 server/memory-extract.js  post-lesson memory extraction
 public/app.js (routing, course, lesson, tutor, finish), shell.js (sidebar, tabs, ⌘K palette), today.js, library.js, you.js, onboarding.js
 public/progress-core.js (goal, streak week, heatmap, Up next), ui.js, review.js, store.js, deck.js, practice-core.js, math.js (KaTeX)
@@ -380,7 +378,7 @@ public/teacher-screen.js, teacher-core.js (progress snapshot, history), memory-s
 public/learning-catalog.js (in-sandbox components), learning-runtime.js, wonder-worker.js, dil-surface.js, stream-client.js
 public/view-state.js      widget state snapshots (store, useSaved, caps)   public/lesson-menu.js  lesson overflow menu
 server/diagram.js         Diagram validation/fallback    server/figures.js   Figure validation, Commons lookup, resolver
-server/videos.js          Video validation, YouTube lookup, segment picking, demo clips
+server/videos.js          Video validation, YouTube lookup, segment picking
 server/media-resolver.js  per-stream Video lookups (componentResults); combines them with Figure's
 public/catalog-media.js   Diagram + Figure + Video (in-sandbox components)
 public/figure-hosts.js, video-hosts.js   what the renderer may load / embed
@@ -420,8 +418,7 @@ Interactive widgets keep their state across reloads and when a lesson is reopene
 - **Math falls back to Unicode only when KaTeX cannot load.** Then `public/math.js` rewrites LaTeX into Unicode (`\frac{1}{\lambda^4}` becomes `1⁄λ⁴`), which reads fine but is not typeset. Citation pills are never inserted inside an unfinished math span: the grounding safe-point check reuses `math-spans.js`, including its price rules.
 - **Server-side widget state is in memory** (quiz answers per resolution id). The client persists `componentResults` with each lesson, so reloads still restore it, but a server restart forgets its copy.
 - **One sandbox worker per surface**: the lesson plus each tutor reply. Very long tutor threads therefore start many workers. They are terminated when you leave the lesson.
-- **Tutor replies are not lesson-specific in demo mode.** They are templates that use the lesson's KeyTerms and Quiz. Any other topic streams one of the three sample lessons.
-- **Accounts are optional.** Without Neon Auth and a database, courses, lessons, the deck and activity live in this browser's localStorage, and the app falls back to in-memory storage when localStorage is blocked. With them, see [Accounts, sync and daily limits](#accounts-sync-and-daily-limits).
+- **Accounts are optional.** Without Neon Auth and a database, courses, lessons, the deck and activity live in this browser's localStorage, and the app falls back to in-memory storage when localStorage is blocked. With them, see [Accounts, sync, daily limits and plans](#accounts-sync-daily-limits-and-plans).
 - **Multi-tab is safe.**
   - The cross-tab lock keeps two tabs from streaming the same lesson.
   - `store.js` writes with a three-way merge per lesson, thread, course and plan, and idle tabs pick up other tabs' saves. So one tab no longer wipes another tab's changes.
@@ -430,7 +427,7 @@ Interactive widgets keep their state across reloads and when a lesson is reopene
 - **Without accounts, memory is one file for one local learner.** It is not encrypted; "Forget everything" deletes it. With accounts, each user's memory and material live in their own rows of the database.
 - **Inherited from chatgpt-dil:** a best-effort sandbox lockdown and no SVG `<text>` in the captured client. Flowchart and ConceptMap are therefore laid out with boxes rather than drawn edges. Mull's host adds an `svg-text` primitive for `Diagram` labels.
 - **Figure needs the network and Wikimedia.** The server queries Wikimedia Commons, and the learner's browser loads the image from `upload.wikimedia.org` / `thumb.wikimedia.org` (no referrer). Offline, or with `WONDER_FIGURES=off`, Figures are left out and the lesson reads without them. Claude never sees the picture when it writes, so captions are written to be true of any good image of the subject; the vision check then drops an image that does not fit.
-- **Video needs a YouTube key, the network and YouTube.** Without `YOUTUBE_API_KEY`, Claude-mode lessons leave Videos out; demo mode plays only the demo lesson's fixture clip. Each new lookup costs 101 of the key's 10,000 free daily quota units (about 100 new clips a day; repeats are cached). Segments come from a video's chapters, not its captions (the Data API lets only a video's owner download captions), so a video without matching chapters plays from its start, capped at 3 minutes. Pausing at the clip's end uses the player's `postMessage` events (the protocol YouTube's IFrame API uses, not separately documented); if they never arrive, "I watched it" opens the questions. Saved lessons keep the clip's title and channel; YouTube's API policies limit how long such data may be stored, which a production deployment would need to handle.
+- **Video needs a YouTube key, the network and YouTube.** Without `YOUTUBE_API_KEY`, lessons leave Videos out. Each new lookup costs 101 of the key's 10,000 free daily quota units (about 100 new clips a day; repeats are cached). Segments come from a video's chapters, not its captions (the Data API lets only a video's owner download captions), so a video without matching chapters plays from its start, capped at 3 minutes. Pausing at the clip's end uses the player's `postMessage` events (the protocol YouTube's IFrame API uses, not separately documented); if they never arrive, "I watched it" opens the questions. Saved lessons keep the clip's title and channel; YouTube's API policies limit how long such data may be stored, which a production deployment would need to handle.
 
 ## Credentials
 
@@ -475,7 +472,6 @@ Lessons can search the web, and Claude's citations show up as ChatGPT-style numb
   - A Cite whose refs don't resolve renders nothing.
 - **Prompt** (`server/prompts-extra.js`). Claude is told to search for real-world topics (1-3 focused searches), to cite in its own prose, and never to write Cite tags, `[1]` or URLs itself.
   - Server-inserted tags are removed (`stripGroundingTags`) whenever a lesson is quoted back to Claude: tutor context, practice extraction and steering.
-- **Demo mode.** "Why the sky is blue" streams four deterministic citations (`server/demo-grounding.js`). With `useWebSearch:false` it streams the plain sample.
 
 ## Phase 4: mid-turn steering
 
@@ -500,7 +496,6 @@ Lessons can search the web, and Claude's citations show up as ChatGPT-style numb
   2. `<lesson_so_far>` (cites stripped), the instruction, and "continue from the next `## ` page; don't repeat".
 
   There is no assistant prefill. Web search stays on.
-- **Demo mode.** Steering rewrites the remaining sample pages deterministically (`steerDemoRemainder`). Each page keeps its heading, its first prose paragraph (two sentences at most) and every visual, and the quiz page is kept whole. A "Steered: Simpler" tip callout is added.
 
 ### Continuing without the live stream: resume, steer after a reload, revise (`continueFrom`)
 
@@ -527,7 +522,6 @@ Before this, steering needed the original NDJSON connection: after a reload ther
 - **Citation ids.** `createContinuationSources` (in `server/steering.js`; it wraps `grounding.js`'s registry) seeds the kept sources so their pills resolve on the server, and the final `<Sources/>` lists old and new sources. New refs start after the highest `turn0search<N>` in the kept markdown, numbered N+2, so they never collide with kept Cite tags. A URL that was already cited reuses its ref and number.
 - **Client merge.** At the first program of the continuation, `carryOver` keeps the old citation and widget `componentResults` only for resolution ids still present in the kept program. Old Cite pills therefore keep working even without `sources`, and rewritten widgets (such as the quiz) start fresh. `mergeContinuedAppData` overlays the new stream's results on top, with new winning, and the merged appData is persisted with the lesson.
 - **Persistence states** (`lesson.status`): `new` | `streaming` (with `streamOwner` = this page load's id) | `interrupted` | `complete` | `failed`. During a stream the client persists the markdown, the latest dil, `messageId` and appData about once a second, and again on `pagehide`/`beforeunload`. `lessonPhase()` treats a `streaming` lesson owned by another page load (reload, closed tab) as interrupted. A stream that ends with `control failed` code `stalled` or `network` (the idle watchdog in `server/claude.js`), or with a client-side network drop, is persisted as `interrupted` and gets the Resume banner. Other failure codes keep the normal error card with "Try again". A failed continuation that never started leaves the persisted lesson untouched.
-- **Demo mode.** It is deterministic. When the kept text (Cite tags removed) is a prefix of the sample, `demoContinuation` streams the sample from exactly that paragraph boundary, mid-page included. Otherwise it continues after the kept text's last block if the sample contains it, or else from the next page. It grounds citations with the continuation registry and applies `steerDemoRemainder` when there is an instruction. Resuming an interrupted sample reproduces it byte for byte from every paragraph boundary.
 
 ### Cross-tab lock: one writer per lesson
 
@@ -562,7 +556,7 @@ Every stream writes the lesson to localStorage, so two tabs resuming the same le
   - **Controls.** Each param gets −/+ stepper buttons, an 11-stop segmented track and a Reset button. Everything re-renders through `DIL.useState`.
   - **Size.** A 600×300 view on desktop, 320×220 on mobile (`useIsMobile`).
 - **Prompt.** For math, physics and economics lessons built on y = f(x), Claude includes exactly one graph. The tutor knows the component too.
-- **Demo.** The compound-interest sample graphs `1000*(1+r)^x` against simple interest `1000*(1+r*x)`, with an `r` slider.
+- **Sample lesson.** The compound-interest sample (`test/fixtures/lessons/`) graphs `1000*(1+r)^x` against simple interest `1000*(1+r*x)`, with an `r` slider.
 
 ## Phase 3-5 tests and live verification
 
@@ -577,12 +571,11 @@ Every stream writes the lesson to localStorage, so two tabs resuming the same le
   - Safe insertion points.
   - The Cite popover and `open_url` action.
   - Sources rendering.
-  - Demo citations.
+  - A whole cited lesson (the sky-blue sample, four citations) over HTTP.
 - **`steering.test.js`:**
   - Abort and continuation request shape (kept pages, instruction, no prefill, same system prompt).
   - Control records, and the replace record with increasing revisions.
   - `ConversationTurn` tail replacement.
-  - Demo steering over HTTP.
   - Rejections.
 - **`continue.test.js`** (resume / revise / race):
   - The `continueFrom` request shape with the fake client: the trim, `fromPage`, the instruction, no prefill, and web search and memory still applied.
@@ -591,22 +584,22 @@ Every stream writes the lesson to localStorage, so two tabs resuming the same le
   - The race: a steer accepted after Claude's last token is applied as a continuation.
   - Continuation source ids: seeded, never colliding, URLs de-duplicated.
   - The prompt wordings.
-  - Demo resume and revise over HTTP: kept prefix, stable resolution ids, all cites resolved, Sources old + new, the program runs.
+  - Resume and revise over HTTP: kept prefix, stable resolution ids, all cites resolved, Sources old + new, the program runs.
   - NDJSON validity and monotonic revisions.
   - Client `carryOver`/`mergeContinuedAppData` tail replacement.
   - Persistence states and the `stalled`/`network` → interrupted mapping.
 - **`resume.test.js`** (mid-page resume + cross-tab lock):
   - Paragraph-boundary trimming on crafted cases: never inside a tag, a component's JSON props, a code fence, a math span, or a list/table/blockquote in progress; never below the page floor.
-  - An every-prefix property on the three demo lessons plus the grounded one: the kept text compiles with zero invalid components, has no half-written tag or open math span, and a demo resume from it reproduces the lesson.
+  - An every-prefix property on the three sample lessons plus a cited one: the kept text compiles with zero invalid components and has no half-written tag or open math span.
   - The continuation prompt shape: resume vs steer vs revise, and `normalizeContinueFrom` keeping blocks for a resume.
   - The duplicate guard: heading, heading + paragraph, whitespace-normalised and cited repeats, several chunk sizes, early release.
-  - The Claude path de-duplicating a repeated heading and paragraph, and demo resume over HTTP from a mid-page boundary, with and without a change.
+  - The Claude path de-duplicating a repeated heading and paragraph, and resume over HTTP from a mid-page boundary, with and without a change.
   - The lock: lease acquisition, exclusivity, renewal, expiry, takeover and release; `watch` via poll, storage event and `pagehide`; Web Locks across two instances sharing Node's `navigator.locks` (including the probe path and the "acquired" broadcast); interrupted detection respecting a live lock.
 - **`function-graph.test.js`:**
   - Good and bad props: syntax, unknown variables and functions, too many params, points or curves, reserved names, ranges.
   - Fallback.
   - Sandbox render: path, peak height, slider and stepper presses, clamping, reset, asymptotes, mobile, multiple curves.
-  - The compound demo slider.
+  - The compound-interest sample's slider.
   - Every prefix around the tag.
 - **`real-claude-cited.test.js`** replays `test/fixtures/claude-lesson-cited.ndjson`. It is a real web-searched lesson steered with "Simpler"; the intermediate dils were dropped to keep it at 177 KB, and it holds no secrets or encrypted payloads. The test checks:
   - Every record validates.
@@ -636,7 +629,7 @@ Live check against `claude-opus-5-5`, using 5 requests:
    - **Reload mid-page.** The lesson was reloaded on page 3, "Coastlines turn up the volume", at 6,469 chars, in the middle of its second paragraph.
    - **Resume.** The `replace` record kept the page heading and its first complete paragraph (it ends after `…measured at Burntcoat Head.` + the Cite pill). The continuation began "Why so huge there? The main reason is resonance…", with no repeated heading or paragraph. The heading appears once, and the lesson finished with 4 pages + Quiz (10,011 chars).
    - **Second tab during the resume.** It showed "Writing in another tab", with no Resume or Steer and the stored status still `streaming`, not marked interrupted. When the first tab finished, it re-opened the lesson in Revise mode with Finish enabled.
-   - Also checked against a slowed demo server (no requests): a tab already in Resume mode switches to the notice when the other tab resumes, and it follows the other tab into Resume when that tab is reloaded mid-stream.
+   - Also checked against a slowed server streaming a sample lesson (no Claude requests): a tab already in Resume mode switches to the notice when the other tab resumes, and it follows the other tab into Resume when that tab is reloaded mid-stream.
    - Checked at desktop and 390 px with no horizontal scroll and no console errors.
 
 Known gaps:
@@ -688,7 +681,7 @@ A lesson's quiz says what the learner knew a minute after reading it. Mull also 
   - Claude gets it as a cached `document` block with citations on.
   - `char_location` and `page_location` citations are mapped onto the same source registry as web results. They become Cite pills and Sources ("Your material", "…, p. 4") that open the original.
   - Material lessons don't search the web unless asked to.
-  - In demo mode, text material becomes an outline lesson and a course by its headings.
+  - Without a Claude key, material is still stored and listed; lessons and courses from it answer 503.
 
 ## Phase 9-10 tests and live verification
 
@@ -699,10 +692,10 @@ A lesson's quiz says what the learner knew a minute after reading it. Mull also 
   - plan date math, pace and backward-planning bounds, plus the tool's error feedback;
   - brief ranking and reminder timing;
   - ICS output;
-  - Teacher check-ins, with a fake client and in demo;
+  - Teacher check-ins, with a fake client;
   - the materials store (limits, path-safe ids, persistence);
   - document blocks, and citation mapping through a fake client that streams `citations_delta`;
-  - course plans from material, and the demo outline.
+  - course plans from material, and material without Claude.
 - **Live.**
   - **Teacher check-in.** On seeded review history it proposed relearning the worst-recalled lesson "starting from concrete examples", the best-measured style.
   - **Lesson from lecture notes.** It used the class's own coffee-shop example and carried 11 Cite pills. "Sources" opened the original notes.
@@ -735,7 +728,7 @@ Three catalog components put pictures or video next to the explanation.
   - **Labels.** Labels use the `svg-text` host extension, with a halo so they stay readable over lines. On phones, labels grow so 12-15 unit text stays legible.
   - **Parts.** Tapping a shape selects its part; thin shapes get a wide invisible hit area. Shapes are pointer-only (aria-hidden, out of the tab order): the canvas is `role=img`, and the part chips are the keyboard and screen-reader controls. The host still supports keyboard-button shapes for other uses.
   - **Steps.** A shape listed in some step's `show` stays hidden until that step. The step's `highlight` dims everything else to 22%, and the CSS fades opacity changes.
-- **Demo.** The sky-blue sample's sunset page compares the noon and sunset light paths through the atmosphere in three steps, with four tappable parts.
+- **Sample lesson.** The sky-blue sample's sunset page compares the noon and sunset light paths through the atmosphere in three steps, with four tappable parts.
 
 ### `Figure`: real images from Wikimedia Commons
 
@@ -770,9 +763,9 @@ Three catalog components put pictures or video next to the explanation.
     - Haiku: 36/38 right, median 1.6 s, max 2.8 s. Both misses were the same strict call: it rejected a convex-lens ray diagram captioned "meeting at the focal point" because the drawing labels that point a circle of confusion.
     - Opus: 38/38, median 2.7 s, max 5.1 s, at about 40× Haiku's per-token price.
     - Haiku's failure mode is dropping an image, not showing a wrong one, so it is the default. `WONDER_FIGURE_CHECK_MODEL` (or `figureCheckModel`) overrides it.
-  - **Switches.** On by default in claude mode. Off in demo mode (no client) and in the tests (`test/index.js` sets `WONDER_FIGURE_CHECK=off`). `WONDER_FIGURE_CHECK=off` or `figureCheck: false` turns it off; `figureCheck: fn` replaces it (tests).
+  - **Switches.** On by default when Claude is configured. Off without a client and in the tests (`test/index.js` sets `WONDER_FIGURE_CHECK=off`). `WONDER_FIGURE_CHECK=off` or `figureCheck: false` turns it off; `figureCheck: fn` replaces it (tests).
 - **Settings.** `WONDER_FIGURES=off`, or `figureLookup: null` in `createWonderCore`, skips the network. The tests stub the lookup. `figureSettleMs` changes the end-of-stream wait.
-- **Demo.** The sky-blue sample shows a photo of white clouds in a blue sky on its Mie-scattering page.
+- **Sample lesson.** The sky-blue sample shows a photo of white clouds in a blue sky on its Mie-scattering page.
 
 ### `Video`: short YouTube clips with pause-and-answer questions
 
@@ -793,8 +786,8 @@ Three catalog components put pictures or video next to the explanation.
 - **Renderer.** The host's `youtube` primitive: `youtube` with a `videoId` prop is in ChatGPT's DIL element list (findings §3.3). The chatgpt-dil host renders it as an iframe whose URL the host builds itself from a validated 11-character id, always on `https://www.youtube-nocookie.com/embed/…`. The frame has `sandbox="allow-scripts allow-same-origin allow-presentation allow-popups allow-popups-to-escape-sandbox"`, no top navigation or forms, and a `strict-origin-when-cross-origin` referrer (the player will not start without one). A frame exists only when the embedder's `allowEmbeds` policy allows that id. In Mull, `dil-surface.js` allows only ids the server resolved for a Video on this surface (`public/video-hosts.js`). Anything else, including a raw `<youtube videoId>` the model wrote, keeps a placeholder. The host also no longer re-inserts an element that is already in place, which would reload a playing frame.
 - **Pause and answer.** The host asks the player to report its state (`enablejsapi=1`, the IFrame API's `listening` handshake). It accepts messages only from `https://www.youtube-nocookie.com` and only from that frame's window. When playback reaches a cue (the clip's end, 0.35 s early, before YouTube's end screen), the host pauses the player and calls the component's `onCue` in the sandbox. The worker gets no per-tick time updates.
 - **Sandbox component** (`public/catalog-media.js`): a "Finding a video…" frame while pending; the "Predict first" card (or Skip) before the player; the caption; `Video: title · channel · YouTube · chapter, 1:05–3:10` with a YouTube button; then "Your prediction: … Watch to find out" with an "I watched it" button, which also covers the player's events never arriving. When the clip ends: the prediction's verdict and the after questions one by one, each with its explanation, then a score. The prediction, answers and "watched" persist with `useSaved`, so a reloaded lesson does not pause again. Not found renders nothing.
-- **Settings.** `YOUTUBE_API_KEY` enables live search. Without it, demo mode uses `createDemoVideoLookup()` (the demo lesson's clip, picked by hand from a YouTube search for the demo query and kept in `DEMO_VIDEOS`), and Claude mode leaves Videos out. `WONDER_VIDEOS=off`, or `videoLookup: null` in `createWonderCore`, turns videos off; the tests stub the lookup. `/api/status` reports `videos`.
-- **Demo.** The sky-blue sample's sunset page has a "sunset in a glass" demonstration (a flashlight through milky water), with a "predict the beam's color" question before it and "where did the blue go?" after it.
+- **Settings.** `YOUTUBE_API_KEY` enables live search. Without it, lessons leave Videos out. `WONDER_VIDEOS=off`, or `videoLookup: null` in `createWonderCore`, turns videos off; the tests stub the lookup. `/api/status` reports `videos`.
+- **Sample lesson.** The sky-blue sample's sunset page has a "sunset in a glass" demonstration (a flashlight through milky water), with a "predict the beam's color" question before it and "where did the blue go?" after it.
 
 ### Tests and live verification
 
@@ -804,8 +797,8 @@ Three catalog components put pictures or video next to the explanation.
   - reveal and highlight opacities across the steps;
   - selecting parts by shape, hit area and chip;
   - larger labels on phones;
-  - the demo diagram;
-  - every streamed prefix of the demo.
+  - the sky-blue sample's diagram;
+  - every streamed prefix of that sample.
 - **`chatgpt-dil/test/host.test.js`:** SVG attributes for the host extensions (sized children, `svg-text`, keyboard vs pointer-only shapes), `isRemoteSrc`, and the youtube player's pure pieces (the embed URL only on youtube-nocookie.com, rejected ids, the sandbox flags, player messages, cues firing once, pausing and re-arming on rewind).
 - **`test/figure.test.js`:**
   - validation, and picking Commons results (license, size, host, localized SVGs, HTML authors);
@@ -823,9 +816,9 @@ Three catalog components put pictures or video next to the explanation.
   - the resolver, and Figure + Video combined in one stream;
   - the sandbox component: predict, player, the end cue, answers, Skip and "I watched it", and state restored after a reload;
   - the embed policy (only server-resolved ids get a player);
-  - lesson streams through the real server: a late clip in the final record, the demo fixture without a key, and `WONDER_VIDEOS=off`;
-  - the demo lesson linting clean, a Video never counting as a page's only visual, and counting in outcomes only when shown.
-- **Live (demo mode, browser).**
+  - lesson streams through the real server: a late clip in the final record, no key, and `WONDER_VIDEOS=off`;
+  - the sample lesson linting clean, a Video never counting as a page's only visual, and counting in outcomes only when shown.
+- **Live (browser).**
   - **Diagram.** The sky-blue diagram stepped Noon → Sunset → Compare. Tapping the orange arrow opened "Sunset light", and the step and selection survived a reload. Checked in light and dark, at desktop and 375 px widths.
   - **Claude.** A live lesson on "How the human heart pumps blood" came back with a valid `Diagram` on the first try: four chambers, the septum and the valves as 6 tappable parts, and "Tap each chamber below" in the prose. It surfaced two fixes. Rects need `width`/`height` passed through by the host. Free labels inside a shape now join that shape's part, so tapping a chamber's name selects the chamber and its label doesn't dim. Claude chose no `Figure` for that topic.
   - **Figure.** The live Commons lookup found "Clouds in the sky in August 2014" (Jakec, CC BY-SA 4.0) in about 0.5 s. It rendered with its caption, Look closer and credit, and reloaded from the saved lesson.
@@ -837,8 +830,8 @@ Three catalog components put pictures or video next to the explanation.
   - the inline fallback when the API cannot download the URL;
   - the settle budget, and the check's own timeout;
   - a rejected image making way for the next-best result, up to three, and the Commons lookup's `exclude`;
-  - the core switches (claude, demo, env, `figureCheck`);
-  - a claude-mode lesson stream whose Figure the check drops;
+  - the core switches (a client or none, env, `figureCheck`);
+  - a Claude lesson stream (fake client) whose Figure the check drops;
   - a finished lesson keeping everything after a broken tag (compile, render and the final stream record), while a partial one still cuts there;
   - invalid and unclosed Diagram/Figure tags in the lint;
   - the critic prompt and its diagram/figure text;
@@ -872,7 +865,7 @@ Three catalog components put pictures or video next to the explanation.
   - **Critic.** In these runs it flagged Diagram problems the lint cannot see: "to lungs/to body" arrows leaving the bottom of the ventricles, an earthquake epicenter drawn off to the side of its focus, and a Diagram step's arithmetic (a 44 mm image does not fit a 36 mm sensor "sideways").
   - **Remaining format misses.** Mostly `key_terms`: lessons use 6-7 distinct KeyTerms where the lint wants 2-5.
 
-## Accounts, sync and daily limits
+## Accounts, sync, daily limits and plans
 
 Accounts are off unless **both** Neon Auth and a database are set. Without them Mull runs exactly as before: browser-only, one local learner.
 
@@ -896,27 +889,54 @@ Accounts are off unless **both** Neon Auth and a database are set. Without them 
 
 **Who may use Claude** (`server/usage.js`). With accounts on:
 - **Sign-in required.** Every route that calls Claude needs a signed-in user: lessons, tutor, Teacher, course plans, card and memory extraction, and free-response grading. A signed-out request gets `401 {signedOut: true}`, and the lesson page shows **Sign in to start this lesson** with a Sign in button. A new lesson refused this way is not kept, so it never shows as Failed in Recent. Signing in from that button starts the same topic again on the account; the topic waits in the tab's `sessionStorage` (`wonder.afterSignIn`, up to 30 minutes) across the sign-in reload.
-- **Daily caps.** In Claude mode, each user has these caps per UTC day:
+- **Daily caps.** With Claude configured, each user has these caps per UTC day, by plan (see **Plans** below):
 
-| Kind | Default | Override |
-|---|---|---|
-| Lessons (new, steer, resume, revise) | 20 | `WONDER_LIMIT_LESSON` |
-| Tutor messages | 100 | `WONDER_LIMIT_TUTOR` |
-| Teacher messages | 60 | `WONDER_LIMIT_TEACHER` |
-| Course plans | 10 | `WONDER_LIMIT_COURSE` |
-| Card and memory extractions | 60 | `WONDER_LIMIT_EXTRACT` |
-| Graded free-response answers | 150 | `WONDER_LIMIT_GRADE` |
+| Kind | Free | Pro | Override (Free / Pro) |
+|---|---|---|---|
+| Lessons (new, steer, resume, revise) | 20 | 100 | `WONDER_LIMIT_LESSON` / `WONDER_PRO_LIMIT_LESSON` |
+| Tutor messages | 100 | 500 | `WONDER_LIMIT_TUTOR` / `WONDER_PRO_LIMIT_TUTOR` |
+| Teacher messages | 60 | 300 | `WONDER_LIMIT_TEACHER` / `WONDER_PRO_LIMIT_TEACHER` |
+| Course plans | 10 | 50 | `WONDER_LIMIT_COURSE` / `WONDER_PRO_LIMIT_COURSE` |
+| Card and memory extractions | 60 | 300 | `WONDER_LIMIT_EXTRACT` / `WONDER_PRO_LIMIT_EXTRACT` |
+| Graded free-response answers | 150 | 750 | `WONDER_LIMIT_GRADE` / `WONDER_PRO_LIMIT_GRADE` |
 
   `off` or a negative number removes a cap, and `0` turns that kind off.
 - **Counting.** Counts live in the database (`wonder_usage`, one atomic upsert per request), so they hold across serverless instances.
-- **Over the cap.** A request over its cap gets `429` with `{limited: {kind, max, resetsAt}}`. The browser does not retry it (a plain 429, Claude being busy, still is) and says when the cap resets.
+- **Over the cap.** A request over its cap gets `429` with `{limited: {kind, max, plan, resetsAt}}`. The browser does not retry it (a plain 429, Claude being busy, still is) and says when the cap resets.
 - **Retries.** A dropped stream's automatic retries (same `streamKey`/`turnId`) are free twice within 10 minutes; reusing a key beyond that is charged.
 - **Database errors** fail open and are logged, so a hiccup never locks everyone out.
-- **Where caps don't apply.** Demo mode has no caps, since it costs nothing. Without accounts there is neither sign-in nor caps.
-- **Today's use** comes back from `GET /api/account` (`usage`); the app does not show it.
+- **Where caps don't apply.** A server without Claude charges nothing. Without accounts there is neither sign-in nor caps.
+- **You page.** The signed-in account card shows the plan, with Upgrade or Manage billing when billing is on; today's use comes back from `GET /api/account` (`usage`) but the app does not show it.
+
+**Plans** (`server/plans.js`). Every signed-in user is on **Free** unless they are on **Pro**. The plan only decides which daily caps apply.
+- **Who is Pro.** A user whose plan record (`wonder_plans`, one row per user) says `pro` with status `active`, `trialing` or `past_due`, until 3 days after its period end (so a late renewal never drops a payer to Free). Or a user id listed in `WONDER_PRO_USERS`, which comps Pro without a record.
+- **Admins.** User ids in `WONDER_ADMIN_USERS` show as Pro ("Admin on this Mull server") and skip the daily caps entirely; their requests are not counted. Find an id with `GET /api/account` while signed in (`userId`).
+- **Plan records** are provider-neutral: `{plan, status, provider, customerId, subscriptionId, periodEnd, cancelAtPeriodEnd}`. `createPlans().setPlan()` validates and stores one.
+- **Failing safe.** A plan lookup that fails is logged and counts as Free.
+
+**Buying Pro** (`server/billing.js`). Pro is sold through [Polar](https://polar.sh), a merchant of record: Polar runs the checkout, charges sales tax and VAT, and pays the seller out (it pays out to many countries Stripe does not, Kazakhstan among them). Off unless all three of `POLAR_ACCESS_TOKEN`, `POLAR_WEBHOOK_SECRET` and `POLAR_PRODUCT_ID` are set; then `/api/account` sends `billing: {provider, sandbox, price, canUpgrade, canManage}` and the You page shows **Upgrade** or **Manage billing**.
+- **Pro products.** `POLAR_PRODUCT_ID` is the Pro product checkout sells; list more (comma separated) and a subscription to any of them is Pro too, such as a yearly price or a product a user switched to.
+- **Checkout.** `POST /api/billing/checkout` makes a Polar checkout for the first Pro product with the user id as Polar's external customer id, and the browser goes there. Opening checkout stores a pending plan record (`incomplete`, still Free), which marks the user as someone who may have a Polar subscription. When Polar already has a live or paused Pro subscription the plan missed, checkout syncs the plan from it instead and answers 409 (`resynced`). Back on `/?checkout_id=…#/you`, the You page calls `POST /api/billing/sync` (which reads the user's subscriptions from Polar now, at most once per 1.5 s per user) for up to 30 seconds until the account is Pro, once per checkout, so a late or lost webhook never leaves a payer on Free.
+- **Manage.** `POST /api/billing/portal` opens Polar's customer portal (card, invoices, cancel) for the stored customer.
+- **Webhook.** `POST /api/billing/webhook` checks the Standard Webhooks signature over the raw body (secrets made since September 2026 and older ones both work). An event only says which user to look at (its customer's external id, or the user id in its metadata): their subscriptions are read from Polar as they are now (by external customer id, plus the stored and the event's subscription when those name the user only in metadata) and the best Pro one becomes the plan record (a live one, renewing first, then latest period end). So late, repeated or out-of-order events cannot leave a stale state, and a user with two subscriptions stays Pro while either lives. Each record is versioned by Polar's latest change time across the user's subscriptions, and an older read never overwrites a newer one. Events naming no user are ignored. A Polar error about the request itself (a 4xx other than 401, 403 and 429) is logged and answered 202, because Polar disables an endpoint after 10 failed deliveries in a row; a bad or under-scoped token, rate limits and server errors answer 500 so Polar redelivers once fixed.
+- **Cancelling.** Cancel at period end keeps Pro until then (`endsAt`); once no Pro subscription is live the account is Free.
+- **Deleting an account.** A user with no plan record never opened checkout, so nothing at Polar is touched. Otherwise every subscription Polar has for the user that is not over (paused, unpaid and not-yet-recorded ones too) is revoked first; a revoke Polar refuses counts only once Polar shows it ended. If Polar cannot be reached or refuses, nothing is deleted and the user is told to try again, so a deleted account is never charged again. Once the data is gone, the Polar customer is deleted and anonymized (best effort).
+- **The price** on the Upgrade button comes from the Pro product, cached for an hour, and is looked up only for users who can upgrade. A cold cache waits at most 1.5 seconds; after that the button reads "Upgrade to Pro" and the price shows next time.
+- **Raw bodies.** Both transports hand routes the exact request text as `t.rawBody` (bodies up to 256 KB), which the webhook signature is checked over.
+- **Sandbox first.** `POLAR_SERVER` is `sandbox` unless set to `production`. Sandbox has its own dashboard (sandbox.polar.sh), tokens and test card (4242 4242 4242 4242).
+- **Setup.**
+  1. Create an organization on [sandbox.polar.sh](https://sandbox.polar.sh) (later the same on polar.sh, with payouts set up under Finance).
+  2. Add a product **Pro** with a monthly price. Copy its id into `POLAR_PRODUCT_ID`.
+  3. Settings → Developers: create an organization access token with `checkouts:write`, `customer_sessions:write`, `customers:write`, `products:read`, `subscriptions:read` and `subscriptions:write` scopes, into `POLAR_ACCESS_TOKEN`.
+  4. Settings → Webhooks: add an endpoint `https://<your domain>/api/billing/webhook`, format **Raw**, with the `subscription.*` events. Copy its secret into `POLAR_WEBHOOK_SECRET`.
+  5. Leave Settings → Subscriptions → **Allow multiple subscriptions** off (the default), so Polar itself stops a second purchase.
+  6. Set the same variables on Vercel (`vercel env add`) and redeploy.
 
 **Tests.**
-- `test/usage.test.js`: caps per user, kind and day; free retries and their bounds; failing open; 401 and 429 over HTTP; demo mode and accounts off; non-retryable errors in the browser.
+- `test/usage.test.js`: caps per user, kind and day; free retries and their bounds; failing open; 401 and 429 over HTTP; no Claude and accounts off; non-retryable errors in the browser.
+- `test/plans.test.js`: who is Pro (status, period and grace, comped users, admins), record validation, Pro caps and their overrides, and Pro vs Free over HTTP with the plan on `/api/account`.
+- `test/billing.test.js`: webhook signatures (both key kinds, replay window), subscription to plan record, picking the deciding subscription, older reads dropped, and against a fake Polar API: checkout and its second-subscription guard, webhook to Pro, portal, cancel, two subscriptions, product switches, ignored events, which errors are retried, account deletion ending every subscription and the customer (and its failure paths), and a slow price lookup.
+- `test/sync-pg.test.js` (with `WONDER_TEST_DATABASE_URL`): plan records round-trip in Postgres, an older read is dropped, and the plan goes with the account.
 - `test/landing.test.js`: who the home page sends to `/welcome`, with account sync on and off, and the signed-out deep link kept for after sign-in.
 - `test/start.test.js`: where `#/start[/<topic>]` goes (sign-in, onboarding, the lesson, home).
 - `test/sync*.test.js`: sync, authorization and statement scoping.

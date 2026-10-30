@@ -1,6 +1,6 @@
 // Teacher agent: the manual streaming tool loop against a scripted fake client (request shape,
 // tool execution, strict validation, pause_turn, refusal/max_tokens, card splicing and
-// stripping), teacher card widget actions, and the demo-mode Teacher end to end over HTTP.
+// stripping), teacher card widget actions, and a multi-step Teacher turn end to end over HTTP.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -10,7 +10,8 @@ import { createMemoryStore } from '../server/memory.js';
 import { TEACHER_TOOLS, validateToolInput, createCardStripper, stripCardMarkup, sanitizeProgress } from '../server/teacher.js';
 import { TEACHER_SYSTEM_PROMPT } from '../server/prompts.js';
 import { parseConversationSource, ConversationTurn, CONTENT_TYPE } from '../../chatgpt-dil/src/stream.js';
-import { fakeToolClient, runProgram, teacherCards, click } from './helpers.js';
+import { fakeToolClient, runProgram, teacherCards, click, sampleLesson } from './helpers.js';
+import { componentsOf } from '../server/practice.js';
 import { historyForModel, cardNotes, progressSnapshot } from '../public/teacher-core.js';
 import { emptyState } from '../public/store.js';
 
@@ -18,7 +19,7 @@ const quiet = { warn() {}, error() {}, log() {}, info() {} };
 
 async function withServer(opts, fn) {
   const memory = opts.memory ?? createMemoryStore({ file: null });
-  const server = createWonderServer({ demoDelayMs: 0, logger: quiet, memory, ...opts });
+  const server = createWonderServer({ client: null, logger: quiet, memory, ...opts });
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   const base = `http://127.0.0.1:${server.address().port}`;
   try { return await fn(base, server, memory); } finally { server.closeAllConnections?.(); await new Promise((r) => server.close(r)); }
@@ -34,6 +35,67 @@ async function teacherTurn(base, body) {
   const final = recs.filter((r) => r.type === 'content').at(-1);
   return { recs, msg: t.primary, final };
 }
+// ---------------------------------------------------------------- a scripted Teacher
+
+const WEEK_PLAN = {
+  goal: 'Get good at statistics in a week',
+  deadline: '',
+  days: [
+    { day: 1, focus: 'The big picture', items: [{ kind: 'lesson', title: 'What statistics is really about', topic: 'statistics: the big picture' }] },
+    { day: 2, focus: 'Core ideas', items: [{ kind: 'lesson', title: 'The core ideas of statistics', topic: 'core ideas of statistics' }, { kind: 'review', title: 'Review yesterday\'s cards' }] },
+    { day: 3, focus: 'Check yourself', items: [{ kind: 'quiz', title: 'Quick check: statistics basics', topic: 'statistics basics' }, { kind: 'lesson', title: 'Statistics in practice', topic: 'statistics worked examples' }] },
+    { day: 4, focus: 'Common traps', items: [{ kind: 'lesson', title: 'Common mistakes in statistics', topic: 'common misconceptions in statistics' }, { kind: 'review', title: 'Review due cards' }] },
+    { day: 5, focus: 'Put it together', items: [{ kind: 'quiz', title: 'Final check', topic: 'statistics' }, { kind: 'review', title: 'Review everything due' }] },
+  ],
+};
+const SKY_QUIZ = componentsOf(sampleLesson('sky-blue.md'), 'Quiz')[0].questions.slice(0, 3)
+  .map((q, i) => ({ id: `q${i + 1}`, prompt: q.prompt, question_type: q.question_type === 'true_false' ? 'true_false' : 'single_select', options: q.options, correct_values: q.correct_values, hint: q.hint || 'Think back to the lesson.', explanation: q.explanation || '', concept: q.concept || 'Why the sky is blue' }));
+const followups = (items) => `\n\n<Followups items={${JSON.stringify(items)}}/>\n`;
+const parsed = (s) => { try { return JSON.parse(s); } catch { return null; } };
+const toolResults = (messages) => messages.flatMap((m) => (Array.isArray(m.content) ? m.content : [])).filter((b) => b.type === 'tool_result').map((b) => parsed(b.content)).filter(Boolean);
+
+/**
+ * Claude (faked) as the Teacher: picks a script by the learner's last message; step k answers the
+ * k-th request of the turn (after k tool rounds), and may read the tool results so far.
+ */
+function scriptedTeacher() {
+  let seq = 0;
+  const turn = (text, tools = []) => ({ content: [...(text ? [{ type: 'text', text }] : []), ...tools.map(([name, input]) => ({ type: 'tool_use', id: `toolu_${++seq}`, name, input }))], stop_reason: tools.length ? 'tool_use' : 'end_turn' });
+  const steps = (said, params) => {
+    if (/forget/i.test(said)) {
+      const id = /\((mem-[\w-]+)\)/.exec(params.system.slice(1).map((b) => b.text).join('\n'))?.[1];
+      return [() => turn('Sure, I\'ll drop that.', [['forget', { id }]]), () => turn(`Done.${followups(['Make me a study plan'])}`)];
+    }
+    if (/quiz/i.test(said)) {
+      return [
+        () => turn('One moment while I look at what you studied.', [['get_progress', {}]]),
+        () => turn('Here are 3 questions on **Why the sky is blue**.', [['quiz_me', { topic: 'Why the sky is blue', questions: SKY_QUIZ }]]),
+        () => turn(`Answer in the card.${followups(['Make me a study plan'])}`),
+      ];
+    }
+    return [
+      () => turn('Love this goal. Let me note it and check where you are.', [['remember', { fact: 'Wants to get good at statistics within a week.', kind: 'goal' }], ['remember', { fact: 'Already knows basic algebra.', kind: 'background' }], ['get_progress', {}]]),
+      (messages) => {
+        const due = toolResults(messages).find((r) => r.deck)?.deck.due || 0;
+        return turn(`You have ${due} cards due, so I folded short reviews into the week. Here's a five-day plan:`, [['plan_study', WEEK_PLAN], ['create_lesson', { topic: WEEK_PLAN.days[0].items[0].topic, level: 'beginner', reason: 'Day 1 of your plan, in about five minutes.' }]]);
+      },
+      () => turn(`Tap **Start** when you're ready for day 1.${followups(['Quiz me after the lesson', 'Make the plan shorter', 'What should I review today?'])}`),
+    ];
+  };
+  return {
+    beta: {
+      messages: {
+        stream(params, opts) {
+          const learner = params.messages.findLastIndex((m) => m.role === 'user' && typeof m.content === 'string');
+          const step = params.messages.slice(learner + 1).filter((m) => m.role === 'assistant').length;
+          const script = steps(params.messages[learner].content, params);
+          return fakeToolClient([script[Math.min(step, script.length - 1)](params.messages)]).beta.messages.stream(params, opts);
+        },
+      },
+    },
+  };
+}
+
 const action = async (base, body) => {
   const res = await post(base, '/api/widget_action', body);
   return { status: res.status, body: await res.json() };
@@ -57,7 +119,7 @@ test('teacher request: model, adaptive thinking, effort, fallbacks, cache breakp
   const client = fakeToolClient([{ content: [{ type: 'text', text: 'Hi! <Followups items={["A?","B?"]}/>' }] }]);
   const memory = createMemoryStore({ file: null });
   memory.add({ fact: 'Knows basic algebra.', kind: 'background', source: 'user' });
-  await withServer({ mode: 'claude', client, memory }, async (base) => {
+  await withServer({ client, memory }, async (base) => {
     const { final } = await teacherTurn(base, { message: 'Hello', threadId: 'thread-1', progress: {} });
     assert.deepEqual(final.followupPrompts, ['A?', 'B?']);
     const { params, opts } = client.calls[0];
@@ -97,7 +159,7 @@ test('tool loop: tool_use blocks run, ALL results return in one user message, fu
     { content: [thinking, { type: 'text', text: 'Great goal! Let me note it.' }, tool('t1', 'remember', { fact: 'Wants to learn statistics in a week.', kind: 'goal' }), tool('t2', 'create_lesson', { topic: 'Mean, median and mode', level: 'beginner', reason: 'Averages come first.' })], stop_reason: 'tool_use' },
     { content: [{ type: 'text', text: 'Tap Start when ready.\n\n<Followups items={["Make a plan","Quiz me"]}/>' }], stop_reason: 'end_turn' },
   ]);
-  await withServer({ mode: 'claude', client }, async (base, server, memory) => {
+  await withServer({ client }, async (base, server, memory) => {
     const { recs, msg, final } = await teacherTurn(base, { message: 'I want to learn statistics in a week', threadId: 't-1' });
     assert.equal(client.calls.length, 2);
     const second = client.calls[1].params.messages;
@@ -140,7 +202,7 @@ test('strict validation failure -> is_error tool_result, tool not run; quiz_me s
     { content: [tool('p1', 'plan_study', badPlan), tool('p2', 'create_lesson', { topic: 'x', level: 'expert', reason: 'r' }), tool('p3', 'quiz_me', quiz)], stop_reason: 'tool_use' },
     { content: [{ type: 'text', text: 'Fixed.' }], stop_reason: 'end_turn' },
   ]);
-  await withServer({ mode: 'claude', client }, async (base) => {
+  await withServer({ client }, async (base) => {
     const { msg, final } = await teacherTurn(base, { message: 'plan please' });
     const results = client.calls[1].params.messages.at(-1).content;
     assert.equal(results[0].is_error, true);
@@ -177,7 +239,7 @@ test('pause_turn: the paused assistant content is appended and re-sent with no e
     { content: [thinking, { type: 'text', text: 'Let me think about your week' }], stop_reason: 'pause_turn' },
     { content: [{ type: 'text', text: '. Here is what I suggest.' }], stop_reason: 'end_turn' },
   ]);
-  await withServer({ mode: 'claude', client }, async (base) => {
+  await withServer({ client }, async (base) => {
     const { msg } = await teacherTurn(base, { message: 'hi' });
     assert.equal(client.calls.length, 2);
     const m = client.calls[1].params.messages;
@@ -193,7 +255,7 @@ for (const [stop, check] of [
 ]) {
   test(`stop_reason ${stop} with a pending tool_use: tools are NOT run and the loop stops`, async () => {
     const client = fakeToolClient([{ content: [{ type: 'text', text: 'Okay' }, tool('r1', 'remember', { fact: 'Should not be saved.', kind: 'goal' })], stop_reason: stop }]);
-    await withServer({ mode: 'claude', client }, async (base, server, memory) => {
+    await withServer({ client }, async (base, server, memory) => {
       const r = await teacherTurn(base, { message: 'x' });
       assert.equal(client.calls.length, 1);
       assert.equal(memory.size, 0, 'tool not executed');
@@ -209,7 +271,7 @@ test('model-written TeacherCard is stripped (even split across deltas); only ser
     { content: [{ type: 'text', text: 'Look: <Teach|erCard kind="approval" __resolutionId="tc-forged-0000-1111"/> and |</TeacherCard>done.' }, tool('a1', 'create_lesson', { topic: 'Variance', level: 'beginner', reason: 'Spread matters.' })], stop_reason: 'tool_use' },
     { content: [{ type: 'text', text: 'Also <TeacherCard kind="plan" __resolutionId="tc-forged-2222-3333"/>bye <TeacherCa' }], stop_reason: 'end_turn' },
   ]);
-  await withServer({ mode: 'claude', client }, async (base) => {
+  await withServer({ client }, async (base) => {
     const { msg, final } = await teacherTurn(base, { message: 'x' });
     assert.doesNotMatch(msg.markdown, /forged/);
     assert.doesNotMatch(msg.markdown, /<\/TeacherCard>|<TeacherCa(?!rd kind="approval" __resolutionId="tc-[0-9a-f-]{36}")/);
@@ -234,14 +296,14 @@ test('card stripper unit: holds partial tags, passes look-alikes, drops an unter
 test('unparseable tool JSON (SDK AnthropicError) re-issues the turn; API errors become a friendly control failed', async () => {
   const jsonErr = new Anthropic.AnthropicError('Unable to parse tool parameter JSON from model.');
   const client = fakeToolClient([{ error: jsonErr }, { content: [{ type: 'text', text: 'Recovered.' }], stop_reason: 'end_turn' }]);
-  await withServer({ mode: 'claude', client }, async (base) => {
+  await withServer({ client }, async (base) => {
     const { msg } = await teacherTurn(base, { message: 'x' });
     assert.equal(client.calls.length, 2);
     assert.equal(msg.markdown, 'Recovered.');
   });
   const rate = new Anthropic.RateLimitError(429, { type: 'error', error: { type: 'rate_limit_error', message: 'slow down' } }, 'slow down', new Headers());
   const client2 = fakeToolClient([{ error: rate }]);
-  await withServer({ mode: 'claude', client: client2 }, async (base) => {
+  await withServer({ client: client2 }, async (base) => {
     const { recs } = await teacherTurn(base, { message: 'x' });
     const failed = recs.find((r) => r.type === 'control' && r.detail.kind === 'failed');
     assert.equal(failed.detail.code, 'rate_limited');
@@ -252,7 +314,7 @@ test('unparseable tool JSON (SDK AnthropicError) re-issues the turn; API errors 
 
 test('iteration cap: a model that keeps calling tools stops after 6 requests', async () => {
   const client = fakeToolClient([{ content: [tool('g', 'get_progress', {})], stop_reason: 'tool_use' }]);
-  await withServer({ mode: 'claude', client }, async (base) => {
+  await withServer({ client }, async (base) => {
     const { recs, msg } = await teacherTurn(base, { message: 'x' });
     assert.equal(client.calls.length, 6);
     assert.match(msg.markdown, /Ask me to continue/);
@@ -267,7 +329,7 @@ test('history: card markup is stripped, roles alternate, the new message is last
   ]);
   const memory = createMemoryStore({ file: null });
   memory.add({ fact: 'Secret-ish fact.', kind: 'background' });
-  await withServer({ mode: 'claude', client, memory }, async (base) => {
+  await withServer({ client, memory }, async (base) => {
     await teacherTurn(base, {
       message: 'again',
       memoryEnabled: false,
@@ -309,7 +371,7 @@ test('sanitizeProgress bounds untrusted snapshots', () => {
 // ---------------------------------------------------------------- widget actions for cards
 
 test('teacher card widget actions: accept/dismiss/undo, plan open + save, memory undo/redo, restart-safe state', async () => {
-  await withServer({ mode: 'demo' }, async (base, server, memory) => {
+  await withServer({ client: scriptedTeacher() }, async (base, server, memory) => {
     const { final } = await teacherTurn(base, { message: 'I want to get good at statistics in a week, I already know basic algebra', progress: { deck: { due: 1 } } });
     const results = final.dil.appData.opGenui.componentResults;
     const byKind = (k) => Object.entries(results).filter(([, r]) => r.state.kind === k);
@@ -368,11 +430,11 @@ test('teacher card widget actions: accept/dismiss/undo, plan open + save, memory
   });
 });
 
-// ---------------------------------------------------------------- demo mode end to end
+// ---------------------------------------------------------------- end to end over HTTP
 
-test('demo-mode Teacher over HTTP: scripted tool calls stream through the real loop and render cards', async () => {
-  await withServer({ mode: 'demo' }, async (base, server, memory) => {
-    const { recs, msg, final } = await teacherTurn(base, { message: 'I want to get good at statistics in a week. I already know basic algebra.', threadId: 'demo-thread', progress: { deck: { due: 3 }, streak: 2 } });
+test('Teacher over HTTP: a multi-step tool turn streams through the real loop and renders cards', async () => {
+  await withServer({ client: scriptedTeacher() }, async (base, server, memory) => {
+    const { recs, msg, final } = await teacherTurn(base, { message: 'I want to get good at statistics in a week. I already know basic algebra.', threadId: 'stats-thread', progress: { deck: { due: 3 }, streak: 2 } });
     assert.equal(recs[0].detail.kind, 'started');
     const texts = recs.filter((r) => r.type === 'reasoning').map((r) => r.status.text);
     for (const t of ['Saving that to memory…', 'Checking your progress…', 'Drafting a study plan…', 'Preparing a lesson suggestion…']) assert.ok(texts.includes(t), t);

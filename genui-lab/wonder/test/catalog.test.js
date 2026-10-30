@@ -5,16 +5,16 @@ import { LEARNING_COMPONENT_NAMES as SERVER_NAMES } from '../server/catalog-sche
 import { LEARNING_COMPONENT_NAMES, LEARNING_PRELUDE } from '../public/learning-catalog.js';
 import { EXTRA_SCHEMA_NAMES, EXTRAS_PRELUDE } from '../public/catalog-extras.js';
 import { MEDIA_COMPONENT_NAMES, MEDIA_PRELUDE } from '../public/catalog-media.js';
-import { demo, DEMO_FILES, runProgram, catalogNodes, click } from './helpers.js';
+import { sampleLesson, LESSON_FILES, runProgram, catalogNodes, click } from './helpers.js';
 
 test('client catalog and server schema cover the same components', () => {
   assert.deepEqual([...LEARNING_COMPONENT_NAMES, ...EXTRA_SCHEMA_NAMES, ...MEDIA_COMPONENT_NAMES].sort(), [...SERVER_NAMES].sort());
   assert.doesNotThrow(() => new Function('__dil', 'DIL', 'GenUI', 'Cite', LEARNING_PRELUDE + EXTRAS_PRELUDE + MEDIA_PRELUDE));
 });
 
-for (const file of DEMO_FILES) {
-  test(`demo ${file} renders every component through the sandbox runtime`, () => {
-    const r = compileWonder(demo(file), { salt: file });
+for (const file of LESSON_FILES) {
+  test(`sample ${file} renders every component through the sandbox runtime`, () => {
+    const r = compileWonder(sampleLesson(file), { salt: file });
     const env = runProgram(r);
     assert.deepEqual(env.errors, []);
     for (const name of r.requiredComponents) {

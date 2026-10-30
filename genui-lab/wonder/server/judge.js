@@ -115,7 +115,7 @@ export function reportMarkdown(report) {
   const lines = [
     `# Mull lesson eval · ${meta.startedAt}`,
     '',
-    `Mode: **${meta.mode}** · ${meta.models ? Object.entries(meta.models).map(([k, m]) => `${k} \`${m}\``).join(' · ') : `model \`${meta.model}\``} · ${summary.ok}/${summary.runs} lessons generated · web search ${meta.webSearch ? 'on' : 'off'} · critic ${meta.verify ? 'on' : 'off'} · judge ${meta.judge ? 'on' : 'off'}`,
+    `${meta.models ? Object.entries(meta.models).map(([k, m]) => `${k[0].toUpperCase()}${k.slice(1)} \`${m}\``).join(' · ') : `Model \`${meta.model}\``} · ${summary.ok}/${summary.runs} lessons generated · web search ${meta.webSearch ? 'on' : 'off'} · critic ${meta.verify ? 'on' : 'off'} · judge ${meta.judge ? 'on' : 'off'}`,
     '',
     '## Means',
     '',

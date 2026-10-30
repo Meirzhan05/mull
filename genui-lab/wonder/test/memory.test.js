@@ -17,7 +17,7 @@ const tmpFile = () => path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'wonder-me
 
 async function withServer(opts, fn) {
   const memory = opts.memory ?? createMemoryStore({ file: null });
-  const server = createWonderServer({ demoDelayMs: 0, logger: quiet, memory, ...opts });
+  const server = createWonderServer({ client: null, logger: quiet, memory, ...opts });
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   const base = `http://127.0.0.1:${server.address().port}`;
   try { return await fn(base, memory, server); } finally { server.closeAllConnections?.(); await new Promise((r) => server.close(r)); }
@@ -93,7 +93,7 @@ test('promptBlock: compact "About this learner" block, newest 15, ids only for t
 });
 
 test('GET/POST/DELETE /api/memory', async () => {
-  await withServer({ mode: 'demo' }, async (base, memory) => {
+  await withServer({}, async (base, memory) => {
     assert.deepEqual((await req(base, 'GET', '/api/memory')).body.items, []);
     let r = await req(base, 'POST', '/api/memory', { fact: 'I like analogies', kind: 'preference' });
     assert.equal(r.status, 200);
@@ -128,7 +128,7 @@ test('POST /api/memory/extract via Claude: structured output (effort low), 0-3 f
   const client = fakeClient({ structured });
   const memory = createMemoryStore({ file: null });
   memory.add({ fact: 'Knows basic algebra.', kind: 'background' });
-  await withServer({ mode: 'claude', client, memory }, async (base) => {
+  await withServer({ client, memory }, async (base) => {
     const r = await req(base, 'POST', '/api/memory/extract', { lessonTitle: 'Variance', quizResults: [{ prompt: 'What is variance?', correct: false }, { prompt: 'SD?', correct: true }], tutorThread: [{ role: 'user', content: 'Why square the differences?' }, { role: 'assistant', content: 'ignored' }] });
     assert.equal(r.body.source, 'claude');
     assert.deepEqual(r.body.added.map((i) => i.fact), ['Confuses variance with standard deviation.', 'Likes real-world examples.', 'Wants to pass a stats exam.']);
@@ -149,8 +149,8 @@ test('POST /api/memory/extract via Claude: structured output (effort low), 0-3 f
   });
 });
 
-test('POST /api/memory/extract in demo mode: deterministic rule on the quiz score', async () => {
-  await withServer({ mode: 'demo' }, async (base, memory) => {
+test('POST /api/memory/extract without Claude: deterministic rule on the quiz score', async () => {
+  await withServer({}, async (base, memory) => {
     let r = await req(base, 'POST', '/api/memory/extract', { lessonTitle: 'Variance', quizResults: [{ prompt: 'a', correct: true }, { prompt: 'b', correct: true }, { prompt: 'c', correct: true }] });
     assert.deepEqual(r.body.added, []);
     r = await req(base, 'POST', '/api/memory/extract', { lessonTitle: 'Variance', quizResults: [{ prompt: 'a', correct: false }, { prompt: 'b', correct: false }, { prompt: 'c', correct: true }] });
@@ -167,7 +167,7 @@ test('memory is injected into lesson and tutor prompts after the cache breakpoin
   const memory = createMemoryStore({ file: null });
   memory.add({ fact: 'Knows basic algebra.', kind: 'background' });
   const client = fakeClient({ text: '# T\n\nBody.' });
-  await withServer({ mode: 'claude', client, memory }, async (base) => {
+  await withServer({ client, memory }, async (base) => {
     const post = (p, body) => fetch(base + p, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then((r) => r.text());
     await post('/api/lesson/stream', { topic: 'variance' });
     await post('/api/lesson/stream', { topic: 'variance', memoryEnabled: false });

@@ -8,8 +8,9 @@
 //                          applicable Quiz fixes, which applyQuizFixes() writes into the Quiz
 //                          props (validated with the catalog schema before they are accepted).
 //
-// /api/lesson/stream runs both after a Claude lesson finishes (lint only in demo mode) and sends
-// the result as a `quality-report` control record; fixes arrive as one `replace` record.
+// /api/lesson/stream runs both after a lesson finishes (the lint alone for a refused or
+// truncated one) and sends the result as a `quality-report` control record; fixes arrive as one
+// `replace` record.
 
 import { scanComponentTags, preprocess } from './compile.js';
 import { tryParseExpression } from './lenient-json.js';
