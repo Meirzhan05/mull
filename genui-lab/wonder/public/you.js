@@ -98,8 +98,9 @@ function firstVisitAfterCheckout() {
 /**
  * The account's plan (server/plans.js) from /api/account, with Upgrade (a Polar checkout) or
  * Manage billing (Polar's customer portal) when the server offers billing (server/billing.js).
- * Hidden when the server sends no plan. Back from a checkout (?checkout_id=), it waits for the
- * webhook to make the account Pro. `live()` turns false once a newer call owns the row.
+ * Hidden when the server sends no plan. Back from a checkout (?checkout_id=), it asks the server
+ * to read the plan from Polar (POST /api/billing/sync) until it is Pro, so it does not depend on
+ * the webhook arriving first. `live()` turns false once a newer call owns the row.
  */
 async function showPlan(row, btn, live = () => true) {
   const load = async () => { try { return await (await fetch('/api/account', { headers: { Accept: 'application/json' } })).json(); } catch { return null; } };
@@ -109,6 +110,10 @@ async function showPlan(row, btn, live = () => true) {
     for (let i = 0; i < 15 && a?.plan?.id !== 'pro'; i++) {
       row.replaceChildren(el('div', { class: 'setting-text' }, el('strong', null, 'Finishing your upgrade…'), el('p', { class: 'muted small' }, 'Waiting for the payment to come through.')));
       row.hidden = false;
+      try {
+        const p = (await (await fetch('/api/billing/sync', { method: 'POST', headers: { Accept: 'application/json' } })).json())?.plan;
+        if (p?.id === 'pro') { a = (await load()) || a; break; }
+      } catch {}
       await new Promise((r) => setTimeout(r, 2000));
       if (!live()) return;
       a = (await load()) || a;
@@ -127,10 +132,17 @@ async function showPlan(row, btn, live = () => true) {
   const go = (path) => async () => {
     const r = await fetch(path, { method: 'POST', headers: { Accept: 'application/json' } });
     const d = await r.json().catch(() => ({}));
+    // Polar already had a subscription the plan missed: the server synced it, so redraw
+    if (r.status === 409 && d.resynced) { toast(d.error); if (live()) showPlan(row, btn, live); return; }
     if (!r.ok || !d.url) throw new Error(d.error || 'That did not work');
     location.href = d.url;
-    // busy while the page leaves; Back restores this page from the bfcache, which frees the button
-    await new Promise((r) => window.addEventListener('pageshow', r, { once: true }));
+    // busy while the page leaves. Back restores this page from the bfcache (pageshow), which frees
+    // the button; so does a navigation that never happened (still here and visible after 15 s)
+    await new Promise((resolve) => {
+      window.addEventListener('pageshow', resolve, { once: true });
+      const check = () => (document.visibilityState === 'visible' ? resolve() : setTimeout(check, 15000));
+      setTimeout(check, 15000);
+    });
   };
   const actions = [
     billing?.canUpgrade ? btn(billing.price ? `Upgrade · ${billing.price}` : 'Upgrade to Pro', 'btn-primary', go('/api/billing/checkout'), 'Opening checkout…') : null,

@@ -58,7 +58,8 @@ export function effectivePlan(record, { now = Date.now(), comped = false } = {})
 
 /**
  * Plans for signed-in users, over the sync database (getPlan/setPlan in memory-db.js / pg-db.js).
- * planOf never throws: a database error is logged and counts as Free.
+ * planId, describe and record never throw: a database error is logged and counts as Free (no
+ * record). stored and setPlan do throw, for callers that must not act on a missing record.
  */
 export function createPlans({ db, env = process.env, now = () => Date.now(), logger = console } = {}) {
   const admins = adminUsers(env);

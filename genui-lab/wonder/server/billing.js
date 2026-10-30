@@ -8,10 +8,12 @@
 // "sandbox" (the default, test cards only) or "production".
 //
 // The checkout carries the user id as Polar's external customer id, so every subscription event
-// names its user (customer.external_id). Events can arrive late, twice or out of order, so an event
-// only says which user to look at: their subscriptions are listed from Polar as they are now and
-// the best one becomes the plan record (stamped with when it was read, so an older read never
-// overwrites a newer one). A user with two subscriptions stays Pro while either is live.
+// names its user (customer.external_id, or the metadata it carries). Events can arrive late, twice
+// or out of order, so an event only says which user to look at: their subscriptions are read from
+// Polar as they are now and the best one becomes the plan record, versioned by Polar's own change
+// times so an older read never overwrites a newer one. A user with two subscriptions stays Pro
+// while either is live. The same sync runs when the browser comes back from checkout
+// (POST /api/billing/sync), so a late or lost webhook never leaves a payer on Free.
 //
 // POLAR_PRODUCT_ID may list several products (comma separated): the first is the one checkout
 // sells, and a subscription to any of them is Pro (a yearly price, or one a user switched to).
@@ -97,17 +99,22 @@ export function planFromSubscription(sub) {
 const time = (v) => { const n = Date.parse(v || ''); return Number.isFinite(n) ? n : 0; };
 
 /**
- * The subscription that decides a user's plan: a live one (latest period end first), else the
- * most recently changed one. Null for none.
+ * The subscription that decides a user's plan: a live one (renewing first, then latest period
+ * end), else the most recently changed one. Null for none.
  */
 export function bestSubscription(subs) {
-  const live = subs.filter((s) => GOOD_STANDING.includes(s.status)).sort((a, b) => time(b.current_period_end) - time(a.current_period_end));
+  // a renewing one before one set to cancel, then the latest period end
+  const live = subs.filter((s) => GOOD_STANDING.includes(s.status))
+    .sort((a, b) => (a.cancel_at_period_end ? 1 : 0) - (b.cancel_at_period_end ? 1 : 0) || time(b.current_period_end) - time(a.current_period_end));
   if (live.length) return live[0];
   return [...subs].sort((a, b) => time(b.modified_at || b.created_at) - time(a.modified_at || a.created_at))[0] || null;
 }
 
-/** A Polar error that retrying cannot fix (4xx other than 429). */
-const permanent = (e) => e.status >= 400 && e.status < 500 && e.status !== 429;
+/**
+ * A Polar error that retrying cannot fix: a 4xx about the request itself. 401/403 (a bad or
+ * under-scoped token) and 429 are retried, since fixing the token or waiting does fix them.
+ */
+const permanent = (e) => e.status >= 400 && e.status < 500 && ![401, 403, 429].includes(e.status);
 
 /** "$8 / month" style label for a Polar product's first fixed price, or null. */
 export function priceLabel(product) {
@@ -140,21 +147,44 @@ export function createPolarBilling({ config, plans, fetch: fetchImpl = globalThi
     return data;
   }
 
-  /** Every subscription of this user (by external customer id) to a Pro product. */
-  async function proSubscriptions(userId) {
-    const out = [];
+  const isPro = (sub) => config.productIds.includes(sub.product_id);
+  const namesUser = (sub, userId) => sub?.customer?.external_id === userId || sub?.metadata?.wonderUserId === userId;
+
+  /** One subscription by id, or null when Polar has no such one (or it is not this user's). */
+  async function subscription(id, userId) {
+    try {
+      const sub = await api('GET', `/subscriptions/${encodeURIComponent(id)}`);
+      return namesUser(sub, userId) ? sub : null;
+    } catch (e) {
+      if (e.status === 404) return null;
+      throw e;
+    }
+  }
+
+  /**
+   * Every subscription of this user: those under their external customer id, plus `extraIds`
+   * (the stored one, the one an event named) when they name the user only in their metadata,
+   * as when checkout linked an existing Polar customer that has no external id.
+   */
+  async function userSubscriptions(userId, extraIds = []) {
+    const out = new Map();
     for (let page = 1, max = 1; page <= max && page <= 10; page++) {
       let r;
       try {
         r = await api('GET', `/subscriptions/?external_customer_id=${encodeURIComponent(userId)}&limit=100&page=${page}`);
       } catch (e) {
-        if (e.status === 404) return []; // no Polar customer with this id yet
+        if (e.status === 404 && page === 1) break; // no Polar customer with this id yet
         throw e;
       }
-      out.push(...(r?.items || []));
+      for (const sub of r?.items || []) out.set(sub.id, sub);
       max = r?.pagination?.max_page || 1;
     }
-    return out.filter((s) => config.productIds.includes(s.product_id));
+    for (const id of new Set(extraIds.filter(Boolean))) {
+      if (out.has(id)) continue;
+      const sub = await subscription(id, userId);
+      if (sub) out.set(sub.id, sub);
+    }
+    return [...out.values()];
   }
 
   // the price is only a button label: a cold cache waits briefly, a stale one refreshes behind
@@ -176,21 +206,27 @@ export function createPolarBilling({ config, plans, fetch: fetchImpl = globalThi
   }
 
   /**
-   * Store the user's plan from their subscriptions as Polar has them now. A user with no record
-   * and nothing live is left alone (a deleted account is not brought back by the cancellation its
-   * deletion caused).
+   * Store the user's plan from their subscriptions as Polar has them now; resolves whether it
+   * stored. A user with no record and only ended subscriptions is left alone (a deleted account is
+   * not brought back by the cancellation its deletion caused).
    */
-  async function syncUser(userId) {
-    const syncedAt = now();
-    const best = bestSubscription(await proSubscriptions(userId));
+  async function syncUser(userId, { eventId = null } = {}) {
     const prev = await plans.stored(userId);
+    const all = await userSubscriptions(userId, [eventId, prev?.provider === 'polar' ? prev.subscriptionId : null]);
+    // the version of this read: Polar's latest change time, so no instance clock decides which of
+    // two reads is newer (with nothing listed, now: a customer deleted since)
+    const changed = Math.max(0, ...all.map((sub) => time(sub.modified_at || sub.created_at)));
+    const syncedAt = changed || now();
+    const best = bestSubscription(all.filter(isPro));
     if (!best) {
       // every Pro subscription is gone (or moved off Pro): a stored live one has ended
       if (prev?.provider !== 'polar' || !GOOD_STANDING.includes(prev.status)) return false;
       return plans.setPlan(userId, { ...prev, status: 'canceled', cancelAtPeriodEnd: false, syncedAt });
     }
     const next = { ...planFromSubscription(best), syncedAt };
-    if (!prev && !GOOD_STANDING.includes(next.status)) return false;
+    // an ended one for a user with no record is not stored; a paused or unpaid one is (it can
+    // still charge, so account deletion must know of it)
+    if (!prev && (next.status === 'canceled' || next.status === 'expired')) return false;
     return plans.setPlan(userId, next);
   }
 
@@ -200,22 +236,27 @@ export function createPolarBilling({ config, plans, fetch: fetchImpl = globalThi
 
     /** What the browser may offer this user (GET /api/account `billing`). */
     async offer(record, plan) {
+      const canUpgrade = plan.id === 'free';
       return {
         provider: 'polar',
         sandbox: config.server === 'sandbox',
-        price: await currentPrice(),
-        canUpgrade: plan.id === 'free',
+        price: canUpgrade ? await currentPrice() : null,
+        canUpgrade,
         canManage: record?.provider === 'polar' && !!record.customerId,
       };
     },
 
+    /** Bring the user's plan up to date from Polar now (back from checkout, or on request). */
+    sync: (userId) => syncUser(userId),
+
     /**
-     * A hosted checkout for Pro; resolves its URL. Refuses (status 409) when the user already has
-     * a live or paused subscription that the webhook has not recorded yet.
+     * A hosted checkout for Pro; resolves its URL. When Polar already has a live or paused Pro
+     * subscription the plan record missed, it syncs the plan from it and refuses (409, resynced).
      */
     async checkout(userId, { origin }) {
-      if ((await proSubscriptions(userId)).some((s) => SUBSCRIBED.includes(s.status))) {
-        throw Object.assign(new Error('You already have a Pro subscription. Manage it with Manage billing.'), { status: 409 });
+      if ((await userSubscriptions(userId)).some((sub) => isPro(sub) && SUBSCRIBED.includes(sub.status))) {
+        await syncUser(userId);
+        throw Object.assign(new Error('You already have a Pro subscription. Your plan is updated.'), { status: 409, resynced: true });
       }
       const c = await api('POST', '/checkouts/', {
         products: [config.productId],
@@ -237,30 +278,40 @@ export function createPolarBilling({ config, plans, fetch: fetchImpl = globalThi
     },
 
     /**
-     * Account deletion: end every subscription the user has at Polar that is not over yet (paused,
-     * unpaid and not-yet-recorded ones too), then delete and anonymize the Polar customer, which
-     * also clears its external id. Resolves how many were ended; throws when Polar cannot be
-     * reached, so the caller keeps the account.
+     * Account deletion, before the data goes: end every subscription the user has at Polar that is
+     * not over yet (paused, unpaid and not-yet-recorded ones too). A refused revoke counts only
+     * once Polar shows the subscription ended. Resolves how many were ended; throws when Polar
+     * cannot be reached or refuses, so the caller keeps the account.
      */
     async cancelAll(userId, record) {
-      const subs = await proSubscriptions(userId);
-      const ids = new Set(subs.filter((s) => !ENDED.includes(s.status)).map((s) => s.id));
-      if (record?.provider === 'polar' && record.subscriptionId && record.status !== 'canceled' && record.status !== 'expired' && !subs.some((s) => s.id === record.subscriptionId)) ids.add(record.subscriptionId);
+      const subs = await userSubscriptions(userId, [record?.provider === 'polar' ? record.subscriptionId : null]);
       let ended = 0;
-      for (const id of ids) {
+      for (const sub of subs.filter((x) => !ENDED.includes(x.status))) {
         try {
-          await api('DELETE', `/subscriptions/${encodeURIComponent(id)}`);
+          await api('DELETE', `/subscriptions/${encodeURIComponent(sub.id)}`);
           ended++;
         } catch (e) {
-          if (e.status !== 403 && e.status !== 404) throw e; // 403: already canceled; 404: gone
+          if (e.status !== 403 && e.status !== 404) throw e;
+          // 403 is also a missing scope or a state Polar will not revoke: only an ended one is fine
+          const now = await subscription(sub.id, userId);
+          if (now && !ENDED.includes(now.status)) throw Object.assign(new Error(`Polar would not end subscription ${sub.id} (${e.status}, ${now.status})`), { status: e.status });
         }
       }
+      return ended;
+    },
+
+    /**
+     * After the data is gone: delete and anonymize the Polar customer (clearing its external id).
+     * Best effort; a customer left behind has nothing billing it.
+     */
+    async forgetCustomer(userId) {
       try {
         await api('DELETE', `/customers/external/${encodeURIComponent(userId)}?anonymize=true`);
+        return true;
       } catch (e) {
-        if (e.status !== 404) throw e; // never bought anything
+        if (e.status !== 404) logger.warn?.(`[wonder] could not delete the Polar customer: ${e.message}`);
+        return false;
       }
-      return ended;
     },
 
     /**
@@ -280,7 +331,7 @@ export function createPolarBilling({ config, plans, fetch: fetchImpl = globalThi
         return { status: 202 };
       }
       try {
-        const stored = await syncUser(userId);
+        const stored = await syncUser(userId, { eventId: sub.id });
         logger.info?.(`[wonder] plan from Polar ${event.type}: ${stored ? 'stored' : 'unchanged'}`);
       } catch (e) {
         if (!permanent(e)) throw e;

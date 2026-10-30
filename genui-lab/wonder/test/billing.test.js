@@ -4,7 +4,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHmac } from 'node:crypto';
-import { createWonderServer } from '../server/app.js';
+import { createWonderServer, createWonderCore } from '../server/app.js';
+import { handleWebRequest } from '../server/web.js';
 import { createMemoryStore } from '../server/memory.js';
 import { createSyncService } from '../server/sync/service.js';
 import { createMemoryDb } from '../server/sync/memory-db.js';
@@ -66,6 +67,7 @@ test('subscription -> plan record, and price labels', () => {
   assert.equal(bestSubscription([]), null);
   assert.equal(bestSubscription([s('a', 'canceled', '2026-12-01'), s('b', 'active', '2026-11-01'), s('c', 'past_due', '2026-11-15')]).id, 'c', 'live first, latest period end');
   assert.equal(bestSubscription([s('a', 'canceled', null, '2026-10-01'), s('b', 'paused', null, '2026-10-20')]).id, 'b', 'else the latest change');
+  assert.equal(bestSubscription([{ ...s('a', 'active', '2026-11-20'), cancel_at_period_end: true }, s('b', 'active', '2026-11-10')]).id, 'b', 'a renewing one before one set to cancel');
 });
 
 test('plan records: an older provider read never overwrites a newer one', async () => {
@@ -83,7 +85,7 @@ test('plan records: an older provider read never overwrites a newer one', async 
 function fakePolar() {
   const calls = [];
   const subs = new Map();
-  const fail = { revoke: false, list: null, products: 0 };
+  const fail = { revoke: false, list: null, products: 0, page2: false, pausedForbidden: false, customer: false };
   const reply = (status, body) => new Response(status === 204 ? null : JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
   const fetch = async (url, init) => {
     const u = new URL(url);
@@ -99,18 +101,22 @@ function fakePolar() {
     if (init.method === 'GET' && p === '/subscriptions/') {
       if (fail.list) return reply(fail.list, { error: 'nope' });
       const items = [...subs.values()].filter((s) => s.customer?.external_id === u.searchParams.get('external_customer_id'));
+      if (fail.page2) return u.searchParams.get('page') === '1' ? reply(200, { items, pagination: { total_count: items.length + 1, max_page: 2 } }) : reply(404, { error: 'ResourceNotFound' });
       return reply(200, { items, pagination: { total_count: items.length, max_page: 1 } });
     }
     const m = p.match(/^\/subscriptions\/(.+)$/);
+    if (m && init.method === 'GET') return subs.has(m[1]) ? reply(200, subs.get(m[1])) : reply(404, { error: 'ResourceNotFound' });
     if (m && init.method === 'DELETE') {
       if (fail.revoke) return reply(500, { error: 'boom' });
       const s = subs.get(m[1]);
       if (!s || s.status === 'canceled') return reply(403, { error: 'AlreadyCanceledSubscription' });
+      if (fail.pausedForbidden && s.status === 'paused') return reply(403, { error: 'InactiveSubscription' });
       subs.set(m[1], { ...s, status: 'canceled', ended_at: new Date().toISOString() });
       return reply(200, subs.get(m[1]));
     }
     const c = p.match(/^\/customers\/external\/(.+)$/);
     if (c && init.method === 'DELETE') {
+      if (fail.customer) return reply(503, { error: 'down' });
       const mine = [...subs.values()].filter((s) => s.customer?.external_id === c[1]);
       if (!mine.length) return reply(404, { error: 'ResourceNotFound' });
       for (const s of mine) subs.set(s.id, { ...s, customer: { ...s.customer, external_id: null } });
@@ -198,17 +204,59 @@ test('over HTTP: checkout, webhook makes the account Pro, portal, and cancellati
   });
 });
 
-test('checkout refuses a second subscription the webhook has not recorded yet', async () => {
-  await withServer(async ({ call, polar }) => {
+test('checkout: a subscription the plan missed is synced instead of sold twice; POST /api/billing/sync reads Polar now', async () => {
+  await withServer(async ({ call, polar, sync }) => {
     polar.subs.set('sub_1', sub());
     const r = await call('alice', 'POST', '/api/billing/checkout');
     assert.equal(r.status, 409);
+    assert.equal(r.body.resynced, true);
     assert.match(r.body.error, /already have a Pro subscription/);
-    polar.subs.set('sub_1', sub({ status: 'paused' }));
-    assert.equal((await call('alice', 'POST', '/api/billing/checkout')).status, 409, 'a paused one counts');
+    assert.equal((await call('alice', 'GET', '/api/account')).body.plan.id, 'pro', 'synced from Polar, no webhook needed');
+    assert.equal(polar.calls.filter((c) => c.path === '/checkouts/').length, 0);
+
     polar.subs.set('sub_1', sub({ status: 'canceled' }));
-    assert.equal((await call('alice', 'POST', '/api/billing/checkout')).status, 200, 'an ended one does not');
-    assert.equal(polar.calls.filter((c) => c.path === '/checkouts/').length, 1);
+    assert.equal((await call(null, 'POST', '/api/billing/sync')).status, 401, 'signed in only');
+    assert.equal((await call('alice', 'POST', '/api/billing/sync')).body.plan.id, 'free');
+    const lists = polar.calls.filter((c) => c.path === '/subscriptions/').length;
+    assert.equal((await call('alice', 'POST', '/api/billing/sync')).body.plan.id, 'free');
+    assert.equal(polar.calls.filter((c) => c.path === '/subscriptions/').length, lists, 'a second sync right away is not sent to Polar');
+    assert.equal((await call('alice', 'POST', '/api/billing/checkout')).status, 200, 'an ended one does not block');
+
+    // bob opens checkout: a pending record marks him, without making him Pro or manageable
+    assert.equal((await call('bob', 'POST', '/api/billing/checkout')).status, 200);
+    assert.equal((await sync.db.getPlan('bob')).status, 'incomplete');
+    const bob = (await call('bob', 'GET', '/api/account')).body;
+    assert.equal(bob.plan.id, 'free');
+    assert.equal(bob.billing.canManage, false);
+  });
+});
+
+test('webhooks and sync find a subscription that names the user only in its metadata', async () => {
+  await withServer(async ({ call, hook, polar }) => {
+    // checkout linked an existing Polar customer that has no external id
+    polar.subs.set('sub_m', sub({ id: 'sub_m', customer: { id: 'cus_old', external_id: null } }));
+    assert.equal((await hook('subscription.active', 'sub_m')).status, 200);
+    assert.equal((await call('alice', 'GET', '/api/account')).body.plan.id, 'pro');
+    // later changes are found through the stored subscription id
+    polar.subs.set('sub_m', sub({ id: 'sub_m', customer: { id: 'cus_old', external_id: null }, status: 'canceled' }));
+    await new Promise((r) => setTimeout(r, 1600)); // past the sync throttle
+    assert.equal((await call('alice', 'POST', '/api/billing/sync')).body.plan.id, 'free');
+    // someone else's subscription is never taken for this user
+    polar.subs.set('sub_x', sub({ id: 'sub_x', customer: { id: 'cus_x', external_id: 'mallory' }, metadata: {} }));
+    assert.equal((await hook('subscription.active', { ...polar.subs.get('sub_x'), customer: { external_id: 'alice' } })).status, 200);
+    assert.equal((await call('alice', 'GET', '/api/account')).body.plan.id, 'free');
+  });
+});
+
+test('a sync is versioned by Polar change times, and a missing later page does not drop earlier ones', async () => {
+  await withServer(async ({ hook, polar, sync }) => {
+    polar.subs.set('sub_1', sub({ modified_at: '2026-10-29T10:00:00Z' }));
+    await hook('subscription.active', 'sub_1');
+    assert.equal((await sync.db.getPlan('alice')).syncedAt, Date.parse('2026-10-29T10:00:00Z'));
+    polar.fail.page2 = true;
+    polar.subs.set('sub_1', sub({ modified_at: '2026-10-29T11:00:00Z' }));
+    assert.equal((await hook('subscription.updated', 'sub_1')).status, 202, 'page 2 404s: dropped, not read as "no subscriptions"');
+    assert.equal((await sync.db.getPlan('alice')).status, 'active');
   });
 });
 
@@ -249,6 +297,10 @@ test('webhooks: two subscriptions, product switches, ignored events, and which e
     assert.equal((await hook('subscription.updated', 'sub_2')).status, 500);
     polar.fail.list = 429;
     assert.equal((await hook('subscription.updated', 'sub_2')).status, 500);
+    for (const code of [401, 403]) {
+      polar.fail.list = code;
+      assert.equal((await hook('subscription.updated', 'sub_2')).status, 500, `${code}: a token problem is retried, not dropped`);
+    }
     polar.fail.list = null;
     assert.equal((await call(null, 'POST', '/api/billing/webhook', 'not json')).status, 400, 'like every JSON route');
   });
@@ -276,8 +328,36 @@ test('deleting an account ends every Polar subscription and the customer first; 
     // the revokes' own webhooks arrive after the delete and bring nothing back
     assert.equal((await hook('subscription.revoked', { ...polar.subs.get('sub_2'), customer: { external_id: 'alice' } })).status, 200);
     assert.equal(await sync.db.getPlan('alice'), null);
-    // a Free account that never bought anything deletes fine (Polar has no such customer)
+    // a Free account that never opened checkout deletes without asking Polar, even when it is down
+    polar.fail.list = 503;
+    const before = polar.calls.length;
     assert.equal((await call('bob', 'DELETE', '/api/account')).status, 200);
+    assert.equal(polar.calls.length, before);
+    // one that did open checkout is checked, and kept while Polar is down
+    polar.fail.list = null;
+    assert.equal((await call('carol', 'POST', '/api/billing/checkout')).status, 200);
+    polar.fail.list = 503;
+    const down = await call('carol', 'DELETE', '/api/account');
+    assert.equal(down.status, 502);
+    assert.match(down.body.error, /Could not reach billing/);
+    polar.fail.list = null;
+  });
+});
+
+test('deleting an account: a revoke Polar refuses on a subscription still running keeps the account', async () => {
+  await withServer(async ({ call, hook, polar, sync }) => {
+    polar.subs.set('sub_p', sub({ id: 'sub_p', status: 'paused' }));
+    await call('alice', 'POST', '/api/billing/checkout'); // 409, synced: the paused one is recorded
+    assert.equal((await sync.db.getPlan('alice')).status, 'paused');
+    polar.fail.pausedForbidden = true;
+    const r = await call('alice', 'DELETE', '/api/account');
+    assert.equal(r.status, 502, 'a 403 is not taken as "already canceled"');
+    assert.equal(polar.subs.get('sub_p').status, 'paused');
+    assert.ok(await sync.db.getPlan('alice'), 'nothing deleted');
+    polar.fail.pausedForbidden = false;
+    assert.equal((await call('alice', 'DELETE', '/api/account')).status, 200);
+    assert.equal(polar.subs.get('sub_p').status, 'canceled');
+    void hook;
   });
 });
 
@@ -297,7 +377,12 @@ test('deleting an account: a database error says so, and a delete that fails aft
     const r2 = await call('alice', 'DELETE', '/api/account');
     assert.equal(r2.status, 500);
     assert.match(r2.body.error, /subscription was canceled, but deleting your data failed/);
+    assert.equal(polar.calls.filter((c) => c.path.startsWith('/customers/')).length, 0, 'the Polar customer stays while the data does');
     db.deleteUser = deleteUser;
+    // the data goes, then the customer; a customer delete that fails does not undo the account delete
+    polar.fail.customer = true;
+    assert.equal((await call('alice', 'DELETE', '/api/account')).status, 200);
+    assert.equal(polar.calls.filter((c) => c.path.startsWith('/customers/')).length, 1);
   }, { db });
 });
 
@@ -309,6 +394,31 @@ test('the account card does not wait long for a slow Polar price', async () => {
     assert.ok(Date.now() - t0 < 3000, 'answered without the price');
     assert.equal(a.billing.price, null);
   });
+  await withServer(async ({ call, hook, polar }) => {
+    polar.subs.set('sub_1', sub());
+    await hook('subscription.active', 'sub_1');
+    const before = polar.calls.filter((c) => c.path.startsWith('/products/')).length;
+    assert.equal((await call('alice', 'GET', '/api/account')).body.billing.price, null, 'Pro: no Upgrade, no price');
+    assert.equal(polar.calls.filter((c) => c.path.startsWith('/products/')).length, before);
+  });
+});
+
+test('over the Next.js adapter: the webhook is verified over the raw body, and checkout uses the request origin', async () => {
+  const polar = fakePolar();
+  const sync = createSyncService({ db: createMemoryDb() });
+  const core = createWonderCore({ mode: 'demo', logger: quiet, memory: createMemoryStore({ file: null }), push: null, sync, billingFetch: polar.fetch, env: ENV });
+  polar.subs.set('sub_1', sub());
+  const raw = JSON.stringify({ type: 'subscription.active', data: polar.subs.get('sub_1') });
+  const res = await handleWebRequest(core, new Request('https://mull.example/api/billing/webhook', { method: 'POST', headers: { 'Content-Type': 'application/json', ...signed(raw, standardKey(ENV.POLAR_WEBHOOK_SECRET)) }, body: raw }), { logger: quiet });
+  assert.equal(res.status, 200);
+  assert.equal((await sync.db.getPlan('alice')).status, 'active');
+  const bad = await handleWebRequest(core, new Request('https://mull.example/api/billing/webhook', { method: 'POST', headers: signed(raw, Buffer.from('wrong')), body: raw }), { logger: quiet });
+  assert.equal(bad.status, 401);
+  polar.subs.set('sub_1', sub({ status: 'canceled' }));
+  await sync.db.setPlan('bob', cleanPlanRecord({ plan: 'pro', status: 'canceled', provider: 'polar' }));
+  const co = await handleWebRequest(core, new Request('https://mull.example/api/billing/checkout', { method: 'POST' }), { logger: quiet, userId: 'bob' });
+  assert.equal(co.status, 200);
+  assert.equal(polar.calls.find((c) => c.path === '/checkouts/').body.success_url, 'https://mull.example/?checkout_id={CHECKOUT_ID}#/you');
 });
 
 test('billing off: no offer on /api/account, and the billing routes say so', async () => {

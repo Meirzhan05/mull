@@ -16,6 +16,7 @@
 //   DELETE /api/account         -> delete everything kept for the signed-in user, then the sign-in
 //   POST /api/billing/checkout  -> {url} of a Polar checkout for Pro (signed in; server/billing.js)
 //   POST /api/billing/portal    -> {url} of Polar's customer portal: card, invoices, cancel (signed in)
+//   POST /api/billing/sync      -> {plan}: the plan read from Polar now (signed in; back from checkout)
 //   POST /api/billing/webhook   -> Polar subscription events (signed over t.rawBody) -> plan records
 //   POST /api/sync              -> push changed records, pull newer ones (signed in)
 //   POST/DELETE /api/push/subscribe -> this browser's Web Push subscription (signed in)
@@ -74,10 +75,12 @@ export const STATIC_ROOTS = [
 ];
 export const MIME = { '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.html': 'text/html; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon', '.json': 'application/json', '.webmanifest': 'application/manifest+json', '.mjs': 'text/javascript; charset=utf-8', '.woff2': 'font/woff2', '.woff': 'font/woff', '.ttf': 'font/ttf' };
 export const MAX_BODY = 2 * 1024 * 1024;
+/** Request bodies up to this size are also kept as raw text (t.rawBody), for signature checks. */
+export const RAW_BODY_KEEP = 256 * 1024;
 const DEFAULT_TUTOR_FOLLOWUPS = ['Quiz me on this lesson', 'Give me a real-world example', 'What should I learn next?'];
 const DEFAULT_TEACHER_FOLLOWUPS = ['What should I study today?', 'Make me a study plan', 'Quiz me'];
 // with account sync on: routes that need a signed-in user, and routes that read learner memory
-const SIGNED_IN_ONLY = new Set(['DELETE /api/account', 'POST /api/billing/checkout', 'POST /api/billing/portal', 'POST /api/sync', 'POST /api/push/subscribe', 'DELETE /api/push/subscribe', 'POST /api/memory', 'DELETE /api/memory', 'POST /api/materials', 'POST /api/materials/part', 'DELETE /api/materials', 'GET /api/materials/file']);
+const SIGNED_IN_ONLY = new Set(['DELETE /api/account', 'POST /api/billing/checkout', 'POST /api/billing/portal', 'POST /api/billing/sync', 'POST /api/sync', 'POST /api/push/subscribe', 'DELETE /api/push/subscribe', 'POST /api/memory', 'DELETE /api/memory', 'POST /api/materials', 'POST /api/materials/part', 'DELETE /api/materials', 'GET /api/materials/file']);
 const MEMORY_PATHS = /^\/api\/(lesson|tutor|teacher|memory|widget_action)(\/|$)/;
 const MEMORY_OFF_CONTEXT = 'The learner turned memory off for this conversation: do not save or forget memory items, and do not assume anything about them beyond this conversation.';
 
@@ -120,7 +123,7 @@ export function bodyLimit(pathname) {
   return pathname === '/api/materials' ? MATERIAL_BODY_LIMIT : MAX_BODY;
 }
 
-/** A JSON request body as {body, raw}: raw is the exact text, for routes that check a signature over it. */
+/** A JSON request body as {body, raw}: raw is the exact text (up to RAW_BODY_KEEP), for signature checks. */
 function readBody(req, limit = MAX_BODY) {
   return new Promise((resolve, reject) => {
     let size = 0;
@@ -131,9 +134,10 @@ function readBody(req, limit = MAX_BODY) {
       chunks.push(c);
     });
     req.on('end', () => {
-      const raw = Buffer.concat(chunks).toString('utf8');
-      if (!raw) return resolve({ body: {}, raw });
-      try { resolve({ body: JSON.parse(raw), raw }); } catch { reject(Object.assign(new Error('Body must be JSON'), { status: 400 })); }
+      const text = Buffer.concat(chunks).toString('utf8');
+      const raw = size <= RAW_BODY_KEEP ? text : undefined; // large uploads are not held twice
+      if (!text) return resolve({ body: {}, raw });
+      try { resolve({ body: JSON.parse(text), raw }); } catch { reject(Object.assign(new Error('Body must be JSON'), { status: 400 })); }
     });
     req.on('error', reject);
   });
@@ -839,6 +843,7 @@ export function createWonderCore(opts = {}) {
     'GET /api/cron/reminders': cronReminders,
     'POST /api/billing/checkout': billingCheckout,
     'POST /api/billing/portal': billingPortal,
+    'POST /api/billing/sync': billingSync,
     'POST /api/billing/webhook': billingWebhook,
   };
 
@@ -913,22 +918,24 @@ export function createWonderCore(opts = {}) {
     const { userId, sync } = scopes.getStore() || {};
     if (!sync) return t.json(404, { ok: false, error: 'Accounts are not configured on this server' });
     // Pro subscriptions end first, so a deleted account is never charged again; if that fails
-    // nothing is deleted
+    // nothing is deleted. Only users who ever opened checkout (they have a plan record) can have one.
     const pay = billingFor(sync);
+    let record = null;
     let ended = 0;
     if (pay) {
-      let record;
       try {
         record = await userPlans(sync).stored(userId);
       } catch (e) {
         logger.error?.(`[wonder] account delete: plan lookup failed: ${e.message}`);
         return t.json(503, { ok: false, error: 'Could not delete your account right now, so nothing was deleted. Try again in a minute.' });
       }
-      try {
-        ended = await pay.cancelAll(userId, record);
-      } catch (e) {
-        logger.error?.(`[wonder] account delete: could not end the Pro subscription: ${e.message}`);
-        return t.json(502, { ok: false, error: 'Could not cancel your Pro subscription, so nothing was deleted. Try again in a minute.' });
+      if (record?.provider === 'polar') {
+        try {
+          ended = await pay.cancelAll(userId, record);
+        } catch (e) {
+          logger.error?.(`[wonder] account delete: could not end the Pro subscription: ${e.message}`);
+          return t.json(502, { ok: false, error: 'Could not reach billing to end your Pro subscription, so nothing was deleted. Try again in a minute.' });
+        }
       }
     }
     try {
@@ -938,6 +945,8 @@ export function createWonderCore(opts = {}) {
       logger.error?.(`[wonder] account delete failed after ending its Pro subscription: ${e.message}`);
       return t.json(500, { ok: false, error: 'Your Pro subscription was canceled, but deleting your data failed. Try deleting again.' });
     }
+    // the data is gone: now the Polar customer too (best effort)
+    if (pay && record?.provider === 'polar') await pay.forgetCustomer(userId);
     // then the sign-in itself, in the same request, so a closed tab cannot leave it behind
     const authDeleted = (await t.deleteAuthUser?.()) === true;
     logger.info?.(`[wonder] account deleted${authDeleted ? ' with its sign-in' : ''}`);
@@ -991,15 +1000,43 @@ export function createWonderCore(opts = {}) {
   async function billingCheckout(t) {
     const b = await billingScope(t);
     if (!b) return;
-    const plan = await userPlans(b.sync).describe(b.userId);
+    const plans = userPlans(b.sync);
+    const plan = await plans.describe(b.userId);
     if (plan.id === 'pro') return t.json(409, { ok: false, error: 'You are already on Pro.', plan });
+    let url;
     try {
-      t.json(200, { ok: true, url: await b.pay.checkout(b.userId, { origin: t.origin }) });
+      url = await b.pay.checkout(b.userId, { origin: t.origin });
     } catch (e) {
-      if (e.status === 409) return t.json(409, { ok: false, error: e.message, manage: true });
+      if (e.resynced) return t.json(409, { ok: false, error: e.message, resynced: true });
       logger.error?.(`[wonder] checkout failed: ${e.message}`);
-      t.json(502, { ok: false, error: 'Could not open checkout. Try again in a minute.' });
+      return t.json(502, { ok: false, error: 'Could not open checkout. Try again in a minute.' });
     }
+    // a pending record marks that this user may have a Polar subscription from now on (account
+    // deletion looks for one only then); a real record is never replaced by it
+    try {
+      if (!(await plans.stored(b.userId))) await plans.setPlan(b.userId, { plan: 'pro', status: 'incomplete', provider: 'polar' });
+    } catch (e) {
+      logger.error?.(`[wonder] checkout: could not mark the pending plan: ${e.message}`);
+      return t.json(503, { ok: false, error: 'Could not open checkout. Try again in a minute.' });
+    }
+    t.json(200, { ok: true, url });
+  }
+
+  const lastSync = new Map(); // userId -> time of their last POST /api/billing/sync (per instance)
+  async function billingSync(t) {
+    const b = await billingScope(t);
+    if (!b) return;
+    const at = Date.now();
+    if (at - (lastSync.get(b.userId) || 0) >= 1500) {
+      lastSync.set(b.userId, at);
+      while (lastSync.size > 5000) lastSync.delete(lastSync.keys().next().value);
+      try {
+        await b.pay.sync(b.userId);
+      } catch (e) {
+        logger.warn?.(`[wonder] billing sync failed: ${e.message}`);
+      }
+    }
+    t.json(200, { ok: true, plan: await userPlans(b.sync).describe(b.userId) });
   }
 
   async function billingPortal(t) {

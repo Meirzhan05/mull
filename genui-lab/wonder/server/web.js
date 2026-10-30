@@ -6,19 +6,20 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { createWonderCore, resolveStatic, bodyLimit } from './app.js';
+import { createWonderCore, resolveStatic, bodyLimit, RAW_BODY_KEEP } from './app.js';
 
 const json = (status, body) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' } });
 
-/** The JSON body as {body, raw}: raw is the exact text, for routes that check a signature over it. */
+/** The JSON body as {body, raw}: raw is the exact text (up to RAW_BODY_KEEP), for signature checks. */
 async function readBody(request, limit) {
   if (request.method === 'GET' || request.method === 'HEAD') return { body: {}, raw: '' };
   const declared = Number(request.headers.get('content-length') || 0);
   if (declared > limit) throw Object.assign(new Error('Request body too large'), { status: 413 });
   const text = await request.text();
   if (Buffer.byteLength(text) > limit) throw Object.assign(new Error('Request body too large'), { status: 413 });
-  if (!text) return { body: {}, raw: text };
-  try { return { body: JSON.parse(text), raw: text }; } catch { throw Object.assign(new Error('Body must be JSON'), { status: 400 }); }
+  const raw = Buffer.byteLength(text) <= RAW_BODY_KEEP ? text : undefined; // large uploads are not held twice
+  if (!text) return { body: {}, raw };
+  try { return { body: JSON.parse(text), raw }; } catch { throw Object.assign(new Error('Body must be JSON'), { status: 400 }); }
 }
 
 /**
