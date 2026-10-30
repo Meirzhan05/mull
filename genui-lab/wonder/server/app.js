@@ -77,7 +77,7 @@ export const RAW_BODY_KEEP = 256 * 1024;
 const DEFAULT_TUTOR_FOLLOWUPS = ['Quiz me on this lesson', 'Give me a real-world example', 'What should I learn next?'];
 const DEFAULT_TEACHER_FOLLOWUPS = ['What should I study today?', 'Make me a study plan', 'Quiz me'];
 // with account sync on: routes that need a signed-in user, and routes that read learner memory
-const SIGNED_IN_ONLY = new Set(['DELETE /api/account', 'POST /api/billing/checkout', 'POST /api/billing/portal', 'POST /api/billing/sync', 'POST /api/sync', 'POST /api/push/subscribe', 'DELETE /api/push/subscribe', 'POST /api/memory', 'DELETE /api/memory', 'POST /api/materials', 'POST /api/materials/part', 'DELETE /api/materials', 'GET /api/materials/file']);
+const SIGNED_IN_ONLY = new Set(['DELETE /api/account', 'POST /api/lesson/steer', 'POST /api/billing/checkout', 'POST /api/billing/portal', 'POST /api/billing/sync', 'POST /api/sync', 'POST /api/push/subscribe', 'DELETE /api/push/subscribe', 'POST /api/memory', 'DELETE /api/memory', 'POST /api/materials', 'POST /api/materials/part', 'DELETE /api/materials', 'GET /api/materials/file']);
 const MEMORY_PATHS = /^\/api\/(lesson|tutor|teacher|memory|widget_action)(\/|$)/;
 // routes that only Claude can answer: 503 while the server has no credentials
 const NEEDS_CLAUDE = new Set(['POST /api/lesson/stream', 'POST /api/tutor/stream', 'POST /api/teacher/stream', 'POST /api/course/plan']);
@@ -211,6 +211,13 @@ export function createWonderCore(opts = {}) {
   let plans = opts.plans ?? null; // Free/Pro per user (server/plans.js), made on first use
   const usageGate = (sync) => (usage ??= createUsageGate({ db: sync.db, limits: usageLimits(env), proLimits: usageLimits(env, 'pro'), logger }));
   const userPlans = (sync) => (plans ??= createPlans({ db: sync.db, env, logger }));
+  /** Charge one Claude call to a user's daily caps: null when it may go ahead, else the 429 body. */
+  async function overCap(sync, userId, kind, { retryKey, units = 1 } = {}) {
+    if (!state.client || userPlans(sync).isAdmin(userId)) return null; // a server without Claude spends nothing; admins have no caps
+    const plan = await userPlans(sync).planId(userId);
+    const r = await usageGate(sync).charge(userId, kind, { retryKey, units, plan });
+    return r.ok ? null : r.body;
+  }
   // Polar checkout, portal and webhooks (server/billing.js); null when not configured
   let billing = opts.billing;
   const billingFor = (sync) => {
@@ -446,6 +453,7 @@ export function createWonderCore(opts = {}) {
     const onText = (t) => emit(guard ? guard.push(t) : t);
     const endAttempt = () => { if (guard) { const g = guard; guard = null; emit(g.flush()); } };
     const op = steering.open(writer.operationId, signal, { onReject: (reason, instruction) => writer.control('steering-status', { status: 'rejected', reason, instruction }) });
+    op.owner = scopes.getStore()?.userId ?? null; // only the lesson's own learner may steer it
     // A steer queued while (or just after) the upstream stream ended is applied as a continuation,
     // never dropped: lessonSteer only says "accepted" while the operation is still open, and the
     // operation stays open until this check fails synchronously right before close().
@@ -531,7 +539,12 @@ export function createWonderCore(opts = {}) {
     const instruction = cleanInstruction(body.instruction);
     if (!instruction) return t.json(400, { ok: false, error: 'instruction is required' });
     const op = steering.get(String(body.operationId || ''));
-    if (!op || op.closed) return t.json(409, { ok: false, status: 'rejected', reason: 'not_streaming', error: 'This lesson has finished streaming.' });
+    const { userId, sync } = scopes.getStore() || {};
+    // another user's lesson looks like one that has finished: an operation id reveals nothing
+    if (!op || op.closed || (sync && op.owner !== userId)) return t.json(409, { ok: false, status: 'rejected', reason: 'not_streaming', error: 'This lesson has finished streaming.' });
+    if (op.hasSteer) { op.steer(instruction); return t.json(409, { ok: false, status: 'rejected', reason: 'busy', error: 'Still applying your last change.' }); } // rejects in the stream too
+    // an accepted steer is a new Claude request on the lesson: it counts as a lesson
+    if (sync) { const over = await overCap(sync, userId, 'lesson'); if (over) return t.json(429, over); }
     if (!op.steer(instruction)) return t.json(409, { ok: false, status: 'rejected', reason: op.hasSteer ? 'busy' : 'not_streaming', error: op.hasSteer ? 'Still applying your last change.' : 'This lesson has finished streaming.' });
     return t.json(200, { ok: true, status: 'accepted', operationId: op.operationId });
   }
@@ -803,12 +816,9 @@ export function createWonderCore(opts = {}) {
     const spend = usageKind(method, pathname, body);
     if (spend) {
       if (!userId) return t.json(401, { ok: false, error: 'Sign in to use Mull: lessons, the tutor and the Teacher need an account.', signedOut: true });
-      if (state.client && !userPlans(sync).isAdmin(userId)) { // a server without Claude spends nothing; admins have no caps
-        const plan = await userPlans(sync).planId(userId);
-        const units = body?.materialId ? materialCharge(await userMats.meta(body.materialId)) : 1;
-        const r = await usageGate(sync).charge(userId, spend, { retryKey: cleanKey(body?.streamKey) || cleanKey(body?.turnId), units, plan });
-        if (!r.ok) return t.json(429, r.body);
-      }
+      const units = body?.materialId ? materialCharge(await userMats.meta(body.materialId)) : 1;
+      const over = await overCap(sync, userId, spend, { retryKey: cleanKey(body?.streamKey) || cleanKey(body?.turnId), units });
+      if (over) return t.json(429, over);
     }
     const scope = { userId, sync, memory: signedOutMemory(), materials: signedOutMaterials() };
     if (userId) {

@@ -24,6 +24,10 @@ import { LEARNING_COMPONENTS, META_COMPONENTS, validateComponentProps, fallbackM
 import { protectMath, restoreMathConstants } from './math-spans.js';
 
 const KNOWN = new Set([...Object.keys(LEARNING_COMPONENTS), ...Object.keys(META_COMPONENTS)]);
+// every component a compiled program may name: the learning catalog plus the Cite pills and
+// Sources list the server inserts itself (grounding.js). Model output can name nothing else, so a
+// tag like <GenUI.dispatchAction/> or <DIL.useState/> never becomes a call in the program.
+const COMPILABLE = Object.freeze([...KNOWN, 'Cite', 'Sources']);
 const PLACEHOLDER = (n) => `__wonder_h${n}__`;
 const PLACEHOLDER_RE = /"__wonder_h(\d+)__"/g;
 
@@ -361,7 +365,7 @@ export function compileWonder(markdown, opts = {}) {
   const explicit = {};
   for (const c of pre.components) if (c.status === 'valid') (explicit[c.name] ||= []).push(c.resolutionId);
   const resolutionIdFor = (name, _props, ordinal) => explicit[name]?.[ordinal] || defaultResolutionId(name, { __salt: salt }, ordinal);
-  const result = compile(pre.source, { partial: !!opts.partial, resolutionIdFor });
+  const result = compile(pre.source, { partial: !!opts.partial, resolutionIdFor, components: COMPILABLE });
   let next = Object.keys(result.constants).reduce((m, k) => Math.max(m, Number(k) + 1), 0);
   const constants = restoreMathConstants(result.constants, math.latex);
   const code = result.code.replace(PLACEHOLDER_RE, (_, n) => {
@@ -369,7 +373,7 @@ export function compileWonder(markdown, opts = {}) {
     constants[key] = pre.hoisted[Number(n)];
     return `__dilConstants[${JSON.stringify(key)}]`;
   });
-  const fallbackMarkdown = opts.fallback === false ? '' : compile(pre.fallbackSource, { partial: !!opts.partial }).fallbackMarkdown;
+  const fallbackMarkdown = opts.fallback === false ? '' : compile(pre.fallbackSource, { partial: !!opts.partial, components: COMPILABLE }).fallbackMarkdown;
   return { code, constants, requiredComponents: result.requiredComponents, fallbackMarkdown, components: pre.components, followups: pre.followups };
 }
 

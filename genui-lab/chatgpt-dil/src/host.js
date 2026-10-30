@@ -57,7 +57,10 @@ const COLOR_TOKENS = {
 export function resolveColor(v, ctx = 'text') {
   if (v == null || v === false) return null;
   const s = String(v);
-  if (/^(#|rgb|hsl|var\(|oklch|color\()/i.test(s) || s === 'currentColor' || s === 'none' || s === 'inherit') return s;
+  if (s === 'currentColor' || s === 'none' || s === 'inherit') return s;
+  // a CSS color function or hex, and nothing more: "#fff url(https://…)" would otherwise load a
+  // URL chosen by the model when it lands in `background`
+  if (/^(#|rgb|hsl|var\(|oklch|color\()/i.test(s)) return /^[\w\s#.,%()/+-]*$/.test(s) && !/url\(|image|element\(/i.test(s) ? s : null;
   const m = /^alpha-(\d+)$/.exec(s);
   if (m) return `var(--d-alpha-${m[1]}, rgba(13,13,13,${Number(m[1]) / 100}))`;
   return COLOR_TOKENS[ctx]?.[s] ?? COLOR_TOKENS.any[s] ?? PALETTE[s] ?? `var(--d-color-${s.replace(/[^\w-]/g, '')}, currentColor)`;
