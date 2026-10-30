@@ -45,30 +45,37 @@ export function budgetBody(now = Date.now()) {
 }
 
 /**
- * The server-wide ceiling. `record(entry)` adds a response's cost to today's total (best effort,
- * logged on failure); `reached()` says whether today's total is at the budget. It is read from the
- * database at most every `cacheMs` per instance, plus what this instance spent since, so requests
- * already running when the budget is reached still finish (the overshoot is those requests).
- * A failed read throws: the caller refuses the request rather than spend blind.
+ * The server-wide ceiling. `record(entry)` adds a response's cost to today's total and returns the
+ * write (it never rejects; a failure is logged), which the request waits for before its response
+ * ends, as a serverless function may be frozen after that. `reached()` says whether today's total
+ * is at the budget. It is read from the database at most every `cacheMs` per instance, plus what
+ * this instance spent since, so requests already running when the budget is reached still finish
+ * (the overshoot is those requests). A failed read throws: the caller refuses the request rather
+ * than spend blind.
  */
 export function createSpendGuard({ db, budgetUsd = dailyBudget(), now = () => Date.now(), cacheMs = 15_000, logger = console } = {}) {
   let cached = null; // {day, usd, at}
+  let local = 0; // USD this instance has recorded, ever: what a read in flight may have missed
   return {
     budgetUsd,
     record(entry) {
-      if (budgetUsd === Infinity) return;
+      if (budgetUsd === Infinity) return null;
       const usd = usageCost(entry);
-      if (!(usd > 0)) return;
+      if (!(usd > 0)) return null;
       const { day } = usageDay(now());
+      local += usd;
       if (cached?.day === day) cached.usd += usd;
-      db.addSpend(day, Math.round(usd * 1e6)).catch((e) => logger.warn?.(`[wonder] spend not recorded: ${e.message}`));
+      return db.addSpend(day, Math.round(usd * 1e6)).catch((e) => logger.warn?.(`[wonder] spend not recorded: ${e.message}`));
     },
     async reached() {
       if (budgetUsd === Infinity) return false;
       const t = now();
       const { day } = usageDay(t);
       if (!cached || cached.day !== day || t - cached.at >= cacheMs) {
-        cached = { day, usd: (await db.spendToday(day)) / 1e6, at: t };
+        const mark = local;
+        const usd = (await db.spendToday(day)) / 1e6;
+        // spend recorded during the read may be missing from it: count it (at worst twice, never not at all)
+        cached = { day, usd: usd + (local - mark), at: t };
       }
       return cached.usd >= budgetUsd;
     },

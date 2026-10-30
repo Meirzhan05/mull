@@ -90,15 +90,17 @@ export function limitBody(kind, max, now = Date.now(), { plan = 'free', units = 
   return { ok: false, error, limited: { kind, max, plan, resetsAt: new Date(resetsAt).toISOString() } };
 }
 
-/**
- * Per-user spending gate. `charge(userId, kind, {retryKey, units, plan})` resolves {ok:true} or
- * {ok:false, body} (send it with HTTP 429). `plan` ('free' or 'pro') picks `limits` or `proLimits`. The browser retries a dropped stream with the same
- * retryKey, so up to RETRY_FREE retries within RETRY_WINDOW_MS of a charged request are free;
- * any reuse beyond that is charged like a new request (a reused key is not a free pass).
- */
 /** The 503 body when today's usage can't be read or counted (the database is unreachable). */
 export const UNCOUNTED = Object.freeze({ ok: false, error: "Couldn't check today's limits just now. Try again in a moment.", code: 'usage_unavailable' });
 
+/**
+ * Per-user spending gate. `charge(userId, kind, {retryKey, units, plan})` resolves {ok:true} or
+ * {ok:false, body}: a used-up cap's body has `limited` (send it with HTTP 429), UNCOUNTED does not
+ * (503). `plan` ('free' or 'pro') picks `limits` or `proLimits`. The browser retries a dropped
+ * stream with the same retryKey, so up to RETRY_FREE retries within RETRY_WINDOW_MS of a charged
+ * request are free; any reuse beyond that is charged like a new request (a reused key is not a
+ * free pass).
+ */
 export function createUsageGate({ db, limits = usageLimits(), proLimits = limits, now = () => Date.now(), logger = console } = {}) {
   const capsFor = (plan) => (plan === 'pro' ? proLimits : limits);
   const recent = new Map(); // `${userId}|${kind}|${retryKey}` -> {at, free}, best effort per instance
@@ -131,10 +133,13 @@ export function createUsageGate({ db, limits = usageLimits(), proLimits = limits
       }
       return { ok: true, used: r.used };
     },
-    /** Today's counts for one user on their plan (the You page); `unlimited`: no caps (admins). */
-    async today(userId, plan = 'free', { unlimited = false } = {}) {
+    /**
+     * Today's counts for one user on their plan; `unlimited`: no caps (admins). A failed read shows
+     * as nothing used (the You page), or throws with `strict` (a check before a charge).
+     */
+    async today(userId, plan = 'free', { unlimited = false, strict = false } = {}) {
       const { day, resetsAt } = usageDay(now());
-      const used = await db.quotaUsed(userId, day).catch(() => ({})); // display only: charge() is the gate
+      const used = await (strict ? db.quotaUsed(userId, day) : db.quotaUsed(userId, day).catch(() => ({})));
       return { day, plan, resetsAt: new Date(resetsAt).toISOString(), kinds: Object.fromEntries(Object.entries(capsFor(plan)).map(([k, max]) => [k, { used: used[k] || 0, max: unlimited || max === Infinity ? null : max }])) };
     },
   };

@@ -55,7 +55,7 @@ import { createYouTubeLookup, createVideoResolver } from './videos.js'; // media
 import { combineResolvers, withResolved } from './media-resolver.js';
 import { createInflight, createTurnLedger, cleanKey, retryNote } from './retry.js'; // recoverable streams
 // account sync + Web Push
-import { createSyncFromEnv } from './sync/index.js';
+import { createSyncFromEnv, syncConfig } from './sync/index.js';
 import { SYNC_BODY_LIMIT } from './sync/service.js';
 import { loadUserMemory, signedOutMemory, userMaterials, signedOutMaterials, userUploadParts } from './sync/user-stores.js';
 import { pushConfig, webPushSender, sendDueReminders } from './push.js';
@@ -183,6 +183,11 @@ function progressNarrator(writer, { first = 'Writing the introduction…', pages
   };
 }
 
+// Claude's token usage (claude.js reportUsage) goes to the request it belongs to: one listener for
+// the process, and each request runs inside spendScope with its own recorder (handle)
+const spendScope = new AsyncLocalStorage();
+onUsage((entry) => spendScope.getStore()?.(entry));
+
 /**
  * The API without a transport. Each request is handed a transport `t`:
  *   t.url                     the request URL (path + query)
@@ -212,11 +217,10 @@ export function createWonderCore(opts = {}) {
   let plans = opts.plans ?? null; // Free/Pro per user (server/plans.js), made on first use
   const usageGate = (sync) => (usage ??= createUsageGate({ db: sync.db, limits: usageLimits(env), proLimits: usageLimits(env, 'pro'), logger }));
   const userPlans = (sync) => (plans ??= createPlans({ db: sync.db, env, logger }));
-  // every Claude response this server makes is priced into today's total (server/spend.js);
-  // scopes.getStore() is set only inside this server's own requests
+  // with accounts on, every Claude response is priced into today's total (server/spend.js,
+  // through spendScope in handle)
   let spendGuard = opts.spend ?? null;
   const spendFor = (sync) => (spendGuard ??= createSpendGuard({ db: sync.db, budgetUsd: dailyBudget(env), logger }));
-  onUsage((entry) => { const s = scopes.getStore(); if (s?.sync) spendFor(s.sync).record(entry); });
   /** The 429 body once today's budget for everyone is spent, the 503 one when it can't be read. */
   async function overBudget(sync) {
     try { return (await spendFor(sync).reached()) ? budgetBody() : null; } catch (e) { logger.warn?.(`[wonder] spend check failed: ${e.message}`); return UNCOUNTED; }
@@ -242,7 +246,8 @@ export function createWonderCore(opts = {}) {
     const over = await overBudget(sync);
     if (over) return over;
     const plan = await userPlans(sync).planId(userId);
-    const k = (await usageGate(sync).today(userId, plan)).kinds[kind];
+    let k;
+    try { k = (await usageGate(sync).today(userId, plan, { strict: true })).kinds[kind]; } catch (e) { logger.warn?.(`[wonder] usage read failed (${kind}): ${e.message}`); return UNCOUNTED; }
     return k?.max != null && k.used + units > k.max ? limitBody(kind, k.max, Date.now(), { plan, units }) : null;
   }
   // Polar checkout, portal and webhooks (server/billing.js); null when not configured
@@ -831,12 +836,14 @@ export function createWonderCore(opts = {}) {
     'POST /api/billing/webhook': billingWebhook,
   };
 
-  // A deployment meant for other people (Vercel production, or WONDER_REQUIRE_ACCOUNTS=on) never
-  // runs without accounts: a missing auth or database setting would otherwise turn it into the
-  // single-user app, with Claude open to anyone, no caps and one shared memory and material store.
+  // A server meant for other people never runs without accounts: a missing auth or database setting
+  // would otherwise turn it into the single-user app, with Claude open to anyone, no caps and one
+  // shared memory and material store. That is Vercel production, and any server with some of the
+  // account settings but not all (one went missing; VERCEL_ENV is only there while Vercel exposes
+  // its system variables). WONDER_REQUIRE_ACCOUNTS=on/off decides instead.
   const required = String(env.WONDER_REQUIRE_ACCOUNTS ?? '').trim().toLowerCase();
-  const accountsRequired = required ? !['off', '0', 'false', 'no'].includes(required) : env.VERCEL_ENV === 'production';
-  const ACCOUNTS_OFF = 'Accounts are not set up on this server, so Mull is off. The owner needs to set the Neon Auth and database settings.';
+  const accountsRequired = required ? !['off', '0', 'false', 'no'].includes(required) : env.VERCEL_ENV === 'production' || syncConfig(env).partial;
+  const ACCOUNTS_OFF = 'Accounts are not set up on this server, so Mull is off. The owner needs to set NEON_AUTH_BASE_URL, NEON_AUTH_COOKIE_SECRET and DATABASE_URL (or WONDER_REQUIRE_ACCOUNTS=off for a private single-user server).';
   // materials: the upload limits public/today.js checks before sending a file
   const status = () => ({ claude: !!state.client, model: models.lesson, models, ...(state.client ? {} : { error: CLAUDE_NOT_CONFIGURED }), videos: videoSource(), materials: { maxPdfBytes: MAX_PDF_BYTES, partBytes: PART_BYTES } });
 
@@ -870,9 +877,11 @@ export function createWonderCore(opts = {}) {
       scope.parts = userUploadParts(sync, userId);
       if (MEMORY_PATHS.test(pathname)) scope.memory = await loadUserMemory(sync, userId, { logger });
     }
-    // memory saves finish before the response does: a serverless function may be frozen once
-    // its response has ended
-    const flush = () => scope.memory.flush?.();
+    // memory saves and spend writes finish before the response does: a serverless function may be
+    // frozen once its response has ended
+    const writes = [];
+    const recordSpend = (entry) => { const w = spendFor(sync).record(entry); if (w) writes.push(w); };
+    const flush = () => Promise.all([scope.memory.flush?.(), ...writes.splice(0)]);
     const tt = {
       ...t,
       json: (status, data) => { Promise.resolve(flush()).then(() => t.json(status, data)); },
@@ -880,7 +889,7 @@ export function createWonderCore(opts = {}) {
       end: () => { Promise.resolve(flush()).then(() => t.end()); },
     };
     try {
-      return await scopes.run(scope, () => route(tt, body));
+      return await scopes.run(scope, () => spendScope.run(recordSpend, () => route(tt, body)));
     } finally {
       await flush();
     }

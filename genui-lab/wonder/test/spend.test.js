@@ -2,16 +2,14 @@
 // and a production deployment that refuses to run without accounts (server/app.js).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createWonderServer } from '../server/app.js';
-import { createMemoryStore } from '../server/memory.js';
-import { createSyncService } from '../server/sync/service.js';
 import { createMemoryDb } from '../server/sync/memory-db.js';
+import { createPgDb } from '../server/sync/pg-db.js';
 import { usageCost, dailyBudget, createSpendGuard, budgetBody, DEFAULT_DAILY_BUDGET_USD, SEARCH_USD } from '../server/spend.js';
 import { usageDay, UNCOUNTED } from '../server/usage.js';
-import { fakeClient } from './helpers.js';
+import { streamText, streamUsage, onUsage } from '../server/claude.js';
+import { fakeClient, steerableClient, withAccountsServer as withServer, STEADY_LESSON } from './helpers.js';
 
 process.env.WONDER_LOG_USAGE ??= 'off';
-const quiet = { warn() {}, error() {}, log() {}, info() {} };
 const LESSON = { topic: 'tides', useWebSearch: false, verify: false };
 const close = (a, b) => assert.ok(Math.abs(a - b) < 1e-9, `${a} ≈ ${b}`);
 
@@ -52,32 +50,9 @@ test('the guard adds spend to today, shares it through the database, and resets 
   assert.equal(await off.reached(), false);
 });
 
-/** fakeClient whose responses carry an Opus usage block, so the server prices them. */
-function pricedClient(output) {
-  const c = fakeClient({ text: '# Tides\n\nThe sea rises and falls.\n' });
-  const stream = c.beta.messages.stream;
-  c.beta.messages.stream = (p, o) => {
-    const s = stream(p, o);
-    const final = s.finalMessage;
-    s.finalMessage = async () => ({ ...(await final()), model: 'claude-opus-5-5', usage: { input_tokens: 0, output_tokens: output } });
-    return s;
-  };
-  return c;
-}
-
-async function withServer({ db = createMemoryDb(), ...opts }, fn) {
-  const server = createWonderServer({ logger: quiet, memory: createMemoryStore({ file: null }), push: null, sync: createSyncService({ db }), getUserId: (req) => req.headers['x-test-user'] || null, ...opts });
-  await new Promise((r) => server.listen(0, '127.0.0.1', r));
-  const base = `http://127.0.0.1:${server.address().port}`;
-  const as = (user) => async (method, p, body) => {
-    const res = await fetch(base + p, { method, headers: { 'Content-Type': 'application/json', ...(user ? { 'x-test-user': user } : {}) }, body: body ? JSON.stringify(body) : undefined });
-    const text = await res.text();
-    let json = null;
-    try { json = JSON.parse(text); } catch {}
-    return { status: res.status, body: json, text };
-  };
-  try { return await fn({ alice: as('alice'), bob: as('bob'), anon: as(null) }); } finally { server.closeAllConnections?.(); await new Promise((r) => server.close(r)); }
-}
+const OPUS = 'claude-opus-5-5';
+/** fakeClient whose responses cost `output` Opus output tokens ($20 per million). */
+const pricedClient = (output) => fakeClient({ text: '# Tides\n\nThe sea rises and falls.\n', model: OPUS, usage: { input_tokens: 0, output_tokens: output } });
 
 test('once today\'s budget is spent, nobody starts a new Claude request', async () => {
   const client = pricedClient(50_000); // $1.00 a lesson
@@ -121,7 +96,8 @@ test('when usage cannot be counted, the request is refused (503), not let throug
 
 test('a production deployment without accounts refuses to run instead of opening up', async () => {
   const client = pricedClient(10);
-  for (const env of [{ VERCEL_ENV: 'production' }, { WONDER_REQUIRE_ACCOUNTS: 'on' }]) {
+  // Vercel production; any server with some account settings but not all (one went missing); or asked to
+  for (const env of [{ VERCEL_ENV: 'production' }, { DATABASE_URL: 'postgres://x', NEON_AUTH_BASE_URL: 'https://auth.example' }, { WONDER_REQUIRE_ACCOUNTS: 'on' }]) {
     await withServer({ client, sync: null, env }, async ({ anon }) => {
       const r = await anon('POST', '/api/lesson/stream', LESSON);
       assert.equal(r.status, 503);
@@ -135,7 +111,7 @@ test('a production deployment without accounts refuses to run instead of opening
   }
   assert.equal(client.calls.stream.length, 0);
   // a local server (or an explicit opt-out) still runs as the single-user app
-  for (const env of [{}, { VERCEL_ENV: 'production', WONDER_REQUIRE_ACCOUNTS: 'off' }]) {
+  for (const env of [{}, { VERCEL_ENV: 'production', WONDER_REQUIRE_ACCOUNTS: 'off' }, { DATABASE_URL: 'postgres://x', WONDER_REQUIRE_ACCOUNTS: 'off' }]) {
     await withServer({ client, sync: null, env }, async ({ anon }) => {
       assert.equal((await anon('POST', '/api/lesson/stream', LESSON)).status, 200);
     });
@@ -147,4 +123,133 @@ test('the budget body tells the browser not to retry and when it resets', () => 
   assert.equal(b.limited.kind, 'budget');
   assert.equal(b.limited.resetsAt, '2026-10-31T00:00:00.000Z');
   assert.match(b.error, /in about 2 hours/);
+});
+
+test('a stream that stops mid-way still reports what it was billed', async () => {
+  const seen = [];
+  const off = onUsage((e) => seen.push(e));
+  try {
+    // the unit: message_start's usage, output estimated from the text when no message_delta came
+    const u = streamUsage('lesson');
+    u.settle(); // nothing started: nothing billed
+    assert.equal(seen.length, 0);
+    u.see({ type: 'message_start', message: { model: OPUS, usage: { input_tokens: 9000, cache_read_input_tokens: 1000, output_tokens: 1 } } });
+    u.see({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'x'.repeat(400) } });
+    u.settle();
+    u.settle(); // once only
+    assert.deepEqual(seen.map(({ task, model, input, cacheRead, output }) => ({ task, model, input, cacheRead, output })), [{ task: 'lesson', model: OPUS, input: 9000, cacheRead: 1000, output: 100 }]);
+    // through streamText: a slow stream aborted part-way
+    seen.length = 0;
+    const client = fakeClient({ text: 'y'.repeat(4000), delayMs: 2, model: OPUS, usage: { input_tokens: 5000, output_tokens: 0 } });
+    const ctrl = new AbortController();
+    setTimeout(() => ctrl.abort(), 30);
+    await assert.rejects(streamText(client, { model: OPUS, messages: [] }, { signal: ctrl.signal, task: 'tutor' }));
+    assert.equal(seen.length, 1);
+    assert.equal(seen[0].input, 5000);
+    assert.ok(seen[0].output > 1 && seen[0].output < 1000, `estimated output ${seen[0].output}`);
+  } finally { off(); }
+});
+
+test('a steered lesson counts the attempt the steer stopped as well as the one that finished', async () => {
+  const usage = { input_tokens: 100_000, output_tokens: 0 }; // $0.40 of Opus input per attempt
+  const client = steerableClient('## Page two\n\nDone.\n', { model: OPUS, usage });
+  const db = createMemoryDb();
+  await withServer({ client, db }, async ({ alice }) => {
+    const { reader, op } = await startLesson(alice);
+    assert.equal((await alice('POST', '/api/lesson/steer', { operationId: op, instruction: 'Simpler' })).status, 200);
+    for (;;) { const { done } = await reader.read(); if (done) break; }
+    assert.equal(client.calls.length, 2);
+    const usd = (await db.spendToday(usageDay().day)) / 1e6;
+    assert.ok(usd > 0.8 && usd < 0.81, `two attempts' input plus a little output: ${usd}`);
+  });
+});
+
+test('the response waits for its spend to be written', async () => {
+  const db = createMemoryDb();
+  const add = db.addSpend;
+  db.addSpend = async (...a) => { await new Promise((r) => setTimeout(r, 60)); return add(...a); };
+  await withServer({ client: pricedClient(50_000), db }, async ({ alice }) => {
+    assert.equal((await alice('POST', '/api/lesson/stream', LESSON)).status, 200);
+    assert.equal(await db.spendToday(usageDay().day), 1_000_000, 'written before the response ended');
+  });
+});
+
+test('spend recorded while the total is being re-read is not lost', async () => {
+  const db = createMemoryDb();
+  let release;
+  const read = db.spendToday;
+  const guard = createSpendGuard({ db: { ...db, spendToday: async (d) => { const v = await read(d); await new Promise((r) => { release = r; }); return v; } }, budgetUsd: 1 });
+  const pending = guard.reached(); // reads 0 and waits
+  await new Promise((r) => setImmediate(r));
+  await guard.record({ model: OPUS, input: 0, output: 50_000 }); // $1.00 lands after the read
+  release();
+  assert.equal(await pending, true);
+});
+
+/** Start a lesson and read until it stalls mid-page (steerableClient); returns its reader and operation id. */
+async function startLesson(user) {
+  const res = await user.raw('POST', '/api/lesson/stream', LESSON);
+  assert.equal(res.status, 200);
+  const reader = res.body.getReader();
+  const dec = new TextDecoder();
+  const stall = JSON.stringify(STEADY_LESSON.match(/[\s\S]{1,12}/g).at(-1));
+  let text = '';
+  let op = null;
+  while (!op || !text.includes(stall)) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    text += dec.decode(value, { stream: true });
+    op ??= /"operationId":"([^"]+)"/.exec(text)?.[1] ?? null;
+  }
+  assert.ok(op, 'the stream names its operation');
+  return { reader, op, text: async () => { let rest = text; for (;;) { const { value, done } = await reader.read(); if (done) return rest; rest += dec.decode(value, { stream: true }); } } };
+}
+
+test('a live steer: refused before it stops the lesson when the budget is spent or usage cannot be read', async () => {
+  let spent = false;
+  const spend = { budgetUsd: 1, reached: async () => spent, record: () => null };
+  const client = steerableClient('## Page two\n\nDone.\n');
+  const db = createMemoryDb();
+  await withServer({ client, db, spend }, async ({ alice }) => {
+    const { reader, op } = await startLesson(alice);
+    spent = true;
+    const r = await alice('POST', '/api/lesson/steer', { operationId: op, instruction: 'Simpler' });
+    assert.equal(r.status, 429);
+    assert.equal(r.body.limited.kind, 'budget');
+    spent = false;
+    const read = db.quotaUsed;
+    db.quotaUsed = async () => { throw new Error('db down'); };
+    const r2 = await alice('POST', '/api/lesson/steer', { operationId: op, instruction: 'Simpler' });
+    assert.equal(r2.status, 503, 'a failed read refuses the steer');
+    assert.equal(r2.body.code, 'usage_unavailable');
+    db.quotaUsed = read;
+    assert.equal(client.calls.length, 1, 'the lesson kept streaming');
+    await reader.cancel();
+  });
+});
+
+test('a steer whose charge fails ends the stream with usage_unavailable', async () => {
+  const client = steerableClient('## Page two\n\nDone.\n');
+  const db = createMemoryDb();
+  await withServer({ client, db }, async ({ alice }) => {
+    const lesson = await startLesson(alice);
+    db.useQuota = async () => { throw new Error('db down'); };
+    assert.equal((await alice('POST', '/api/lesson/steer', { operationId: lesson.op, instruction: 'Simpler' })).status, 200);
+    const rest = await lesson.text();
+    assert.match(rest, /"code":"usage_unavailable"/);
+    assert.equal(client.calls.length, 1, 'the steer never reached Claude');
+  });
+});
+
+test('postgres adapter: spend is one atomic upsert per response and read back as a number', async () => {
+  const queries = [];
+  const pool = { query: async (text, params) => { queries.push({ text, params }); return { rows: /SELECT micro_usd/.test(text) ? [{ micro_usd: '1500000' }] : [] }; } };
+  const db = createPgDb({ pool });
+  await db.addSpend('2026-10-30', 250_000);
+  assert.equal(await db.spendToday('2026-10-30'), 1_500_000);
+  const [, add, read] = queries; // the first query creates the schema
+  assert.match(queries[0].text, /CREATE TABLE IF NOT EXISTS wonder_spend/);
+  assert.match(add.text, /^INSERT INTO wonder_spend \(day, micro_usd\) VALUES \(\$1, \$2\) ON CONFLICT \(day\) DO UPDATE SET micro_usd = wonder_spend\.micro_usd \+ \$2$/);
+  assert.deepEqual(add.params, ['2026-10-30', 250_000]);
+  assert.deepEqual(read.params, ['2026-10-30']);
 });

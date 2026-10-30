@@ -37,7 +37,11 @@ test('sync config: off unless both an auth provider and a database are configure
   const neon = { NEON_AUTH_BASE_URL: 'https://ep-x.neonauth.example/neondb/auth', NEON_AUTH_COOKIE_SECRET: 'x'.repeat(32) };
   assert.equal(syncConfig(neon).enabled, false, 'no database');
   assert.equal(syncConfig({ NEON_AUTH_BASE_URL: neon.NEON_AUTH_BASE_URL, DATABASE_URL: 'postgres://x' }).enabled, false, 'no session cookies without the cookie secret');
-  assert.deepEqual(syncConfig({ ...neon, DATABASE_URL: 'postgres://x' }), { enabled: true, auth: 'neon', db: 'postgres' });
+  assert.deepEqual(syncConfig({ ...neon, DATABASE_URL: 'postgres://x' }), { enabled: true, auth: 'neon', db: 'postgres', partial: false });
+  // some settings but not all: a server that would otherwise run open (server/app.js accountsRequired)
+  assert.equal(syncConfig({}).partial, false);
+  assert.equal(syncConfig({ DATABASE_URL: 'postgres://x' }).partial, true);
+  assert.equal(syncConfig({ NEON_AUTH_BASE_URL: neon.NEON_AUTH_BASE_URL, DATABASE_URL: 'postgres://x' }).partial, true);
   assert.equal(syncConfig({ ...neon, WONDER_SYNC_DB: 'memory' }).db, 'memory');
   assert.equal(syncConfig({ CLERK_SECRET_KEY: 'sk', NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: 'pk', DATABASE_URL: 'postgres://x' }).enabled, false, 'Clerk keys no longer turn accounts on');
 });

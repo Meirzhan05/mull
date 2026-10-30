@@ -13,7 +13,7 @@
 // Claude never writes Cite tags itself: the server inserts them, so the refs always resolve.
 
 import { scanComponentTags } from './compile.js';
-import { idleWatch, reportUsage } from './claude.js';
+import { idleWatch, streamUsage } from './claude.js';
 import { protectMath } from './math-spans.js';
 import { constRef } from './dil-constants.js';
 import { isMaterialUrl } from './materials.js'; // Phase 10: citations of the learner's own material
@@ -342,9 +342,11 @@ export async function streamGrounded(client, params, { onText, onSearch, onSearc
     const watch = idleWatch(signal, idleMs);
     const stream = client.beta.messages.stream(p, { signal: watch.signal });
     const blocks = new Map();
+    const usage = streamUsage(task); // each pause_turn continuation is its own request
     try {
     for await (const ev of stream) {
       watch.touch();
+      usage.see(ev);
       if (ev.type === 'content_block_start') {
         const b = ev.content_block || {};
         blocks.set(ev.index, { type: b.type, name: b.name, json: '' });
@@ -376,8 +378,9 @@ export async function streamGrounded(client, params, { onText, onSearch, onSearc
       }
     }
     message = await stream.finalMessage();
-    reportUsage(task, message); // each pause_turn continuation is its own request
+    usage.settle(message);
     } catch (err) {
+      usage.settle(); // stopped or failed mid-stream: what was billed so far
       watch.rethrow(err);
     } finally {
       watch.done();

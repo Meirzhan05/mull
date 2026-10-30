@@ -79,6 +79,34 @@ export function reportUsage(task, message) {
 }
 
 /** True when the environment names a credential (value never inspected beyond non-emptiness). */
+/**
+ * Usage for a stream that may end without a final message (stopped, steered, timed out, failed):
+ * Anthropic still bills what it read and wrote. Feed it every event (`see`); `settle(message)`
+ * reports the final message's usage, and `settle()` without one reports what message_start and
+ * the last message_delta said, with output estimated from the streamed text (about 4 characters a
+ * token; thinking the API doesn't show is missed). Nothing is reported when no message started
+ * (the request failed before Claude read it), and only once either way.
+ */
+export function streamUsage(task) {
+  let started = null; // {model, usage}
+  let chars = 0;
+  let settled = false;
+  return {
+    see(ev) {
+      if (ev?.type === 'message_start') started = { model: ev.message?.model, usage: { ...ev.message?.usage } };
+      else if (ev?.type === 'message_delta' && started && ev.usage) for (const [k, v] of Object.entries(ev.usage)) { if (v != null) started.usage[k] = v; }
+      else if (ev?.type === 'content_block_delta') chars += String(ev.delta?.text ?? ev.delta?.thinking ?? ev.delta?.partial_json ?? '').length;
+    },
+    settle(message) {
+      if (settled || (!message && !started)) return;
+      settled = true;
+      if (message) { reportUsage(task, message); return; }
+      const u = started.usage;
+      reportUsage(task, { model: started.model, usage: { ...u, output_tokens: Math.max(u.output_tokens || 0, Math.ceil(chars / 4)) } });
+    },
+  };
+}
+
 export function hasEnvCredentials(env = process.env) {
   return Boolean(env.ANTHROPIC_API_KEY || env.ANTHROPIC_AUTH_TOKEN);
 }
@@ -186,16 +214,19 @@ export function idleWatch(signal, idleMs = STREAM_IDLE_MS) {
 
 export async function streamText(client, params, { onText, signal, idleMs, task } = {}) {
   const watch = idleWatch(signal, idleMs);
+  const usage = streamUsage(task);
   try {
     const stream = client.beta.messages.stream(params, { signal: watch.signal });
     for await (const event of stream) {
       watch.touch();
+      usage.see(event);
       if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') onText?.(event.delta.text);
     }
     const message = await stream.finalMessage();
-    reportUsage(task, message);
+    usage.settle(message);
     return { stopReason: message.stop_reason, message };
   } catch (err) {
+    usage.settle(); // stopped or failed mid-stream: what was billed so far
     return watch.rethrow(err);
   } finally {
     watch.done();
