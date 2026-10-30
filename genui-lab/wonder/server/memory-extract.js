@@ -29,7 +29,7 @@ export function extractMemoryDeterministic({ lessonTitle, quizResults }) {
   return [{ fact: `Found "${lessonTitle}" tricky (missed ${missed.length} of ${quizResults.length} quiz questions).`, kind: 'struggle' }];
 }
 
-export async function extractMemoryWithClaude(client, { lessonTitle, quizResults, tutorThread }, existing = []) {
+export async function extractMemoryWithClaude(client, { lessonTitle, quizResults, tutorThread }, existing = [], { model } = {}) {
   const user = [
     `Lesson: ${lessonTitle}`,
     '',
@@ -42,7 +42,7 @@ export async function extractMemoryWithClaude(client, { lessonTitle, quizResults
     'Already in memory (do not repeat):',
     ...(existing.length ? existing.slice(0, 30).map((i) => `- [${i.kind}] ${i.fact}`) : ['- (empty)']),
   ].join('\n');
-  const data = await createStructured(client, buildStructuredParams({ system: MEMORY_EXTRACT_SYSTEM_PROMPT, schema: MEMORY_EXTRACT_SCHEMA, user, effort: 'low', maxTokens: 4000 }));
+  const data = await createStructured(client, buildStructuredParams({ system: MEMORY_EXTRACT_SYSTEM_PROMPT, schema: MEMORY_EXTRACT_SCHEMA, user, effort: 'low', maxTokens: 4000, model }), { task: 'extract' });
   return Array.isArray(data?.facts) ? data.facts : [];
 }
 

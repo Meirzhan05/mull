@@ -254,8 +254,8 @@ export function citesAsText(md) {
 export const CRITIC_TIMEOUT_MS = Number(process.env.WONDER_CRITIC_TIMEOUT_MS) || 120_000;
 
 /** One structured critic call. Throws on API errors; the caller treats any failure as "not checked". */
-export async function critiqueLesson(client, { markdown, topic, level, sources, effort = 'medium', timeoutMs = CRITIC_TIMEOUT_MS, signal }) {
-  const params = buildStructuredParams({ system: CRITIC_SYSTEM_PROMPT, schema: CRITIC_SCHEMA, user: criticUserMessage({ markdown: citesAsText(markdown), topic, level, sources }), effort });
+export async function critiqueLesson(client, { markdown, topic, level, sources, effort = 'medium', timeoutMs = CRITIC_TIMEOUT_MS, signal, model }) {
+  const params = buildStructuredParams({ system: CRITIC_SYSTEM_PROMPT, schema: CRITIC_SCHEMA, user: criticUserMessage({ markdown: citesAsText(markdown), topic, level, sources }), effort, model });
   let timer;
   let onAbort;
   const stop = new Promise((_, reject) => {
@@ -265,7 +265,7 @@ export async function critiqueLesson(client, { markdown, topic, level, sources, 
     if (signal?.aborted) onAbort(); else signal?.addEventListener('abort', onAbort, { once: true });
   });
   try {
-    return normalizeCritique(await Promise.race([createStructured(client, params), stop]));
+    return normalizeCritique(await Promise.race([createStructured(client, params, { task: 'critic' }), stop]));
   } finally {
     clearTimeout(timer);
     signal?.removeEventListener?.('abort', onAbort);

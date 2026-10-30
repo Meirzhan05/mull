@@ -25,10 +25,12 @@ async function streamRecords(path, body) {
   return parseConversationSource(await res.text()); // validates every record, requires `end`
 }
 
-test('GET /api/status reports demo mode and the model', async () => {
+test('GET /api/status reports demo mode and the models', async () => {
   const s = await (await fetch(`${base}/api/status`)).json();
   assert.equal(s.mode, 'demo');
   assert.equal(s.model, 'claude-opus-5-5');
+  assert.equal(s.models.tutor, 'claude-sonnet-5-5');
+  assert.equal(s.models.extract, 'claude-haiku-5-5');
 });
 
 for (const [topic, file] of [['How transformers predict the next word', 'transformers.md'], ['why is the sky blue?', 'sky-blue.md'], ['compound interest', 'compound-interest.md']]) {

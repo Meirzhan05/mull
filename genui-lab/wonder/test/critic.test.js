@@ -4,6 +4,7 @@
 // summary, markdown report, an end-to-end demo and fake-Claude run).
 
 import { test } from 'node:test';
+import Anthropic from '@anthropic-ai/sdk';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -13,7 +14,7 @@ import { createMemoryStore } from '../server/memory.js';
 import { lintLesson, lessonParts, applyQuizFixes, normalizeCritique, criticUserMessage, citesAsText, critiqueLesson, CRITIC_SYSTEM_PROMPT } from '../server/critic.js';
 import { normalizeJudgement, summarizeRuns, reportMarkdown, RUBRIC_KEYS, JUDGE_SYSTEM_PROMPT } from '../server/judge.js';
 import { componentsOf } from '../server/practice.js';
-import { parseArgs, runEval, writeReport } from '../evals/run.js';
+import { parseArgs, runEval, writeReport, createUsageTally } from '../evals/run.js';
 import { ConversationSourceParser, ConversationTurn } from '../../chatgpt-dil/src/stream.js';
 import { fakeClient, demo, DEMO_FILES } from './helpers.js';
 
@@ -168,4 +169,37 @@ test('eval harness: args, a demo run end to end, and a fake-Claude run with crit
   assert.equal(r.runs[0].critic.verdict, 'pass');
   assert.equal(client.calls.create.length, 2, 'one critic call + one judge call');
   assert.equal(client.calls.stream[0].params.tools, undefined, 'web search off by default in evals');
+  assert.deepEqual(r.meta.models, { lesson: 'claude-opus-5-5', critic: 'claude-opus-5-5', judge: 'claude-opus-5-5' });
+  assert.equal(client.calls.stream[0].params.model, 'claude-opus-5-5');
+  assert.deepEqual(client.calls.create.map((p) => p.model), ['claude-opus-5-5', 'claude-opus-5-5'], 'critic and judge on Opus');
+});
+
+test('eval: rejected credentials are reported, not scored as Claude lessons', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wonder-eval-'));
+  const topics = path.join(dir, 'topics.json');
+  fs.writeFileSync(topics, JSON.stringify([{ topic: 'Why the sky is blue' }]));
+  const err = new Anthropic.AuthenticationError(401, { type: 'error', error: { type: 'authentication_error', message: 'invalid x-api-key' } }, 'invalid x-api-key', new Headers());
+  const lines = [];
+  const r = await runEval({ ...parseArgs(['--no-judge']), topics }, { serverOpts: { mode: 'claude', client: fakeClient({ error: err }), demoDelayMs: 0 }, log: (l) => lines.push(l) });
+  assert.equal(r.meta.mode, 'demo');
+  assert.equal(r.meta.demoReason, 'credentials-failed');
+  assert.ok(lines.some((l) => /WARNING: Claude credentials failed/.test(l)));
+});
+
+test('eval usage tally: tokens per task and model, priced; the judge is left out of the per-lesson cost', () => {
+  const t = createUsageTally();
+  const e = (task, model, input, output) => ({ task, model, input, cacheRead: 0, cacheWrite: 0, output, searches: 0 });
+  t.add(e('lesson', 'claude-sonnet-5-5', 1_000_000, 100_000)); // $2 + $1
+  t.add(e('lesson', 'claude-sonnet-5-5', 0, 100_000)); // $1
+  t.add(e('judge', 'claude-opus-5-5', 1_000_000, 0)); // $4
+  t.add(e('figure', 'claude-unknown', 5, 5)); // unpriced
+  const s = t.summary(2);
+  assert.equal(s.byTask.find((r) => r.task === 'lesson').requests, 2);
+  assert.equal(s.byTask.find((r) => r.task === 'lesson').usd, 4);
+  assert.equal(s.byTask.find((r) => r.task === 'figure').usd, null);
+  assert.equal(s.usd, 8);
+  assert.equal(s.lessonUsd, 2);
+  const md = reportMarkdown({ meta: { startedAt: 'now', mode: 'claude', models: { lesson: 'claude-sonnet-5-5', judge: 'claude-opus-5-5' }, webSearch: false, verify: true, judge: true }, summary: summarizeRuns([]), usage: s, runs: [] });
+  assert.match(md, /lesson `claude-sonnet-5-5` · judge `claude-opus-5-5`/);
+  assert.match(md, /About \*\*\$2\*\* per lesson/);
 });

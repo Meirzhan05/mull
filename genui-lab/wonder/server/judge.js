@@ -52,9 +52,9 @@ export function normalizeJudgement(raw) {
   return { scores, mean: vals.length ? Math.round((vals.reduce((a, b) => a + b, 0) / vals.length) * 100) / 100 : null, overall: clip(raw?.overall, 400) };
 }
 
-export async function judgeLesson(client, { markdown, topic, level, effort = 'medium' }) {
+export async function judgeLesson(client, { markdown, topic, level, effort = 'medium', model }) {
   const user = `Topic: ${clip(topic, 300)}\nLearner level: ${level || 'beginner'}\n\n<lesson>\n${citesAsText(markdown).slice(0, 60000)}\n</lesson>`;
-  return normalizeJudgement(await createStructured(client, buildStructuredParams({ system: JUDGE_SYSTEM_PROMPT, schema: JUDGE_SCHEMA, user, effort })));
+  return normalizeJudgement(await createStructured(client, buildStructuredParams({ system: JUDGE_SYSTEM_PROMPT, schema: JUDGE_SCHEMA, user, effort, model }), { task: 'judge' }));
 }
 
 // ---------------------------------------------------------------- report
@@ -115,7 +115,7 @@ export function reportMarkdown(report) {
   const lines = [
     `# Mull lesson eval · ${meta.startedAt}`,
     '',
-    `Mode: **${meta.mode}** · model \`${meta.model}\` · ${summary.ok}/${summary.runs} lessons generated · web search ${meta.webSearch ? 'on' : 'off'} · critic ${meta.verify ? 'on' : 'off'} · judge ${meta.judge ? 'on' : 'off'}`,
+    `Mode: **${meta.mode}** · ${meta.models ? Object.entries(meta.models).map(([k, m]) => `${k} \`${m}\``).join(' · ') : `model \`${meta.model}\``} · ${summary.ok}/${summary.runs} lessons generated · web search ${meta.webSearch ? 'on' : 'off'} · critic ${meta.verify ? 'on' : 'off'} · judge ${meta.judge ? 'on' : 'off'}`,
     '',
     '## Means',
     '',
@@ -125,6 +125,12 @@ export function reportMarkdown(report) {
   ];
   const fc = Object.entries(summary.failedChecks).sort((a, b) => b[1] - a[1]);
   if (fc.length) lines.push('', `Most failed format checks: ${fc.map(([id, n]) => `\`${id}\` ×${n}`).join(', ')}`);
+  const u = report.usage;
+  if (u?.byTask?.length) {
+    lines.push('', '## Tokens and cost', '', `About **$${u.lessonUsd ?? '–'}** per lesson (lesson, critic and figure check; the judge is not part of the app) · $${u.usd} for the whole run, judge included. Estimated from list prices (evals/run.js PRICES).`,
+      '', '| Task | Model | Requests | Input | Cache read | Cache write | Output | Searches | USD |', '| --- | --- | --- | --- | --- | --- | --- | --- | --- |');
+    for (const r of u.byTask) lines.push(`| ${r.task} | \`${r.model}\` | ${r.requests} | ${r.input} | ${r.cacheRead} | ${r.cacheWrite} | ${r.output} | ${r.searches} | ${cell(r.usd, 4)} |`);
+  }
   const m = summary.media;
   if (m?.lessons) {
     lines.push('', '## Diagrams and figures', '',

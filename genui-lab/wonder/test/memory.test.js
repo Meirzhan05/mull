@@ -135,7 +135,7 @@ test('POST /api/memory/extract via Claude: structured output (effort low), 0-3 f
     assert.ok(r.body.added.every((i) => i.source === 'lesson'));
     assert.equal(memory.size, 4);
     const params = client.calls.create[0];
-    assert.equal(params.model, 'claude-opus-5-5');
+    assert.equal(params.model, 'claude-haiku-5-5');
     assert.equal(params.output_config.effort, 'low');
     assert.equal(params.output_config.format.type, 'json_schema');
     assert.equal(params.output_config.format.schema.properties.facts.items.additionalProperties, false);

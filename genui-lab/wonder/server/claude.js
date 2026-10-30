@@ -10,8 +10,73 @@ import path from 'node:path';
 import Anthropic from '@anthropic-ai/sdk';
 
 export { Anthropic };
-export const MODEL = 'claude-opus-5-5';
+export const MODEL = 'claude-opus-5-5'; // Opus: the eval judge, and the request builders' default
+export const SONNET_MODEL = 'claude-sonnet-5-5';
+export const HAIKU_MODEL = 'claude-haiku-5-5';
 export const FALLBACK_BETA = 'server-side-fallback-2026-07-01';
+// models that take the "default" server-side refusal fallback (Haiku has none)
+const FALLBACK_MODELS = new Set(['claude-fable-5-1', 'claude-opus-5-5', 'claude-opus-5', 'claude-sonnet-5-5']);
+
+/**
+ * The model each kind of call uses. Lessons and their critic stay on Opus: on the lesson eval
+ * (6 topics, Opus judge) Sonnet lessons scored lower on accuracy at medium and at high effort.
+ * The tutor, the Teacher, course plans and grading run on Sonnet; the extractions after each
+ * lesson on Haiku; the eval judge on Opus, never weaker than the writer it scores.
+ * WONDER_MODEL_<TASK> overrides one, e.g. WONDER_MODEL_LESSON=claude-sonnet-5-5. The figure
+ * image check has its own (figures.js).
+ */
+export const TASK_MODELS = Object.freeze({
+  lesson: MODEL, // new, steered, resumed and revised lessons (and material token counts)
+  tutor: SONNET_MODEL,
+  teacher: SONNET_MODEL,
+  critic: MODEL, // facts and quiz keys after a lesson
+  course: SONNET_MODEL,
+  grade: SONNET_MODEL, // free-response grading: the learner reads its feedback
+  extract: HAIKU_MODEL, // knowledge cards, practice items and memory facts after a lesson
+  judge: MODEL, // npm run eval
+});
+
+/** TASK_MODELS with WONDER_MODEL_<TASK> overrides (a value that is not a model id is ignored). */
+export function taskModels(env = process.env) {
+  const out = {};
+  for (const [task, def] of Object.entries(TASK_MODELS)) {
+    const v = String(env[`WONDER_MODEL_${task.toUpperCase()}`] ?? '').trim();
+    out[task] = /^claude-[a-z0-9.-]+$/.test(v) ? v : def;
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------- token usage
+
+const usageListeners = new Set();
+
+/** Hear every response's token usage (the eval's cost tally). Returns an unsubscribe function. */
+export function onUsage(fn) {
+  usageListeners.add(fn);
+  return () => usageListeners.delete(fn);
+}
+
+/**
+ * Report one response's usage: a log line per request (WONDER_LOG_USAGE=off silences it) and
+ * the onUsage listeners. `task` names the kind of call (TASK_MODELS keys, or 'figure').
+ */
+export function reportUsage(task, message) {
+  const u = message?.usage;
+  if (!u) return;
+  const entry = {
+    task: task || 'other',
+    model: message.model || 'unknown',
+    input: u.input_tokens || 0,
+    cacheRead: u.cache_read_input_tokens || 0,
+    cacheWrite: u.cache_creation_input_tokens || 0,
+    output: u.output_tokens || 0,
+    searches: u.server_tool_use?.web_search_requests || 0,
+  };
+  if (process.env.WONDER_LOG_USAGE !== 'off') {
+    console.info(`[wonder] usage ${entry.task} ${entry.model}: in ${entry.input}, cache read ${entry.cacheRead}, cache write ${entry.cacheWrite}, out ${entry.output}${entry.searches ? `, searches ${entry.searches}` : ''}`);
+  }
+  for (const fn of usageListeners) { try { fn(entry); } catch { /* a listener never breaks a request */ } }
+}
 
 /** True when the environment names a credential (value never inspected beyond non-emptiness). */
 export function hasEnvCredentials(env = process.env) {
@@ -52,14 +117,13 @@ export function createClaudeClient() {
  * the cache breakpoint. `tools` must be static too: they render before the system prompt, so
  * the breakpoint caches tools + system. No tool_choice: forcing a tool is a 400 on this model.
  */
-export function buildStreamParams({ system, context, messages, effort = 'medium', maxTokens = 64000, tools }) {
+export function buildStreamParams({ system, context, messages, effort = 'medium', maxTokens = 64000, tools, model = MODEL }) {
   const sys = [{ type: 'text', text: system, cache_control: { type: 'ephemeral' } }];
   if (context) sys.push({ type: 'text', text: context });
   return {
-    model: MODEL,
+    model,
     max_tokens: maxTokens,
-    betas: [FALLBACK_BETA],
-    fallbacks: 'default',
+    ...(FALLBACK_MODELS.has(model) ? { betas: [FALLBACK_BETA], fallbacks: 'default' } : {}),
     thinking: { type: 'adaptive' },
     output_config: { effort },
     system: sys,
@@ -118,7 +182,7 @@ export function idleWatch(signal, idleMs = STREAM_IDLE_MS) {
   };
 }
 
-export async function streamText(client, params, { onText, signal, idleMs } = {}) {
+export async function streamText(client, params, { onText, signal, idleMs, task } = {}) {
   const watch = idleWatch(signal, idleMs);
   try {
     const stream = client.beta.messages.stream(params, { signal: watch.signal });
@@ -127,6 +191,7 @@ export async function streamText(client, params, { onText, signal, idleMs } = {}
       if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') onText?.(event.delta.text);
     }
     const message = await stream.finalMessage();
+    reportUsage(task, message);
     return { stopReason: message.stop_reason, message };
   } catch (err) {
     return watch.rethrow(err);
@@ -135,9 +200,13 @@ export async function streamText(client, params, { onText, signal, idleMs } = {}
   }
 }
 
-/** Non-streaming structured call; returns parsed JSON or throws. `options`: SDK request options ({signal, maxRetries}). */
-export async function createStructured(client, params, options) {
-  const message = await (options ? client.messages.create(params, options) : client.messages.create(params));
+/**
+ * Non-streaming structured call; returns parsed JSON or throws. `options`: `task` (for the usage
+ * report) and SDK request options ({signal, maxRetries}).
+ */
+export async function createStructured(client, params, { task, ...options } = {}) {
+  const message = await (Object.keys(options).length ? client.messages.create(params, options) : client.messages.create(params));
+  reportUsage(task, message);
   if (message.stop_reason === 'refusal') {
     const err = new Error('Claude declined to produce this output');
     err.code = 'refusal';

@@ -12,7 +12,7 @@
 // resolve_action / undo_action analogue) that return updated componentResults.
 
 import { randomUUID } from 'node:crypto';
-import { Anthropic } from './claude.js';
+import { Anthropic, reportUsage } from './claude.js';
 import { validateComponentProps } from './catalog-schema.js';
 import { MEMORY_KINDS, cleanFact } from './memory.js';
 import { sanitizeMastery } from './learner-model.js';
@@ -490,6 +490,7 @@ export async function runTeacherLoop({ client, params, messages: initial, writer
         }
       }
       message = await stream.finalMessage();
+      reportUsage('teacher', message);
       jsonRetries = 0;
     } catch (err) {
       // Eager input streaming: a tool input that is not parseable JSON at all rejects the

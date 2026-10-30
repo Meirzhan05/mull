@@ -125,8 +125,10 @@ export function getWonderCore() {
   if (!g.__wonderCore) {
     loadUserEnv();
     g.__wonderCore = createWonderCore();
-    const { mode, videos } = g.__wonderCore.status();
-    console.log(`[wonder] API ready (${mode === 'claude' ? 'Claude mode' : 'demo mode: set ANTHROPIC_API_KEY to use Claude'}; videos: ${videos === 'youtube' ? 'YouTube' : videos === 'demo' ? 'demo clips (set YOUTUBE_API_KEY for live search)' : 'off'})`);
+    const { mode, videos, models } = g.__wonderCore.status();
+    // e.g. "claude-sonnet-5-5 for lesson/tutor/…, claude-haiku-5-5 for extract"
+    const byModel = [...new Set(Object.values(models))].map((m) => `${m} for ${Object.keys(models).filter((k) => models[k] === m).join('/')}`).join(', ');
+    console.log(`[wonder] API ready (${mode === 'claude' ? `Claude mode: ${byModel}` : 'demo mode: set ANTHROPIC_API_KEY to use Claude'}; videos: ${videos === 'youtube' ? 'YouTube' : videos === 'demo' ? 'demo clips (set YOUTUBE_API_KEY for live search)' : 'off'})`);
   }
   return g.__wonderCore;
 }
