@@ -118,7 +118,7 @@ export function learningCatalog(__dil, DIL, GenUI, useSavedImpl) {
 
   // ------------------------------------------------------------------ Callout (wondering-lens)
   const TONE = {
-    insight: ['lightbulb', 'Wonder lens'], tip: ['sparkles', 'Tip'], info: ['info', 'Note'], warning: ['alert-triangle', 'Watch out'], example: ['book', 'Example'],
+    insight: ['lightbulb', 'Mull it over'], tip: ['sparkles', 'Tip'], info: ['info', 'Note'], warning: ['alert-triangle', 'Watch out'], example: ['book', 'Example'],
   };
   function Callout(props) {
     const tone = TONE[props.tone] ? props.tone : 'insight';
@@ -394,7 +394,7 @@ export function learningCatalog(__dil, DIL, GenUI, useSavedImpl) {
     const done = n > 0 && st.i >= n;
     DIL.useEffect(() => {
       if (!done || st.reported) return;
-      // report completion once per attempt (the host awards XP)
+      // report completion once per attempt (the host counts it as activity)
       setSt((s) => ({ ...s, reported: true }));
       GenUI.dispatchAction({ handler: 'client', type: 'quiz_complete', payload: { score, total: n, resolutionId: rid, results: questions.map((q) => ({ prompt: q.prompt, correct: !!st.answers[q.id]?.correct, ...(q.concept ? { concept: q.concept } : {}) })) } });
     }, [done, st.attempt]);
@@ -477,7 +477,7 @@ export function learningCatalog(__dil, DIL, GenUI, useSavedImpl) {
   // Free response: the learner explains an idea in their own words and the server grades it
   // against the rubric (widget action explain_grade -> componentResults[rid].state =
   // {attempt, answer, grade} or {attempt, error}). The draft persists (useSaved); the first
-  // grade of each attempt is reported once (client action explain_graded: XP + mastery).
+  // grade of each attempt is reported once (client action explain_graded: activity + mastery).
   const GRADE_WORDS = ['Not yet', 'Partly there', 'Nearly there', 'Spot on'];
   const MAX_EXPLAIN = 1500;
   function ExplainBack(props) {

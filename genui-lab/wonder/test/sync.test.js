@@ -7,7 +7,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createStore, emptyState } from '../public/store.js';
 import { toRecords, applyRecords, recordsToState, mergeRecord, diffRecords, hashData, recordKey, hasLearnerData } from '../public/sync-core.js';
-import { createSyncEngine, BASE_KEY } from '../public/sync-client.js';
+import { createSyncEngine, syncBeforeOpening, awaitsFirstSync, BASE_KEY } from '../public/sync-client.js';
 import { createSyncService } from '../server/sync/service.js';
 import { createMemoryDb } from '../server/sync/memory-db.js';
 
@@ -82,7 +82,7 @@ test('sync-core: diff finds edits, additions and deletions (tombstones) against 
   assert.equal(changes.length, 3);
 });
 
-test('sync-core: merge rules: last edit wins, deletes too; concepts, XP and settings combine', () => {
+test('sync-core: merge rules: last edit wins, deletes too; concepts, activity and settings combine', () => {
   const lww = mergeRecord('lesson', 'a', { data: { t: 1 }, updatedAt: 10 }, { data: { t: 2 }, updatedAt: 5 });
   assert.deepEqual(lww.data, { t: 1 });
   assert.equal(mergeRecord('lesson', 'a', { data: { t: 1 }, updatedAt: 10 }, { deleted: true, updatedAt: 20 }).deleted, true);
@@ -95,7 +95,7 @@ test('sync-core: merge rules: last edit wins, deletes too; concepts, XP and sett
     { data: { xp: 100, streak: { count: 3, lastDate: '2026-10-03', best: 5 }, days: { d1: 50, d2: 30 } }, updatedAt: 1 },
     { data: { xp: 90, streak: { count: 1, lastDate: '2026-10-02', best: 1 }, days: { d1: 40, d3: 20 } }, updatedAt: 2 });
   assert.deepEqual(stats.data.days, { d1: 50, d2: 30, d3: 20 });
-  assert.equal(stats.data.xp, 100);
+  assert.equal(stats.data.xp, undefined, 'XP from older states is dropped');
   assert.equal(stats.data.streak.lastDate, '2026-10-03');
   assert.equal(stats.data.streak.best, 5);
   assert.deepEqual(mergeRecord('state', 'settings', { data: { dailyGoal: 30, name: 'A' }, updatedAt: 2 }, { data: { dailyGoal: 50 }, updatedAt: 1 }).data, { dailyGoal: 30, name: 'A' });
@@ -129,6 +129,28 @@ test('sync: two browsers of one account converge; edits, deletes and tombstones 
     assert.deepEqual(c.store.data.courses, []);
     assert.equal(c.store.data.lessons.l1.title, 'Why the sky is blue');
     c.engine.stop();
+  } finally { a.engine.stop(); b.engine.stop(); }
+});
+
+test('sync: a browser that last synced before the account was deleted is told so and pushes nothing back', async () => {
+  const svc = service();
+  const a = browser(svc, 'user-a');
+  const b = browser(svc, 'user-a');
+  try {
+    a.edit((d) => { d.lessons.l1 = lesson('l1', 'Sky'); });
+    await a.sync();
+    await b.sync();
+    await svc.deleteAccount('user-a');
+    b.edit((d) => { d.lessons.l2 = lesson('l2', 'Tides'); });
+    assert.equal(await b.sync(), null);
+    assert.equal(b.engine.status.state, 'deleted');
+    assert.deepEqual((await svc.sync('user-a', { since: 0 })).records, [], 'nothing came back');
+    // a new browser of the same sign-in starts the account over
+    const c = browser(svc, 'user-a');
+    c.edit((d) => { d.lessons.l3 = lesson('l3', 'Fresh'); });
+    await c.sync();
+    assert.equal(c.engine.status.state, 'synced');
+    assert.deepEqual((await svc.sync('user-a', { since: 0 })).records.map((r) => r.id).filter((id) => id.startsWith('l')), ['l3']);
   } finally { a.engine.stop(); b.engine.stop(); }
 });
 
@@ -272,6 +294,57 @@ test('migration: declining the merge starts this browser from the account only',
     assert.deepEqual(Object.keys(b.store.data.lessons), ['acct']);
     assert.equal(b.engine.pending(), 0);
   } finally { a.engine.stop(); b.engine.stop(); }
+});
+
+/** A cache seeded the way beginAccount does for a returning account ('pull'). */
+function seededCache(userId) {
+  return mapStorage({ 'wonder.v1': JSON.stringify(emptyState()), [BASE_KEY]: JSON.stringify({ userId, since: 0, base: [], first: 'pull' }) });
+}
+
+test('sign-in: a returning account is synced before the page opens, so it is not new', async () => {
+  const svc = service();
+  const a = browser(svc, 'u');
+  a.edit((d) => { d.lessons.acct = lesson('acct', 'Account lesson'); d.settings = { ...d.settings, onboarded: true }; });
+  await a.sync();
+  try {
+    const cache = seededCache('u');
+    assert.equal(awaitsFirstSync(cache, 'u'), true);
+    assert.equal(awaitsFirstSync(cache, 'someone-else'), false, 'another account\'s base');
+    const done = await syncBeforeOpening({ storage: cache, userId: 'u', logger: quiet, post: async (body) => JSON.parse(JSON.stringify(await svc.sync('u', JSON.parse(JSON.stringify(body))))) });
+    assert.equal(done, true);
+    assert.equal(awaitsFirstSync(cache, 'u'), false);
+    // the page that opens on this cache sees the account's lessons and settings
+    const opened = createStore({ storage: cache });
+    assert.deepEqual(Object.keys(opened.data.lessons), ['acct']);
+    assert.equal(opened.data.settings.onboarded, true);
+  } finally { a.engine.stop(); }
+});
+
+test('sign-in: a first sync that times out leaves the cache as seeded, and a late answer writes nothing', async () => {
+  const svc = service();
+  const a = browser(svc, 'u');
+  a.edit((d) => { d.lessons.acct = lesson('acct', 'Account lesson'); });
+  await a.sync();
+  try {
+    const cache = seededCache('u');
+    const before = new Map(cache.map);
+    let answer;
+    const late = new Promise((r) => { answer = r; });
+    const done = await syncBeforeOpening({ storage: cache, userId: 'u', timeoutMs: 20, logger: quiet, post: async (body) => { await late; return JSON.parse(JSON.stringify(await svc.sync('u', body))); } });
+    assert.equal(done, false);
+    answer();
+    await new Promise((r) => setTimeout(r, 20));
+    assert.deepEqual(cache.map, before);
+    assert.equal(awaitsFirstSync(cache, 'u'), true, 'the page\'s own engine does the first round');
+  } finally { a.engine.stop(); }
+});
+
+test('sign-in: a failed first sync leaves the cache as seeded', async () => {
+  const cache = seededCache('u');
+  const before = new Map(cache.map);
+  const done = await syncBeforeOpening({ storage: cache, userId: 'u', logger: quiet, post: async () => { throw Object.assign(new Error('HTTP 502'), { status: 502 }); } });
+  assert.equal(done, false);
+  assert.deepEqual(cache.map, before);
 });
 
 test('sync service: one user never reads or overwrites another user\'s records', async () => {

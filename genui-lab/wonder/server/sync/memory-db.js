@@ -5,10 +5,10 @@
 const key = (kind, id) => `${kind}:${id}`;
 
 export function createMemoryDb() {
-  const users = new Map(); // userId -> {rev, records: Map, subs: Map, reminders: Set, files: Map}
+  const users = new Map(); // userId -> {rev, deletedRev, records: Map, subs: Map, reminders: Set, files: Map, usage: Map, plan}
   const locks = new Map(); // userId -> tail of the transaction queue
   const user = (id) => {
-    if (!users.has(id)) users.set(id, { rev: 0, records: new Map(), subs: new Map(), reminders: new Set(), files: new Map(), usage: new Map(), plan: null });
+    if (!users.has(id)) users.set(id, { rev: 0, deletedRev: 0, records: new Map(), subs: new Map(), reminders: new Set(), files: new Map(), usage: new Map(), plan: null });
     return users.get(id);
   };
   const copy = (r) => ({ ...r });
@@ -23,8 +23,12 @@ export function createMemoryDb() {
       const u = user(userId);
       let rev = u.rev;
       const pending = new Map();
+      let wiped = false;
       const tx = {
         rev: async () => rev,
+        deletedRev: async () => u.deletedRev,
+        /** Delete account: drop everything but the revision counter and the usage counts. */
+        wipe: async () => { wiped = true; pending.clear(); },
         setRev: async (n) => { rev = n; },
         get: async (keys) => {
           const out = new Map();
@@ -47,6 +51,10 @@ export function createMemoryDb() {
         },
       };
       const result = await fn(tx);
+      if (wiped) {
+        for (const m of [u.records, u.subs, u.reminders, u.files]) m.clear();
+        u.deletedRev = rev;
+      }
       for (const [k, r] of pending) u.records.set(k, r);
       u.rev = rev;
       return result;
@@ -84,13 +92,13 @@ export function createMemoryDb() {
       return true;
     },
     // -- daily usage caps (server/usage.js)
-    async useQuota(userId, day, kind, max) {
+    async useQuota(userId, day, kind, max, units = 1) {
       const u = user(userId);
       const k = `${day}|${kind}`;
       const n = u.usage.get(k) || 0;
-      if (n >= max) return { ok: false, used: n };
-      u.usage.set(k, n + 1);
-      return { ok: true, used: n + 1 };
+      if (n + units > max) return { ok: false, used: n };
+      u.usage.set(k, n + units);
+      return { ok: true, used: n + units };
     },
     async quotaUsed(userId, day) {
       const out = {};
@@ -104,6 +112,9 @@ export function createMemoryDb() {
     async putFile(userId, id, { bytes, contentType }) { user(userId).files.set(id, { bytes: Buffer.from(bytes), contentType }); },
     async getFile(userId, id) { const f = users.get(userId)?.files.get(id); return f ? { bytes: Buffer.from(f.bytes), contentType: f.contentType } : null; },
     async deleteFile(userId, id) { users.get(userId)?.files.delete(id); },
+    async listFiles(userId, prefix = '') { return [...(users.get(userId)?.files.keys() || [])].filter((id) => id.startsWith(prefix)); },
+    /** Delete account: records, files, push subscriptions and the reminder log (tx.wipe). */
+    async deleteUser(userId) { await transaction(userId, (tx) => tx.wipe()); },
     async close() {},
   };
 }

@@ -1,9 +1,9 @@
 // Review session: due practice items (mcq / cloze / binary_choice / flashcard), graded with
-// practice-core.js and rescheduled with FSRS (deck.js). Answering awards XP and keeps the
-// streak alive.
+// practice-core.js and rescheduled with FSRS (deck.js). Each answer counts toward today's
+// activity and keeps the streak alive.
 
 import { el, icon, inlineMd } from './ui.js';
-import { dueEntries, lessonEntries, reviewEntry, previewDue, deckStats, awardXp, currentStreak, formatDue, XP, Rating } from './deck.js';
+import { dueEntries, lessonEntries, reviewEntry, previewDue, deckStats, recordActivity, currentStreak, formatDue, Rating } from './deck.js';
 import { gradePracticeItem } from './practice-core.js';
 import { recordEvidence, ratingScore } from './mastery-core.js';
 import { postJson } from './stream-client.js';
@@ -27,11 +27,11 @@ function shuffle(list, seed) {
 
 // `entries` (optional): a ready-made queue, e.g. a whole-course review (course-review-core.js);
 // `summary(results)` (optional) adds a node to the end-of-session card.
-export function renderReview(root, { store, onExit, onXp, lessonId = null, entries = null, summary = null }) {
+export function renderReview(root, { store, onExit, onActivity, lessonId = null, entries = null, summary = null }) {
   const now = new Date();
   // a lesson refresh (Phase 9) reviews that lesson's weakest cards, due or not
   const queue = entries || (lessonId ? lessonEntries(store.data.deck, lessonId, now, SESSION_SIZE) : dueEntries(store.data.deck, now, SESSION_SIZE));
-  const session = { index: 0, correct: 0, answered: 0, xp: 0, results: [] };
+  const session = { index: 0, correct: 0, answered: 0, results: [] };
   // keyboard: digits pick choices / grades, T and F answer true-false, Space reveals, Enter continues
   let keys = {};
   const onKey = (e) => {
@@ -98,8 +98,7 @@ export function renderReview(root, { store, onExit, onXp, lessonId = null, entri
     sRows.replaceChildren(
       el('dt', null, 'Card'), el('dd', null, `${Math.min(session.index + 1, queue.length)} of ${queue.length}`),
       el('dt', null, 'Correct'), el('dd', null, `${session.correct} / ${session.answered}`),
-      el('dt', null, 'Accuracy'), el('dd', null, acc == null ? '—' : `${acc}%`),
-      el('dt', null, 'Earned'), el('dd', null, `+${session.xp} XP`));
+      el('dt', null, 'Accuracy'), el('dd', null, acc == null ? '—' : `${acc}%`));
     for (const li of queueList.children) {
       const i = Number(li.dataset.i);
       const r = session.results[i];
@@ -122,16 +121,14 @@ export function renderReview(root, { store, onExit, onXp, lessonId = null, entri
       const r = reviewEntry(d.deck, entry.id, rating, t);
       d.deck = r.deck;
       nextDue = r.entry.card.due;
-      const gained = correct ? XP.reviewCorrect : XP.reviewAttempt;
-      d.stats = awardXp(d.stats, gained, t);
-      session.xp += gained;
+      d.stats = recordActivity(d.stats, t);
       // Phase 6: a tagged review is mastery evidence (personalization follows the memory switch)
       if (entry.item?.concept && d.settings?.memoryEnabled !== false) {
         d.mastery = recordEvidence(d.mastery, [{ concept: entry.item.concept, score: ratingScore(rating), source: 'review', topic: entry.lessonTitle }], t);
       }
       return d;
     });
-    onXp?.();
+    onActivity?.();
     session.answered++;
     if (correct) session.correct++;
     session.results.push({ entry, correct, nextDue });
@@ -288,7 +285,6 @@ export function renderReview(root, { store, onExit, onXp, lessonId = null, entri
       el('div', { class: 'stat-row' },
         el('div', { class: 'stat' }, el('strong', null, String(session.answered)), el('span', null, 'reviewed')),
         el('div', { class: 'stat' }, el('strong', null, `${acc}%`), el('span', null, 'correct')),
-        el('div', { class: 'stat' }, el('strong', null, `+${session.xp}`), el('span', null, 'XP')),
         el('div', { class: 'stat' }, el('strong', null, String(currentStreak(store.data.stats))), el('span', null, 'day streak'))),
       summary ? summary(session.results) : null,
       session.results.length ? el('ul', { class: 'next-list' }, ...session.results.slice(0, 6).map((r) => el('li', null,
@@ -297,7 +293,7 @@ export function renderReview(root, { store, onExit, onXp, lessonId = null, entri
         el('span', { class: 'muted small' }, formatDue(r.nextDue))))) : null,
       el('p', { class: 'muted' }, stats.due ? `${stats.due} more card${stats.due === 1 ? '' : 's'} due now.` : stats.nextDue ? `Next card due ${formatDue(stats.nextDue)}.` : ''),
       el('div', { class: 'review-actions' },
-        stats.due && !lessonId && !entries ? el('button', { class: 'btn btn-secondary', type: 'button', onclick: () => { cleanup(); renderReview(root, { store, onExit, onXp }); } }, 'Keep going') : null,
+        stats.due && !lessonId && !entries ? el('button', { class: 'btn btn-secondary', type: 'button', onclick: () => { cleanup(); renderReview(root, { store, onExit, onActivity }); } }, 'Keep going') : null,
         el('button', { class: 'btn', type: 'button', onclick: onExit }, 'Done'))));
   }
 

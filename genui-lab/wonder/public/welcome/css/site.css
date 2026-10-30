@@ -43,8 +43,11 @@ button { cursor: pointer; }
 }
 .bar.is-solid { background: color-mix(in oklab, #0A0A0A 97%, transparent); border-bottom-color: var(--line); }
 .bar__mark { display: inline-flex; align-items: center; gap: 10px; color: var(--sc-ink); text-decoration: none; font-weight: 600; letter-spacing: -0.01em; justify-self: start; }
-.bar__mark svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linejoin: round; stroke-linecap: round; }
-.bar__beam { stroke: var(--ink-faint); }
+/* the Mull mark (app/icon.svg), inverted for the dark page */
+.bar__mark svg { width: 22px; height: 22px; flex: 0 0 auto; }
+.bar__mark rect { fill: var(--sc-ink); }
+.bar__mark path { fill: none; stroke: var(--sc-canvas); stroke-width: 2.6; stroke-linejoin: round; stroke-linecap: round; }
+.bar__mark circle { fill: var(--sc-accent); }
 .bar__pages { display: flex; gap: 6px; }
 .bar__pages a {
   position: relative; flex: 1; height: 20px; display: flex; align-items: center;
@@ -646,3 +649,27 @@ button { cursor: pointer; }
 /* the hero copy rides above the light layers: drifting dust and spectrum lightened the small
    note under the composer below 4.5:1 */
 .hero__copy, .hero__beat { z-index: 6; }
+
+/* the composer box is one field: text cursor across it, and the input fills its height */
+.composer, .composer__row { cursor: text; }
+.composer button, .composer label { cursor: pointer; }
+.composer input { align-self: stretch; }
+/* the second hero line sits over the composer, invisible until you scroll; it is display text and
+   must never take the clicks meant for the field under it */
+.hero__beat { pointer-events: none; }
+/* typing in the hero: a phone scrolls the page up to make room for its keyboard, far enough that
+   the copy's cue faded the composer out and made it untappable mid-word. While the composer has
+   focus or text it stays put and the second line waits. (!important: the engine's cue styles are
+   inline.) */
+.hero__copy:focus-within, .hero__copy:has(input:not(:placeholder-shown)) { opacity: 1 !important; transform: none !important; pointer-events: auto !important; }
+.hero__stage:has(.hero__copy :focus-within, .hero__copy input:not(:placeholder-shown)) .hero__beat { opacity: 0 !important; }
+
+/* the close: how you start, in onboarding's own step names */
+.steps { list-style: none; margin: 12px 0 0; padding: 0; display: flex; flex-wrap: wrap; justify-content: center; gap: 6px 4px; counter-reset: step; font-size: 0.84rem; color: var(--sc-ink-soft); }
+.steps[hidden] { display: none; }
+.steps li { counter-increment: step; display: inline-flex; align-items: center; gap: 6px; }
+.steps li::before { content: counter(step); display: inline-grid; place-items: center; width: 18px; height: 18px; border-radius: 50%; border: 1px solid var(--line-strong); font-family: var(--sc-font-mono); font-size: 0.66rem; color: var(--sc-ink); }
+.steps li + li::after { content: none; }
+/* wider than the composer it sits under, so the four steps fit on one line on desktop */
+@media (min-width: 761px) { .steps { width: max(100%, 48rem); margin-left: 50%; transform: translateX(-50%); gap: 6px 18px; flex-wrap: nowrap; } }
+@media (max-width: 760px) { .steps { font-size: 0.74rem; } }

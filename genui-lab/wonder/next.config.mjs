@@ -23,8 +23,19 @@ const nextConfig = {
   reactStrictMode: true,
   turbopack: { root: labRoot },
   outputFileTracingRoot: labRoot,
-  // the Anthropic SDK, pg and web-push stay plain Node dependencies of the route handlers
-  serverExternalPackages: ['@anthropic-ai/sdk', 'pg', 'web-push'],
+  // The module mounts read files at request time (server/app.js STATIC_ROOTS), which tracing can't
+  // see, so a deployment (Vercel) would ship none of them and the client fails to start. Name them.
+  // server/demo comes along everywhere because server/paths.js finds the app root by it.
+  outputFileTracingIncludes: {
+    // keys are globs: "[...path]" would be a character class, so match the catch-all with "*"
+    '/chatgpt-dil/src/*': ['../chatgpt-dil/src/**/*', './server/demo/**/*'],
+    '/wondering-genui/src/*': ['../wondering-genui/src/**/*', './server/demo/**/*'],
+    '/vendor/katex/*': ['./node_modules/katex/dist/**/*', './server/demo/**/*'],
+    '/api/*': ['./server/demo/**/*'],
+  },
+  // the Anthropic SDK, pg, web-push and unpdf (a PDF's text layer, server/materials.js) stay plain
+  // Node dependencies of the route handlers
+  serverExternalPackages: ['@anthropic-ai/sdk', 'pg', 'web-push', 'unpdf'],
   poweredByHeader: false,
   devIndicators: false, // the badge sits on the mobile tab bar; build errors still show the overlay
   // the landing page (public/welcome) at /welcome; first-time visitors land there (app/layout.js)

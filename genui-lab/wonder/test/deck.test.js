@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { emptyDeck, addItems, dueEntries, reviewEntry, deckStats, previewDue, awardXp, currentStreak, emptyStats, Rating, State, formatDue } from '../public/deck.js';
+import { emptyDeck, addItems, dueEntries, reviewEntry, deckStats, previewDue, recordActivity, currentStreak, emptyStats, Rating, State, formatDue } from '../public/deck.js';
 import { normalizePracticeItem, gradePracticeItem, RATING } from '../public/practice-core.js';
 import { createStore } from '../public/store.js';
 import { extractPracticeDeterministic } from '../server/practice.js';
@@ -69,33 +69,33 @@ test('FSRS deck: new items are due now; Good walks the learning steps then gradu
   assert.throws(() => reviewEntry(deck, id, 0, T0));
 });
 
-test('XP and streaks: same day counts once, consecutive days extend, gaps reset', () => {
-  let s = emptyStats();
-  s = awardXp(s, 50, new Date('2026-10-21T10:00:00Z'), 'UTC');
-  s = awardXp(s, 10, new Date('2026-10-21T18:00:00Z'), 'UTC');
-  assert.equal(s.xp, 60);
+test('activity and streaks: same day counts once, consecutive days extend, gaps reset', () => {
+  let s = { ...emptyStats(), xp: 60 };
+  s = recordActivity(s, new Date('2026-10-21T10:00:00Z'), 'UTC');
+  s = recordActivity(s, new Date('2026-10-21T18:00:00Z'), 'UTC');
+  assert.equal(s.xp, undefined, 'an older state’s XP is dropped');
   assert.equal(s.streak.count, 1);
-  s = awardXp(s, 5, new Date('2026-10-22T08:00:00Z'), 'UTC');
+  s = recordActivity(s, new Date('2026-10-22T08:00:00Z'), 'UTC');
   assert.equal(s.streak.count, 2);
   assert.equal(currentStreak(s, new Date('2026-10-23T12:00:00Z'), 'UTC'), 2, 'still alive the next day');
   assert.equal(currentStreak(s, new Date('2026-10-25T12:00:00Z'), 'UTC'), 0, 'lapsed after a gap');
-  s = awardXp(s, 5, new Date('2026-10-25T08:00:00Z'), 'UTC');
+  s = recordActivity(s, new Date('2026-10-25T08:00:00Z'), 'UTC');
   assert.equal(s.streak.count, 1);
   assert.equal(s.streak.best, 2);
-  assert.equal(s.days['2026-10-21'], 60);
+  assert.equal(s.days['2026-10-21'], 2);
 });
 
 test('store persists through a storage shim and survives corrupted data', () => {
   const m = new Map();
   const storage = { getItem: (k) => m.get(k) ?? null, setItem: (k, v) => m.set(k, v), removeItem: (k) => m.delete(k) };
   const a = createStore({ storage });
-  a.update((d) => { d.stats.xp = 42; d.lessons.x = { id: 'x', markdown: '# Hi', updatedAt: 'z' }; return d; });
+  a.update((d) => { d.stats.days['2026-10-21'] = 3; d.lessons.x = { id: 'x', markdown: '# Hi', updatedAt: 'z' }; return d; });
   a.flush();
   const b = createStore({ storage });
-  assert.equal(b.data.stats.xp, 42);
+  assert.equal(b.data.stats.days['2026-10-21'], 3);
   assert.equal(b.data.lessons.x.markdown, '# Hi');
   m.set('wonder.v1', '{not json');
-  assert.equal(createStore({ storage }).data.stats.xp, 0);
+  assert.deepEqual(createStore({ storage }).data.stats.days, {});
   const throwing = { getItem() { throw new Error('blocked'); }, setItem() { throw new Error('quota'); }, removeItem() {} };
   const c = createStore({ storage: throwing });
   assert.doesNotThrow(() => { c.update((d) => d); c.flush(); });

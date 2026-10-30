@@ -7,7 +7,7 @@ import { dailyBrief, briefNotification, reminderDue } from '../public/brief-core
 import { planToIcs, icsEscape, icsFold } from '../public/ics.js';
 import { upNext } from '../public/progress-core.js';
 import { emptyState } from '../public/store.js';
-import { emptyDeck, addItems, reviewEntry, Rating, awardXp } from '../public/deck.js';
+import { emptyDeck, addItems, reviewEntry, Rating, recordActivity } from '../public/deck.js';
 import { normalizePracticeItem } from '../public/practice-core.js';
 import { TEACHER_OPENER } from '../public/teacher-core.js';
 import { createTeacherToolkit, validateToolInput, TEACHER_TOOLS, handleTeacherAction, createCardStore } from '../server/teacher.js';
@@ -120,18 +120,18 @@ test('brief: nothing pressing hands over to the Teacher; streak warning after 6 
   const b = dailyBrief(d, NOW);
   assert.equal(b.items.length, 1);
   assert.equal(b.items[0].action.type, 'teacher');
-  d.stats = awardXp(d.stats, 10, at('2026-10-20T12:00:00'));
+  d.stats = recordActivity(d.stats, at('2026-10-20T12:00:00'));
   assert.match(dailyBrief(d, at('2026-10-21T19:30:00')).headline, /1-day streak ends at midnight/);
 });
 
-test('reminder: once a day, after its time, only when the goal is not met', () => {
-  const settings = { reminder: { enabled: true, time: '18:00' }, dailyGoal: 30 };
+test('reminder: once a day, after its time, only when nothing was studied yet', () => {
+  const settings = { reminder: { enabled: true, time: '18:00' } };
   const stats = emptyState().stats;
   assert.equal(reminderDue(settings, stats, at('2026-10-21T17:59:00')), false);
   assert.equal(reminderDue(settings, stats, at('2026-10-21T18:00:00')), true);
   assert.equal(reminderDue(settings, stats, at('2026-10-21T20:00:00'), '2026-10-21'), false, 'already shown today');
   assert.equal(reminderDue({ ...settings, reminder: { enabled: false, time: '18:00' } }, stats, at('2026-10-21T20:00:00')), false);
-  assert.equal(reminderDue(settings, awardXp(stats, 40, at('2026-10-21T09:00:00')), at('2026-10-21T20:00:00')), false, 'goal met');
+  assert.equal(reminderDue(settings, recordActivity(stats, at('2026-10-21T09:00:00')), at('2026-10-21T20:00:00')), false, 'studied today');
   assert.equal(reminderDue({ reminder: { enabled: true, time: '25:00' } }, stats, at('2026-10-21T20:00:00')), false);
 });
 
@@ -150,7 +150,7 @@ test('ics: one event per day at the reminder time, escaped and folded, plus the 
   assert.match(ics, /DTSTART;VALUE=DATE:20261024/);
   for (const line of ics.split('\r\n')) assert.ok(new TextEncoder().encode(line).length <= 75, line);
   const flat = ics.replace(/\r\n /g, ''); // unfold
-  assert.match(flat, /SUMMARY:Wonder · Spread/);
+  assert.match(flat, /SUMMARY:Mull · Spread/);
   assert.match(flat, /DESCRIPTION:Day 2 of your plan: Statistics exam\\n• Lesson: Variance\\n• Review: Review/);
   assert.match(ics, /UID:p1-d1@wonder.local/);
   assert.match(ics, /DTSTAMP:20261021T100000Z/);

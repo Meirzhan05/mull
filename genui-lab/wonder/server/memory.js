@@ -154,7 +154,7 @@ export function createMemoryStore({ file = DEFAULT_MEMORY_FILE, now = () => new 
       if (!list.length) return '';
       const lines = list.map((i) => `- ${withIds ? `(${i.id}) ` : ''}[${i.kind}] ${i.fact}`);
       return [
-        'About this learner (from Wonder\'s learner memory; personalize with it quietly, never recite it back or mention "memory" unless the learner asks):',
+        'About this learner (from Mull\'s learner memory; personalize with it quietly, never recite it back or mention "memory" unless the learner asks):',
         ...lines,
       ].join('\n');
     },

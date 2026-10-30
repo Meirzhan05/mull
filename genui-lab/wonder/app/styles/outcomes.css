@@ -23,14 +23,6 @@
 .file-chip > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 220px; }
 .file-chip .icon-btn { width: 22px; height: 22px; }
 
-/* -- Today: the study plan follows the calendar */
-.plan-pace { font-size: 0.75rem; color: var(--ink-3); }
-.plan-pace.pace-behind { color: var(--warning); }
-.plan-pace.pace-ahead, .plan-pace.pace-done { color: var(--success); }
-.check.is-today .check-day { color: var(--accent); font-weight: 600; }
-.check.is-late .check-day { color: var(--warning); }
-.plan-links { display: flex; flex-wrap: wrap; gap: 6px 16px; }
-
 /* -- Lesson end: how well it stuck (sits with the quality note) */
 .stuck { width: 100%; max-width: 520px; display: grid; gap: 6px; text-align: left; font-size: 0.8125rem; color: var(--ink-2); border: 1px solid var(--line); border-radius: var(--r-md); padding: 10px 12px; background: var(--surface); }
 .stuck p { margin: 0; }
@@ -51,19 +43,11 @@
 .works-findings li[data-tone="down"] .status-dot { background: var(--warning); }
 .works-empty { margin: 0; }
 .works-lessons { list-style: none; margin: 0; padding: 0; display: grid; }
-.works-lesson, .material-row { display: flex; align-items: center; justify-content: space-between; gap: 8px 12px; flex-wrap: wrap; padding: 8px 0; }
+.works-lesson { display: flex; align-items: center; justify-content: space-between; gap: 8px 12px; flex-wrap: wrap; padding: 8px 0; }
 .works-lesson + .works-lesson { border-top: 1px solid var(--line); }
-.works-lesson .mastery-text, .material-row .mastery-text { flex: 1 1 200px; }
+.works-lesson .mastery-text { flex: 1 1 200px; }
 .works-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .works-toggle { border-top: 1px solid var(--line); }
-
-/* -- You: materials */
-.materials-card { padding: 4px 16px; }
-.materials-list { list-style: none; margin: 0; padding: 0; display: grid; }
-.material-row + .material-row { border-top: 1px solid var(--line); }
-.materials-empty { margin: 0; padding: 12px 0; }
-.material-row .icon-btn { width: 30px; height: 30px; color: var(--ink-3); }
-.material-row .icon-btn:hover { color: var(--danger); }
 
 /* -- You: the daily reminder */
 .reminder-controls { display: flex; align-items: center; gap: 12px; }

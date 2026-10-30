@@ -1,20 +1,22 @@
 // App shell: the desktop sidebar (sections, then recent lessons and courses to jump back into),
-// the mobile top bar and bottom tabs, the daily-goal mini ring, the theme switch, the demo
+// the mobile top bar and bottom tabs, the streak mini card, the profile link, the demo
 // notice and the ⌘K (or /) command palette, which also searches the learner's lessons,
 // courses, cards and Teacher chats (search-core.js). Screens render into #app; the shell only
 // reflects the current route and the learner's stats.
 
-import { el, icon, toast } from './ui.js';
+import { el, icon, brandMark } from './ui.js';
 import { deckStats, currentStreak } from './deck.js';
-import { dailyProgress, matchScore, courseProgress, recentLessons, lessonState } from './progress-core.js';
+import { studiedToday, matchScore, courseProgress, recentLessons, lessonState } from './progress-core.js';
 import { searchStoreGroups, openResult, resultBody, hasTitleHit, TYPE_ICON, resultCount } from './search-ui.js';
+import { accountLabel } from './account.js';
 
 const NAV = [
   { id: 'today', label: 'Today', icon: 'home', href: '#/' },
   { id: 'library', label: 'Library', icon: 'library', href: '#/library' },
   { id: 'review', label: 'Review', icon: 'repeat', href: '#/review' },
   { id: 'teacher', label: 'Teacher', icon: 'teacher', href: '#/teacher' },
-  { id: 'you', label: 'You', icon: 'user', href: '#/you' },
+  // mobile tabs only: on desktop the profile link at the bottom of the sidebar opens You
+  { id: 'you', label: 'You', icon: 'user', href: '#/you', mobileOnly: true },
 ];
 // which nav entry a screen belongs to
 const SECTION = { home: 'today', course: 'library', lesson: 'library', library: 'library', review: 'review', teacher: 'teacher', you: 'you', memory: 'you' };
@@ -33,10 +35,10 @@ export function createShell({ store, getStatus, actions }) {
   const tabbar = document.getElementById('tabbar');
   const banner = document.getElementById('demo-banner');
 
-  const brand = () => el('a', { class: 'brand', href: '#/', 'aria-label': 'Wonder, today' },
-    el('span', { class: 'brand-name' }, 'Wonder'), el('span', { class: 'brand-dot', 'aria-hidden': 'true' }, '.'));
+  const brand = () => el('a', { class: 'brand', href: '#/', 'aria-label': 'Mull, today' },
+    brandMark(), el('span', { class: 'brand-name' }, 'Mull'));
 
-  // -- theme
+  // -- theme (picked in You > Preferences or the palette)
   let theme = 'system';
   try { theme = localStorage.getItem('wonder.theme') || 'system'; } catch {}
   const applyTheme = () => {
@@ -44,33 +46,52 @@ export function createShell({ store, getStatus, actions }) {
     else document.documentElement.setAttribute('data-theme', theme);
   };
   applyTheme();
-  const themeBtn = el('button', { class: 'side-theme', type: 'button' });
   const setTheme = (t) => {
     theme = THEMES.includes(t) ? t : 'system';
     applyTheme();
     try { localStorage.setItem('wonder.theme', theme); } catch {}
-    drawThemeBtn();
   };
-  const drawThemeBtn = () => {
-    themeBtn.replaceChildren(icon(THEME_ICON[theme]), el('span', { class: 'side-theme-label' }, theme === 'dark' ? 'Night reading' : theme === 'light' ? 'Day reading' : 'Match system'));
-    themeBtn.setAttribute('aria-label', `Color theme: ${theme}. Switch theme`);
-  };
-  themeBtn.addEventListener('click', () => { setTheme(THEMES[(THEMES.indexOf(theme) + 1) % THEMES.length]); toast(`Theme: ${theme}`); });
-  drawThemeBtn();
 
   // -- sidebar (desktop)
   const navLinks = {};
   const navBadges = {};
-  const nav = el('nav', { class: 'nav', 'aria-label': 'Sections' }, ...NAV.map((n) => {
+  const nav = el('nav', { class: 'nav', 'aria-label': 'Sections' }, ...NAV.filter((n) => !n.mobileOnly).map((n) => {
     navBadges[n.id] = el('span', { class: 'badge', hidden: true });
     navLinks[n.id] = el('a', { class: 'nav-link', href: n.href, title: n.label }, icon(n.icon), el('span', { class: 'nav-label' }, n.label), navBadges[n.id]);
     return navLinks[n.id];
   }));
   const searchBtn = el('button', { class: 'search-trigger', type: 'button', 'aria-label': 'Search or start a lesson', onclick: () => openPalette() },
     icon('search'), el('span', { class: 'search-trigger-text' }, 'Search or begin…'), el('kbd', null, isMac() ? '⌘K' : 'Ctrl K'));
-  const goalMini = el('a', { class: 'goal-mini', href: '#/you', title: 'Daily goal' });
+  const goalMini = el('a', { class: 'goal-mini', href: '#/you', title: 'Streak' });
   const recent = el('nav', { class: 'side-recent', 'aria-label': 'Recent lessons and courses' });
-  sidebar.replaceChildren(brand(), searchBtn, nav, recent, el('div', { class: 'sidebar-foot' }, goalMini, themeBtn));
+  const profile = el('a', { class: 'side-profile', href: '#/you' });
+  // lessons fold the sidebar to a rail (styles.css); this unfolds it, and the choice is remembered
+  const sideToggle = el('button', { class: 'side-toggle', type: 'button', onclick: () => setSideOpen(!document.body.classList.contains('side-open')) }, icon('chevron'));
+  const setSideOpen = (open) => {
+    document.body.classList.toggle('side-open', open);
+    sideToggle.setAttribute('aria-expanded', String(open));
+    sideToggle.setAttribute('aria-label', open ? 'Collapse sidebar' : 'Expand sidebar');
+    sideToggle.title = open ? 'Collapse sidebar' : 'Expand sidebar';
+    try { localStorage.setItem('wonder.sidebar', open ? 'open' : 'rail'); } catch {}
+  };
+  let sideOpen = false;
+  try { sideOpen = localStorage.getItem('wonder.sidebar') === 'open'; } catch {}
+  setSideOpen(sideOpen);
+  sidebar.replaceChildren(brand(), sideToggle, searchBtn, nav, recent, el('div', { class: 'sidebar-foot' }, goalMini, profile));
+
+  let profileKey = '';
+  function drawProfile(d) {
+    const name = String(d.settings?.name || '').trim();
+    const sub = accountLabel() || 'Profile and settings';
+    const key = `${name}\n${sub}`;
+    if (key === profileKey) return;
+    profileKey = key;
+    profile.title = name || 'Profile';
+    profile.setAttribute('aria-label', `Profile${name ? `: ${name}` : ''}`);
+    profile.replaceChildren(
+      el('span', { class: 'side-avatar', 'aria-hidden': 'true' }, (name || 'You')[0].toUpperCase()),
+      el('span', { class: 'side-profile-text' }, el('strong', null, name || 'Profile'), el('small', null, sub)));
+  }
 
   // Rebuilt only when what it shows changes: refresh() runs on every store write (a streaming
   // lesson saves each second), and replacing the links would drop focus and in-flight clicks.
@@ -104,8 +125,7 @@ export function createShell({ store, getStatus, actions }) {
 
   // -- top bar (mobile)
   const streakChip = el('a', { class: 'chip chip-streak', href: '#/you', title: 'Streak' });
-  const xpChip = el('a', { class: 'chip chip-xp', href: '#/you', title: 'Today against your daily goal' });
-  topbar.replaceChildren(brand(), el('div', { class: 'topbar-right' }, streakChip, xpChip,
+  topbar.replaceChildren(brand(), el('div', { class: 'topbar-right' }, streakChip,
     el('button', { class: 'icon-btn plain', type: 'button', 'aria-label': 'Search or start a lesson', onclick: () => openPalette() }, icon('search'))));
 
   // -- tabs (mobile)
@@ -121,36 +141,36 @@ export function createShell({ store, getStatus, actions }) {
     const section = SECTION[screen] || 'today';
     for (const n of NAV) {
       for (const m of [navLinks, tabLinks]) {
+        if (!m[n.id]) continue;
         if (n.id === section) m[n.id].setAttribute('aria-current', 'page');
         else m[n.id].removeAttribute('aria-current');
       }
     }
+    if (section === 'you') profile.setAttribute('aria-current', 'page');
+    else profile.removeAttribute('aria-current');
   }
 
   function refresh() {
     const d = store.data;
     const streak = currentStreak(d.stats);
-    const day = dailyProgress(d.stats, d.settings);
+    const today = studiedToday(d.stats);
     const due = deckStats(d.deck).due;
     drawRecent(d);
+    drawProfile(d);
     for (const b of [navBadges.review, tabBadges.review]) { b.hidden = !due; b.textContent = due > 99 ? '99+' : String(due); }
     streakChip.classList.toggle('lit', streak > 0);
     streakChip.replaceChildren(el('span', { class: 'chip-unit' }, 'Day'), ` ${streak}`);
     streakChip.setAttribute('aria-label', `${streak} day streak`);
-    xpChip.replaceChildren(`${day.xp}`, el('span', { class: 'chip-unit' }, ` / ${day.goal} XP`));
-    xpChip.setAttribute('aria-label', `${day.xp} of ${day.goal} XP today`);
-    goalMini.classList.toggle('met', day.met);
-    goalMini.setAttribute('aria-label', `Today ${day.xp} of ${day.goal} XP, ${streak} day streak`);
+    goalMini.setAttribute('aria-label', `${streak} day streak${today ? ', studied today' : ''}`);
     goalMini.replaceChildren(
       el('span', { class: 'goal-mini-text' },
-        el('span', { class: 'goal-mini-label' }, 'Today'),
-        el('strong', null, String(day.xp), el('small', null, ` / ${day.goal} XP`))),
-      el('span', { class: `ledger-bar ${day.met ? 'met' : ''}`, 'aria-hidden': 'true' }, el('i', { style: { width: `${Math.round(day.pct * 100)}%` } })),
-      el('span', { class: 'goal-mini-note' }, streak ? `Day ${streak} of the streak` : 'No streak yet'));
+        el('span', { class: 'goal-mini-label' }, 'Streak'),
+        el('strong', null, String(streak), el('small', null, streak === 1 ? ' day' : ' days'))),
+      el('span', { class: 'goal-mini-note' }, today ? 'Today counts' : streak ? 'Study today to keep it' : 'No streak yet'));
   }
 
   function bump() {
-    for (const n of [xpChip, goalMini]) { n.classList.remove('bump'); void n.offsetWidth; n.classList.add('bump'); }
+    for (const n of [streakChip, goalMini]) { n.classList.remove('bump'); void n.offsetWidth; n.classList.add('bump'); }
   }
 
   function showBanner(mode) {

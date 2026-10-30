@@ -180,12 +180,21 @@ export function friendlyError(err) {
   // 529, or an `overloaded_error` event mid-stream (no HTTP status): retryable, like a 429
   if (err instanceof Anthropic.APIError && (err.status === 529 || apiErrorType(err) === 'overloaded_error')) return { code: 'overloaded', message: 'Claude is overloaded right now. Wait a moment and try again.', ...retryAfterOf(err) };
   if (err instanceof Anthropic.BadRequestError && /anthropic-workspace-id/.test(String(err?.error?.error?.message || err.message))) return { code: 'workspace_required', message: 'This API key is not scoped to a workspace. Add ANTHROPIC_WORKSPACE_ID=wrkspc_... to ~/.config/wonder/.env and restart.' };
-  if (err instanceof Anthropic.BadRequestError) return { code: 'bad_request', message: 'Claude could not process this request. Try a shorter or simpler prompt.' };
+  if (err instanceof Anthropic.BadRequestError) {
+    // Claude's own reason ("Could not process PDF", "prompt is too long") says what to change
+    const reason = String(err?.error?.error?.message || '').trim().replace(/\.$/, '');
+    return { code: 'bad_request', message: reason ? `Claude could not process this request: ${reason}.` : 'Claude could not process this request. Try a shorter or simpler prompt.' };
+  }
   if (err?.code === 'stalled' || err instanceof StreamStalledError) return { code: 'stalled', message: 'Claude stopped responding partway through. Resume to continue from the last complete page.' };
   if (err instanceof Anthropic.APIConnectionError || isNetworkError(err)) return { code: 'network', message: 'The connection to Claude dropped. Resume to continue from the last complete page.' };
   if (err instanceof Anthropic.APIError) return { code: 'api_error', message: `Claude had a problem${err.status ? ` (HTTP ${err.status})` : ''}. Please try again.` };
   if (err?.name === 'AbortError' || err?.code === 'aborted') return { code: 'aborted', message: 'Stopped.' };
   return { code: 'internal', message: 'Something went wrong while generating. Please try again.' };
+}
+
+/** The API's own message for a request Claude refused as invalid (HTTP 400), else null. */
+export function badRequestMessage(err) {
+  return err instanceof Anthropic.BadRequestError ? String(err?.error?.error?.message || err.message) : null;
 }
 
 export const REFUSAL_MESSAGE = "\n\n*I can't help with that topic. Try asking about something else you're curious about.*\n";

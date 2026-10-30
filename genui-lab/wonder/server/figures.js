@@ -157,7 +157,7 @@ export function createCommonsLookup({ fetch = globalThis.fetch, timeoutMs = 5000
 export const FIGURE_CHECK_MODEL = 'claude-haiku-5-5';
 
 export const FIGURE_CHECK_SYSTEM_PROMPT = `
-You check images for Wonder, an app whose lessons are written by an AI model. The lesson's author asked for a picture with a short search phrase and wrote the caption, alt text and an optional question and answer without ever seeing the image. An image search then picked the image you are shown. Decide whether it fits the text the learner will read next to it.
+You check images for Mull, an app whose lessons are written by an AI model. The lesson's author asked for a picture with a short search phrase and wrote the caption, alt text and an optional question and answer without ever seeing the image. An image search then picked the image you are shown. Decide whether it fits the text the learner will read next to it.
 
 fits = true when the image shows the subject the text describes and the details the caption, alt text, question or answer point at are visible in it (or plainly would be). Differences of style are fine: a drawing or diagram instead of a photo, another angle, color, season or specimen of the same thing, labels in another language when the question does not depend on reading them.
 

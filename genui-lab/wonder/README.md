@@ -1,8 +1,8 @@
-# Wonder: AI lessons with model-written interactive UI
+# Mull: AI lessons with model-written interactive UI
 
-Wonder is a working learning app that combines the two systems reverse-engineered in this lab:
+Mull is a working learning app that combines the two systems reverse-engineered in this lab:
 
-- **wondering.app's product loop.** You pick a topic or plan a course. You get a short paged lesson with interactive widgets and a tutor you can ask about it. When you finish, knowledge cards are revealed in a "pack opening", and spaced-repetition review is scheduled with FSRS. XP and streaks are tracked throughout. A **Teacher** agent plans your study, proposes lessons, quizzes you and remembers what matters, and a **learner memory** personalizes every lesson, tutor reply and Teacher turn.
+- **wondering.app's product loop.** You pick a topic or plan a course. You get a short paged lesson with interactive widgets and a tutor you can ask about it. When you finish, knowledge cards are revealed in a "pack opening", and spaced-repetition review is scheduled with FSRS. A daily streak is tracked throughout. A **Teacher** agent plans your study, proposes lessons, quizzes you and remembers what matters, and a **learner memory** personalizes every lesson, tutor reply and Teacher turn.
 - **ChatGPT's "intelligent UI" (DIL).** The model writes JSX-like UI tags inline in its markdown. The server recompiles the growing message into a DIL program on every revision and streams it as `conversation-source` NDJSON. The browser runs the program in a sandboxed Web Worker and applies the resulting render ops to the DOM.
 
 The model is Claude (`claude-opus-5-5`). Without credentials the app runs in **demo mode**, streaming pre-written lessons through exactly the same pipeline.
@@ -24,7 +24,7 @@ Claude (or demo/*.md)  ──text deltas──▶  server/compile.js  (chatgpt-d
 
 ## Run it
 
-Wonder is a Next.js 16 app (App Router, Turbopack).
+Mull is a Next.js 16 app (App Router, Turbopack).
 
 ```sh
 cd genui-lab/wonder
@@ -50,7 +50,7 @@ Practice extraction in demo mode is deterministic, built from the lesson's `<Key
 
 ## The app
 
-Five sections, in a sidebar on desktop and a bottom tab bar on phones, plus a ⌘K / Ctrl K (or `/`) command palette that searches lessons, courses and Teacher chats and starts a lesson, course or Teacher chat on whatever you type.
+Five sections, in a sidebar on desktop (with the streak and a link to your profile at the foot) and a bottom tab bar on phones, plus a ⌘K / Ctrl K (or `/`) command palette that searches lessons, courses and Teacher chats and starts a lesson, course or Teacher chat on whatever you type.
 
 - **Today (`#/`).** A greeting, a command bar with three modes (Lesson, Course, Teacher), and the dashboard described above. Topic suggestions come from the interests picked at onboarding. **Up next** picks the single best next action (`public/progress-core.js` `upNext`): continue an unfinished lesson, review due cards, the next item of the saved study plan, or the next lesson of a course. The saved study plan and recent lessons follow.
 - **Lesson (`#/lesson/<id>`).** A focused reader: the sidebar collapses to an icon rail and the phone tabs hide. The bar shows a segmented progress bar (one segment per page; click to jump), "Page x of n", a contents menu, the tutor toggle and a menu with text size and widget reset. While Claude writes, a status line and a compact **Steer** pill sit above the lesson. Highlight any passage to **Explain** it or **Ask about this** in the tutor. The end of the lesson is a colophon that turns into "Collect the cards", then the index cards, then a **what next** step: the next course lesson, a review, or Today. Reopening a lesson offers to jump back to the page you were on.
@@ -58,27 +58,27 @@ Five sections, in a sidebar on desktop and a bottom tab bar on phones, plus a �
 - **Library (`#/library`).** Every lesson and course in this browser, with search, filters (in progress, finished, courses) and delete. Courses open as a path (`#/course/<id>`) with a progress ring and a Continue button.
 - **Review (`#/review`).** FSRS review with keyboard shortcuts: 1–5 or A–E to choose, T/F, Space to show an answer, 1–4 to grade, Enter to continue.
 - **Teacher (`#/teacher`).** The agent chat with tool cards (below).
-- **You (`#/you`).** Name, totals, a 22-week activity heatmap, settings (daily goal, theme, lesson text size), learner memory, and data export or erase.
-- **Onboarding.** On first run: a name, interests and a daily goal, all skippable.
-- **Landing page (`/welcome`).** A scroll page that replays a recorded lesson, ending in a **Start a lesson** box that opens `#/learn/<topic>` in the app. The home page `/` opens on it instead of Today (a pre-paint script, `app/landing-script.js`, run by `app/layout.js`):
-  - **Account sync on:** for any browser without an account, every time. A browser that has signed in before (`wonder.account` is set) stays in the app, where **Sign in again** is if its session ended. A page coming back from Google sign-in (`?neon_auth_session_verifier=`) stays too, so the app can finish the sign-in. Neon Auth's cookies are HttpOnly, so the script goes by the account marker, not cookies.
-  - **Accounts off:** for a first-time visitor, once (`wonder.welcomed`), when this browser has no Wonder data (`wonder.v1`, `wonder.account`).
-  - Deep links such as `#/lesson/<id>` never redirect. The page is static files in `public/welcome/`; `next.config.mjs` rewrites `/welcome` to its `index.html`. It began as the ScrollCraft build in `scrollcraft/builds/wonder`, but `public/welcome/` is now the copy to edit: it has the app-only parts the standalone build lacks.
+- **You (`#/you`).** Name, account and sync, totals, "What you know", a 22-week activity heatmap, and settings (level, interests, theme, lesson text size, reminder). Memory, material and "What works for you" are still kept and synced but have no place on this screen.
+- **Onboarding.** A full-screen welcome in two steps: interests (with the name filled from the Google account), and a first lesson. With accounts on it runs only after sign-in. A topic brought from the landing page leads the last step as **Your first lesson**, one press from starting. All of it is skippable.
+- **Landing page (`/welcome`).** A scroll page that replays a recorded lesson. Its composers and topic cards say **Continue with Google** and open `#/start/<topic>` in the app. The home page `/` opens on it instead of Today (a pre-paint script, `app/landing-script.js`, run by `app/layout.js`):
+  - **Account sync on:** for any browser without an account, every time and on any hash, because everything in Mull needs a signed-in user. A deep link (`#/lesson/<id>`, `#/library`) is saved as `wonder.signInReturn`, so the visitor lands back on it after signing in. A browser that has signed in before (`wonder.account` is set) stays in the app, where **Sign in again** is if its session ended. A page coming back from Google sign-in (`?neon_auth_session_verifier=`) stays too, so the app can finish the sign-in, and so do the hashes that lead into sign-in (`#/start…`, `#/signin`, `#/learn/…`). Neon Auth's cookies are HttpOnly, so the script goes by the account marker, not cookies.
+  - **Accounts off:** for a first-time visitor, once (`wonder.welcomed`), when this browser has no Mull data (`wonder.v1`, `wonder.account`).
+  - With accounts off, deep links such as `#/lesson/<id>` never redirect. The page is static files in `public/welcome/`; `next.config.mjs` rewrites `/welcome` to its `index.html`. It began as the ScrollCraft build in `scrollcraft/builds/wonder`, but `public/welcome/` is now the copy to edit: it has the app-only parts the standalone build lacks.
   - **Real recordings.** The replayed lesson ("Why the Roman Empire Fell", `test/fixtures/claude-lesson-rome.ndjson`, steered once with Simpler) and the Teacher's week (`claude-teacher-statistics.ndjson`) are real claude-opus-5-5 turns. `npm run welcome:data` rebuilds `public/welcome/js/data.js` from them.
-  - **Ways in.** `#/learn/<topic>` starts a lesson on that topic: the composers (hero, the end of the replay, the close) and the topic chips link there. `#/signin` opens sign-in over Today. The page asks `/api/account`: with accounts on and nobody signed in, the bar's link reads **Sign in** and each composer says sign-in comes first; otherwise the link reads **Open Wonder**.
+  - **Ways in.** `#/start[/<topic>]` (`public/start-core.js`): the composers (hero, the end of the replay, the close), the topic chips and cards link there. With accounts on and signed out it signs in with Google first, and the topic waits in `wonder.afterSignIn`. A new account then gets onboarding with the topic leading its last step; someone already onboarded starts the lesson. Without accounts it opens onboarding or the lesson directly. `#/learn/<topic>` (old links) signs in first the same way, and `#/signin` opens sign-in over Today. The page asks `/api/account`: with accounts on and nobody signed in, the bar's link reads **Sign in** and the notes name the steps that follow (the close lists onboarding's own step names). Accounts off, or already signed in, the composers read **Start a lesson** and the link reads **Open Mull**. `app/layout.js` marks `<html data-accounts>` so the client knows at boot whether sign-in comes first.
 
-**Design.** A neutral design system in light and dark (Vercel-style grays: white and near-black), with one blue accent for focus, links and the current state. Geist for text and Geist Mono for numbers and keys (both self-hosted by `next/font`); soft corners, filled controls with focus rings, pill segmented controls and cards with a hairline border and a light shadow. Each section has its own layout: **Today** is a dashboard (a command bar, the "Up next" queue, suggestion tiles and recent reading, and a rail with today's XP, the streak, the deck and the study plan); **Library** is a pair of sortable tables; **Review** puts the card beside a live session panel (position, accuracy, the queue, the deck, the keys); **Teacher** adds a column showing what it sees (your progress, memory and plan); **You** is a settings page with a section nav. Lessons are a clean article with numbered pages; finishing one turns its ideas into cards. Reading time is estimated from the prose plus about half a minute per interactive widget.
+**Design.** A neutral design system in light and dark (Vercel-style grays: white and near-black), with one blue accent for focus, links and the current state. Geist for text and Geist Mono for numbers and keys (both self-hosted by `next/font`); soft corners, filled controls with focus rings, pill segmented controls and cards with a hairline border and a light shadow. Each section has its own layout: **Today** is a dashboard (a command bar, the "Up next" queue, suggestion tiles and recent reading, and a rail with the streak, the deck and the study plan); **Library** is a pair of sortable tables; **Review** puts the card beside a live session panel (position, accuracy, the queue, the deck, the keys); **Teacher** adds a column showing what it sees (your progress, memory and plan); **You** is a settings page with a section nav. Lessons are a clean article with numbered pages; finishing one turns its ideas into cards. Reading time is estimated from the prose plus about half a minute per interactive widget.
 
 ## On Next.js
 
-- **Pages.** `app/layout.js` (fonts, global CSS, metadata, the pre-paint theme script) and `app/page.js` → `app/wonder-app.js`. That client component renders the shell frame and, after hydration, starts the Wonder client (`public/app.js`). The client screens stay unbundled ES modules in `public/`: the lesson renderer runs model-written UI in a sandboxed Web Worker that imports the DIL runtime by URL. Screens route with the URL hash.
-- **API.** `app/api/[...route]/route.js` sends every `/api/*` request to the Wonder core (`createWonderCore` in `server/app.js`) through a Fetch-API adapter (`server/web.js`). JSON endpoints return JSON `Response`s. NDJSON endpoints return a `ReadableStream` that the turn keeps writing into, and a client disconnect aborts the turn. There is one core per server process (`getWonderCore`), so a steer request reaches the lesson stream that is still running.
+- **Pages.** `app/layout.js` (fonts, global CSS, metadata, the pre-paint theme script) and `app/page.js` → `app/wonder-app.js`. That client component renders the shell frame and, after hydration, starts the Mull client (`public/app.js`). The client screens stay unbundled ES modules in `public/`: the lesson renderer runs model-written UI in a sandboxed Web Worker that imports the DIL runtime by URL. Screens route with the URL hash.
+- **API.** `app/api/[...route]/route.js` sends every `/api/*` request to the Mull core (`createWonderCore` in `server/app.js`) through a Fetch-API adapter (`server/web.js`). JSON endpoints return JSON `Response`s. NDJSON endpoints return a `ReadableStream` that the turn keeps writing into, and a client disconnect aborts the turn. There is one core per server process (`getWonderCore`), so a steer request reaches the lesson stream that is still running.
 - **Read-only module mounts.** `app/chatgpt-dil/src/[...path]`, `app/wondering-genui/src/[...path]` and `app/vendor/katex/[...path]` serve the sibling lab folders and KaTeX with traversal refused. `next.config.mjs` roots Turbopack and output tracing at `genui-lab/` so the server can import `../chatgpt-dil` and `../wondering-genui`.
 - **Tests.** The same core also runs behind a small `node:http` server (`createWonderServer`), which the test suite drives. `test/web.test.js` drives the Fetch-API adapter that Next uses.
 
-## How the two systems map into Wonder
+## How the two systems map into Mull
 
-| Concern | ChatGPT (DIL) | Wondering | Wonder |
+| Concern | ChatGPT (DIL) | Wondering | Mull |
 |---|---|---|---|
 | How the model asks for UI | Inline JSX-like tags in markdown, e.g. `<box padding={4}>`, `<StockChart …/>` (chatgpt-findings §8.2) | `{{interactive:name data='…'}}` markers, or `embed` JSON spliced after paragraph *n* (wondering-findings §1.1, §1.3) | The ChatGPT way: inline tags. Wondering's widgets become **Capitalized catalog components** with JSON props: `<Quiz questions={[…]}/>`, `<Flowchart nodes={…}/>` |
 | Compilation | Server recompiles the whole message into `dil.code` + `constants` each revision | Client-side marker parsing to React components | `server/compile.js` wraps `chatgpt-dil/src/compiler.js` (byte-exact for the captured stream) with a pre-pass that parses `{…}` props as lenient JSON, validates them, and hoists them into `__dilConstants` |
@@ -90,7 +90,7 @@ Five sections, in a sidebar on desktop and a bottom tab bar on phones, plus a �
 | Lesson shape | n/a | `#` title, hook, pages (`##` sections), embeds per page, KeyTerm highlights, wondering-lens asides, 3-question check (§1.5) | Same pedagogy, taught to Claude in `server/prompts.js`. Each `##` renders as a numbered "page" |
 | Tutor | Follow-ups via `followupPrompts` | `course-chat`, `quick_replies` | `/api/tutor/stream` with the lesson as context. Replies are DIL (they can include a Quiz or a visual). `<Followups items={[…]}/>` is lifted out of the program into `followupPrompts` chips |
 | Practice | n/a | `generate-knowledge-cards`, practice types mcq/cloze/binary_choice/flashcard, FSRS v5 via ts-fsrs, pack opening (§1.6, §5) | `/api/practice/extract` uses Claude structured output (`json_schema`, effort low) with a deterministic fallback. FSRS scheduling uses wondering-genui's `fsrs.js` port with shipped defaults. Deck and review logs live in localStorage |
-| Gamification | n/a | XP events, streaks with local-date keys (§7) | `public/deck.js`: XP for lessons, quiz answers, reviews and collected cards, plus a streak that counts consecutive local days |
+| Gamification | n/a | XP events, streaks with local-date keys (§7) | `public/deck.js`: no XP. Finished lessons, quizzes, explanations and reviews count as the day's activity (the heatmap), plus a streak that counts consecutive local days |
 | Agent with tool cards | Server-resolved catalog components: `componentResults[__resolutionId]` (§3.4, §8.2); widget server actions (§3.6) | `teacher-chat`: SSE `tool_start`/`tool_result`, cards `plan`/`approval`/`quiz`/`memory`, `resolve_action`/`undo_action` (wondering §2.3) | `/api/teacher/stream`: Claude's tool calls run on the server; each result is a resolved `<TeacherCard>` spliced into the streamed DIL, with `reasoning` records as the tool status line. Card buttons → `/api/widget_action` (`teacher_accept`/`teacher_dismiss`/`teacher_undo`/`teacher_open_item`) |
 | Memory | Memory cites | `learner_memory_items`, `extract-learner-memory`, `forget_me`, `noMemory` (wondering §5) | `server/memory.js` (JSON file), Teacher `remember`/`forget`, post-lesson extraction, "About this learner" system block after the cache breakpoint, `#/memory` screen and a "Use memory" switch (`memoryEnabled`) |
 
@@ -140,7 +140,7 @@ Next serves `public/` and, through read-only route handlers, `genui-lab/chatgpt-
 | Component | Notes |
 |---|---|
 | `KeyTerm` | Inline; tap to show the definition and an "Explain more" action |
-| `Callout` | The "Wonder lens" aside; tones insight/tip/info/warning/example; takes markdown children |
+| `Callout` | The "Mull it over" aside; tones insight/tip/info/warning/example; takes markdown children |
 | `LessonStepper` | Step-by-step walkthrough |
 | `Reveal` | Predict, then check |
 | `CompareToggle` | Segmented left/right view, plus side-by-side on desktop |
@@ -178,7 +178,7 @@ Formulas are typeset with [KaTeX](https://katex.org) (npm `katex`, served read-o
 
 What happens in one turn:
 
-1. The client sends the message, a text history (cards as `[Card: …]` notes), a **progress snapshot** assembled from localStorage (`public/teacher-core.js`: deck size, due cards, mastered, streak, XP, recent lessons with quiz scores, courses, saved plans) and `memoryEnabled`.
+1. The client sends the message, a text history (cards as `[Card: …]` notes), a **progress snapshot** assembled from localStorage (`public/teacher-core.js`: deck size, due cards, mastered, streak, recent lessons with quiz scores, courses, saved plans) and `memoryEnabled`.
 2. Claude streams text and calls tools. When a `tool_use` block starts, a `reasoning` record shows the tool status ("Checking your progress…", "Drafting a study plan…"). This is Wondering's `tool_start`.
 3. The server validates and runs the tool. Results that need UI get a resolution id (`tc-<uuid>`) and are stored as `{status:"resolved", state}` in the turn's `appData.opGenui.componentResults` and in a server-side card store. Then `<TeacherCard kind="…" __resolutionId="…"/>` is spliced into the markdown at that point. The compiler hands that id to the stock chatgpt-dil compiler instead of the default salted id. `quiz_me` splices a normal `<Quiz>`, graded by the existing `quiz_answer` action; `get_progress` returns JSON only.
 4. Card buttons dispatch widget actions to `/api/widget_action`. The response has the card's new `componentResults` entry plus `clientActions` for the host:
@@ -200,10 +200,10 @@ The Teacher persona (`TEACHER_SYSTEM_PROMPT`) uses Wondering's dial values fixed
 - **Store.** `server/memory.js` keeps `genui-lab/wonder/data/memory.json` (git-ignored; `WONDER_MEMORY_FILE` overrides it). Items are `{id, fact, kind: goal|preference|struggle|background, source: teacher|lesson|user, createdAt}`. Writes are atomic (temp file + rename). The store holds at most 100 items (oldest dropped) and each fact at most 200 characters. Near-duplicates are not stored twice.
 - **Writes** come from three places:
   - The Teacher's `remember`/`forget`, with an Undo chip.
-  - Post-lesson extraction. "Finish lesson" sends the quiz results and the learner's tutor questions to `/api/memory/extract`: a structured-output call at effort low, giving 0–3 facts that are de-duplicated against memory. A toast says what Wonder will remember.
+  - Post-lesson extraction. "Finish lesson" sends the quiz results and the learner's tutor questions to `/api/memory/extract`: a structured-output call at effort low, giving 0–3 facts that are de-duplicated against memory. A toast says what Mull will remember.
   - The Memory screen.
 - **Reads.** A compact "About this learner" block with the newest 15 items goes into the lesson, tutor and Teacher system prompts as a system block after the cache breakpoint. The Teacher's copy includes item ids so it can `forget` them.
-- **UI.** The You screen (`#/you`, also `#/memory`) lists items by kind, with add, delete and "Forget everything", plus the persisted **Use memory** switch that sets `memoryEnabled` on every request.
+- **UI.** None on the You screen any more. `public/memory-screen.js` (items by kind, add, delete, "Forget everything", the **Use memory** switch) is kept but not shown; the Teacher's context panel still lists what it remembers.
 
 ## Learner model (Phase 6)
 
@@ -244,7 +244,7 @@ Memory holds free-text facts. The learner model tracks what the learner actually
   - It checks answer keys, facts, arithmetic and cited claims (shown the cited text), plus level fit and widget sense.
   - It also checks the words inside Diagrams and Figures. The props are long JSON, so after the lesson the message lists, by page, each valid Diagram's title, labels, part texts, step labels and texts, and caption, and each Figure's query, caption, alt, question and answer (`mediaDigest`). A false claim there is a `factual` issue. A mislabeled part, steps out of order, or a Figure question its answer does not answer is a `widget` issue. The critic cannot see Figure images; that is the vision check's job.
   - It returns issues and `quizFixes`. A fix is applied to the Quiz props only if the rewritten Quiz still validates, and the lesson is then updated with one `replace` record.
-  - A `quality-report` control record carries the lint result, the critic verdict, the issues and the fixes. The lesson's end panel shows it as a collapsible note.
+  - A `quality-report` control record carries the lint result, the critic verdict, the issues and the fixes. The client does not show or keep it; when the critic corrected quiz answers it says so in a toast ("1 quiz answer corrected.").
   - Demo mode runs the lint only. `verify: false` on the request skips both checks.
 - **Eval harness (`npm run eval`).**
   - Generates a lesson per topic in `evals/topics.json` through an in-process server, so it runs the real prompts, compile, lint and critic. It uses an empty in-memory learner memory, and web search is off unless `--web` is passed.
@@ -266,12 +266,12 @@ npm run eval -- --tag media
 
 ## Free response and "Guide me" (Phase 8)
 
-- **`text-input` primitive.** A Wonder extension to the chatgpt-dil host, rendered as a `textarea`. Typing reaches the program through `onChange`. The host never overwrites the value while the field has focus.
+- **`text-input` primitive.** A Mull extension to the chatgpt-dil host, rendered as a `textarea`. Typing reaches the program through `onChange`. The host never overwrites the value while the field has focus.
 - **`<ExplainBack prompt concept rubric={[…]} sampleAnswer/>`.** The learner explains the idea in their own words and taps "Check my answer", which sends `explain_grade` to `/api/widget_action`. `server/grader.js` grades the answer:
   - **Claude mode:** one structured call at effort low, with the answer fenced as data. It returns a 0–3 score, each rubric criterion met or missed with quoted evidence, feedback, the misconception and a follow-up question.
   - **Demo mode,** or when the call fails: a keyword grader.
 
-  The widget then shows the score, criteria, feedback, "Show a model answer", "Ask the tutor" and "Try again". The first attempt awards XP (5 per point) and becomes mastery evidence. Lessons include one ExplainBack on their last content page.
+  The widget then shows the score, criteria, feedback, "Show a model answer", "Ask the tutor" and "Try again". The first attempt counts toward the day's activity and becomes mastery evidence. Lessons include one ExplainBack on their last content page.
 - **Review.** Extraction adds one `explain` practice item per lesson. The review screen grades it through the same grader (`practice_grade`), and the score maps to an FSRS rating (0 Again … 3 Easy).
 - **"Guide me."** A switch in the tutor header (saved as `settings.tutorMode`) sends `mode: "socratic"`. The tutor then asks one guiding question at a time and gives the answer only after two real tries or when asked outright. The rules (`SOCRATIC_TUTOR_MODE`) go after the cache breakpoint, so the cached tutor prompt is the same in both modes. Demo replies follow the same pattern.
 
@@ -324,8 +324,8 @@ node --test genui-lab/wonder/test/index.js      # no network (Figure and Video l
   - `/vendor/katex/` serves css, js and fonts (200) and refuses traversal and other files (404).
 - **`view-state.test.js`** covers widget state persistence: a snapshot restores every persisted widget on the first render (also via `setStateSnapshot`), one debounced message per burst of clicks (mock timers), live state and the snapshot survive streamed recompiles, unknown ids/keys and invalid values are ignored, a revision that rewrites or removes a widget drops its state while unchanged widgets keep theirs, reset, server-graded Quiz state wins over local progress, Cite/KeyTerm stay ephemeral, the compound-interest FunctionGraph slider, Stepper and Flashcards round-trip (desktop and 390 px), size caps and eviction, and store persistence with corrupted snapshots.
 - **`web.test.js`** drives the Fetch-API adapter used by the Next route handlers: status and 404s, a demo lesson as NDJSON, memory and course plans, a live steer reaching the in-flight stream, client-disconnect aborts, and the read-only static mounts.
-- **`progress.test.js`** covers the Today and You helpers: the daily goal, the week strip, the activity grid, topic suggestions from interests, the Up next order and the palette matcher.
-- **`deck.test.js`** covers practice grading, FSRS deck scheduling (learning steps, graduation, growing intervals, lapses), XP/streak rules, and localStorage persistence when storage is blocked or corrupted.
+- **`progress.test.js`** covers the Today and You helpers: studied today, the week strip, the activity grid, topic suggestions from interests, the Up next order and the palette matcher.
+- **`deck.test.js`** covers practice grading, FSRS deck scheduling (learning steps, graduation, growing intervals, lapses), activity/streak rules, and localStorage persistence when storage is blocked or corrupted.
 
 ## Files
 
@@ -359,7 +359,7 @@ test/*.test.js, test/index.js, test/helpers.js
 
 ## Widget state persistence
 
-Interactive widgets keep their state across reloads and when a lesson is reopened, like ChatGPT's `DIL.useState(initial, {key, widgetId})` + `DILStatePersistence` (chatgpt-findings §3.1–3.2). chatgpt-dil's runtime ignores those options and has no snapshot API, so the store lives in Wonder's runtime wrapper (`public/learning-runtime.js`, `public/view-state.js`) and chatgpt-dil is unchanged.
+Interactive widgets keep their state across reloads and when a lesson is reopened, like ChatGPT's `DIL.useState(initial, {key, widgetId})` + `DILStatePersistence` (chatgpt-findings §3.1–3.2). chatgpt-dil's runtime ignores those options and has no snapshot API, so the store lives in Mull's runtime wrapper (`public/learning-runtime.js`, `public/view-state.js`) and chatgpt-dil is unchanged.
 
 | Widget | Saved | Not saved |
 |---|---|---|
@@ -390,20 +390,20 @@ Interactive widgets keep their state across reloads and when a lesson is reopene
 - **Server-side widget state is in memory** (quiz answers per resolution id). The client persists `componentResults` with each lesson, so reloads still restore it, but a server restart forgets its copy.
 - **One sandbox worker per surface**: the lesson plus each tutor reply. Very long tutor threads therefore start many workers. They are terminated when you leave the lesson.
 - **Tutor replies are not lesson-specific in demo mode.** They are templates that use the lesson's KeyTerms and Quiz. Any other topic streams one of the three sample lessons.
-- **Accounts are optional.** Without Neon Auth and a database, courses, lessons, the deck and XP live in this browser's localStorage, and the app falls back to in-memory storage when localStorage is blocked. With them, see [Accounts, sync, daily limits and plans](#accounts-sync-daily-limits-and-plans).
+- **Accounts are optional.** Without Neon Auth and a database, courses, lessons, the deck and activity live in this browser's localStorage, and the app falls back to in-memory storage when localStorage is blocked. With them, see [Accounts, sync, daily limits and plans](#accounts-sync-daily-limits-and-plans).
 - **Multi-tab is safe.**
   - The cross-tab lock keeps two tabs from streaming the same lesson.
   - `store.js` writes with a three-way merge per lesson, thread, course and plan, and idle tabs pick up other tabs' saves. So one tab no longer wipes another tab's changes.
   - Without Web Locks, the lease fallback is still exclusive. Acquiring broadcasts a claim, writes the lease, waits a 120 ms settle window and re-checks, and the lowest claim ticket wins ties. `test/lock-race.test.js` races two tabs 100 times; exactly one wins every time.
 - **Teacher history is text.** Earlier turns go back to Claude as markdown with `[Card: …]` notes, not as the original tool_use/tool_result blocks. Card state on the server is in memory, but cards carry their state, so they survive restarts.
 - **Without accounts, memory is one file for one local learner.** It is not encrypted; "Forget everything" deletes it. With accounts, each user's memory and material live in their own rows of the database.
-- **Inherited from chatgpt-dil:** a best-effort sandbox lockdown and no SVG `<text>` in the captured client. Flowchart and ConceptMap are therefore laid out with boxes rather than drawn edges. Wonder's host adds an `svg-text` primitive for `Diagram` labels.
+- **Inherited from chatgpt-dil:** a best-effort sandbox lockdown and no SVG `<text>` in the captured client. Flowchart and ConceptMap are therefore laid out with boxes rather than drawn edges. Mull's host adds an `svg-text` primitive for `Diagram` labels.
 - **Figure needs the network and Wikimedia.** The server queries Wikimedia Commons, and the learner's browser loads the image from `upload.wikimedia.org` / `thumb.wikimedia.org` (no referrer). Offline, or with `WONDER_FIGURES=off`, Figures are left out and the lesson reads without them. Claude never sees the picture when it writes, so captions are written to be true of any good image of the subject; the vision check then drops an image that does not fit.
 - **Video needs a YouTube key, the network and YouTube.** Without `YOUTUBE_API_KEY`, Claude-mode lessons leave Videos out; demo mode plays only the demo lesson's fixture clip. Each new lookup costs 101 of the key's 10,000 free daily quota units (about 100 new clips a day; repeats are cached). Segments come from a video's chapters, not its captions (the Data API lets only a video's owner download captions), so a video without matching chapters plays from its start, capped at 3 minutes. Pausing at the clip's end uses the player's `postMessage` events (the protocol YouTube's IFrame API uses, not separately documented); if they never arrive, "I watched it" opens the questions. Saved lessons keep the clip's title and channel; YouTube's API policies limit how long such data may be stored, which a production deployment would need to handle.
 
 ## Credentials
 
-Next.js reads `ANTHROPIC_API_KEY` from `genui-lab/wonder/.env` (or `.env.local`). If that isn't set, it falls back to `~/.config/wonder/.env`, which lives outside the repo. `YOUTUBE_API_KEY` (a YouTube Data API v3 key, for `<Video/>`) is read from the same places; values already in the environment win. The key goes to `www.googleapis.com` in the `X-Goog-Api-Key` header, never in a URL or a log line. Set `ANTHROPIC_WORKSPACE_ID` as well when your key is not scoped to a workspace (for example `sk-ant-usr-…` keys). Wonder then sends it as the `anthropic-workspace-id` header.
+Next.js reads `ANTHROPIC_API_KEY` from `genui-lab/wonder/.env` (or `.env.local`). If that isn't set, it falls back to `~/.config/wonder/.env`, which lives outside the repo. `YOUTUBE_API_KEY` (a YouTube Data API v3 key, for `<Video/>`) is read from the same places; values already in the environment win. The key goes to `www.googleapis.com` in the `X-Goog-Api-Key` header, never in a URL or a log line. Set `ANTHROPIC_WORKSPACE_ID` as well when your key is not scoped to a workspace (for example `sk-ant-usr-…` keys). Mull then sends it as the `anthropic-workspace-id` header.
 
 Verified against the live API (`claude-opus-5-5`), using an `sk-ant-usr-…` key with a workspace ID:
 - **Lesson:** a full lesson streamed in about 36 s across 543 content revisions. Every component validated: Quiz, LessonStepper, ConceptMap, BarChart, Reveal, Callout and KeyTerm.
@@ -439,7 +439,7 @@ Lessons can search the web, and Claude's citations show up as ChatGPT-style numb
 
   The turn writer runs this on every compiled revision (`createTurnWriter({appDataFor})`), so a pill is resolved as soon as it appears. `<Sources/>` is appended when anything was cited.
 - **Catalog** (`public/catalog-extras.js`, injected into the sandbox after the learning prelude):
-  - **`Cite`** is an inline numbered pill. Pressing it opens a popover card with the number, domain, title and snippet, plus "Open source" (an `open_url` client action). It overrides chatgpt-dil's stock `Cite` pill for Wonder programs only: the stock one is a parameter of the program Function, so the prelude reassigns it, and chatgpt-dil is unchanged.
+  - **`Cite`** is an inline numbered pill. Pressing it opens a popover card with the number, domain, title and snippet, plus "Open source" (an `open_url` client action). It overrides chatgpt-dil's stock `Cite` pill for Mull programs only: the stock one is a parameter of the program Function, so the prelude reassigns it, and chatgpt-dil is unchanged.
   - **`Sources`** is a numbered, pressable list with domains.
   - A Cite whose refs don't resolve renders nothing.
 - **Prompt** (`server/prompts-extra.js`). Claude is told to search for real-world topics (1-3 focused searches), to cite in its own prose, and never to write Cite tags, `[1]` or URLs itself.
@@ -473,7 +473,7 @@ Lessons can search the web, and Claude's citations show up as ChatGPT-style numb
 
 ### Continuing without the live stream: resume, steer after a reload, revise (`continueFrom`)
 
-Before this, steering needed the original NDJSON connection: after a reload there was nothing to steer, and an interrupted lesson stayed partial. Now `POST /api/lesson/stream` takes an optional `continueFrom` (ChatGPT has `/conversation/resume` and resume tokens, §1.4; Wonder rebuilds the turn from the client's persisted lesson instead, so the server keeps no state):
+Before this, steering needed the original NDJSON connection: after a reload there was nothing to steer, and an interrupted lesson stayed partial. Now `POST /api/lesson/stream` takes an optional `continueFrom` (ChatGPT has `/conversation/resume` and resume tokens, §1.4; Mull rebuilds the turn from the client's persisted lesson instead, so the server keeps no state):
 
 | Field | Meaning |
 |---|---|
@@ -616,7 +616,7 @@ Known gaps:
 
 ## Phase 9: did each lesson work?
 
-A lesson's quiz says what the learner knew a minute after reading it. Wonder also measures what they still know days later, from the review deck it already keeps. Everything is in `public/outcomes-core.js`, which is pure and shared with the server.
+A lesson's quiz says what the learner knew a minute after reading it. Mull also measures what they still know days later, from the review deck it already keeps. Everything is in `public/outcomes-core.js`, which is pure and shared with the server.
 
 - **Delayed recall.** Each review of a lesson's card that comes at least a day after the previous one is a recall test. Hard counts as recalled. Results are grouped into 1–3, 4–13 and 14+ day gaps.
   - A result is shown only at *n* ≥ 3.
@@ -631,10 +631,10 @@ A lesson's quiz says what the learner knew a minute after reading it. Wonder als
   - A finding needs ≥ 2 lessons and ≥ 8 delayed reviews on each side, and a 10-point gap.
   - Findings go into the lesson request as `learnerInsights`. The server bounds them and places them after the cache breakpoint, and leaves them out when memory is off.
 - **Where outcomes show up.**
-  - "How well it stuck" next to the quality note at the end of a finished lesson.
+  - "How well it stuck" at the end of a finished lesson.
   - A "Refresh" row in Today's Up next for the worst-fading lesson, after Phase 6's "Strengthen".
   - "92% recall" in reading rows (Today's Recent, the Library).
-  - "What works for you" on You, next to Phase 6's "What you know", with the same layout. Its "Fading lessons" group has **Refresh** (`#/review/lesson/<id>`: that lesson's cards, weakest first) and **Relearn** (the same topic in the best-measured other style).
+  - "What works for you" (`public/insights-panel.js`, no longer shown on You), with the same layout as Phase 6's "What you know". Its "Fading lessons" group has **Refresh** (`#/review/lesson/<id>`: that lesson's cards, weakest first) and **Relearn** (the same topic in the best-measured other style).
   - The Teacher's `get_progress`, which includes per-lesson recall, fading lessons with their slipping cards, and findings.
 
 ## Phase 10: a proactive Teacher, and lessons from your own material
@@ -649,10 +649,10 @@ A lesson's quiz says what the learner knew a minute after reading it. Wonder als
   - Today's study-plan panel marks today's items and late ones, and shows pace, the countdown and "Add to calendar".
 - **The Teacher speaks first.** A check-in turn (`opener: true`) has the Teacher read progress and propose the best next step as a card. The server substitutes its own fixed `TEACHER_OPENER` text. It runs from "Ask your Teacher" on Up next, and once a day on opening the Teacher (a setting on You).
 - **Reminders.**
-  - A daily notification at a chosen time while a Wonder tab is open, if the goal isn't met.
-  - "Add to calendar" exports the plan as `.ics` (`public/ics.js`, RFC 5545 escaping and folding) with an alarm per study day and the deadline, so reminders work with Wonder closed.
+  - A daily notification at a chosen time while a Mull tab is open, if the goal isn't met.
+  - "Add to calendar" exports the plan as `.ics` (`public/ics.js`, RFC 5545 escaping and folding) with an alarm per study day and the deadline, so reminders work with Mull closed.
 - **Your own material.**
-  - In Today's command bar, choose "Material": paste notes or attach .txt/.md/.pdf, then Begin (a lesson) or Make a course. `server/materials.js` stores it, and "Your material" on You lists it.
+  - In Today's command bar, choose "Material": paste notes or attach .txt/.md/.pdf, then Begin (a lesson) or Make a course. `server/materials.js` stores it (You no longer lists it).
   - Both servers accept it: `bodyLimit()` raises the request limit for `/api/materials` in the node:http harness and the Next.js Fetch adapter, and a `t.send()` transport method serves the original file.
   - Claude gets it as a cached `document` block with citations on.
   - `char_location` and `page_location` citations are mapped onto the same source registry as web results. They become Cite pills and Sources ("Your material", "…, p. 4") that open the original.
@@ -759,7 +759,7 @@ Three catalog components put pictures or video next to the explanation.
   - **Ranking.** Search rank, plus a matching chapter, a whole short video, captions, English audio and title words matching `shows`. A long video that would only play its start ranks lower.
   - **Output.** `{found, videoId, start, end, duration, title, channel, chapter?, pageUrl}`, with the title and channel as plain text.
 - **Delivery.** A per-stream resolver like Figure's (`server/media-resolver.js`), combined with it in `startNdjson` so every stream has both: pending, re-sent mid-stream, settled before the final record ("Finding a video…", or "Finding images and videos…"), cached per server with misses expiring, cancelled with the stream, and saved with the lesson.
-- **Renderer.** The host's `youtube` primitive: `youtube` with a `videoId` prop is in ChatGPT's DIL element list (findings §3.3). The chatgpt-dil host renders it as an iframe whose URL the host builds itself from a validated 11-character id, always on `https://www.youtube-nocookie.com/embed/…`. The frame has `sandbox="allow-scripts allow-same-origin allow-presentation allow-popups allow-popups-to-escape-sandbox"`, no top navigation or forms, and a `strict-origin-when-cross-origin` referrer (the player will not start without one). A frame exists only when the embedder's `allowEmbeds` policy allows that id. In Wonder, `dil-surface.js` allows only ids the server resolved for a Video on this surface (`public/video-hosts.js`). Anything else, including a raw `<youtube videoId>` the model wrote, keeps a placeholder. The host also no longer re-inserts an element that is already in place, which would reload a playing frame.
+- **Renderer.** The host's `youtube` primitive: `youtube` with a `videoId` prop is in ChatGPT's DIL element list (findings §3.3). The chatgpt-dil host renders it as an iframe whose URL the host builds itself from a validated 11-character id, always on `https://www.youtube-nocookie.com/embed/…`. The frame has `sandbox="allow-scripts allow-same-origin allow-presentation allow-popups allow-popups-to-escape-sandbox"`, no top navigation or forms, and a `strict-origin-when-cross-origin` referrer (the player will not start without one). A frame exists only when the embedder's `allowEmbeds` policy allows that id. In Mull, `dil-surface.js` allows only ids the server resolved for a Video on this surface (`public/video-hosts.js`). Anything else, including a raw `<youtube videoId>` the model wrote, keeps a placeholder. The host also no longer re-inserts an element that is already in place, which would reload a playing frame.
 - **Pause and answer.** The host asks the player to report its state (`enablejsapi=1`, the IFrame API's `listening` handshake). It accepts messages only from `https://www.youtube-nocookie.com` and only from that frame's window. When playback reaches a cue (the clip's end, 0.35 s early, before YouTube's end screen), the host pauses the player and calls the component's `onCue` in the sandbox. The worker gets no per-tick time updates.
 - **Sandbox component** (`public/catalog-media.js`): a "Finding a video…" frame while pending; the "Predict first" card (or Skip) before the player; the caption; `Video: title · channel · YouTube · chapter, 1:05–3:10` with a YouTube button; then "Your prediction: … Watch to find out" with an "I watched it" button, which also covers the player's events never arriving. When the clip ends: the prediction's verdict and the after questions one by one, each with its explanation, then a score. The prediction, answers and "watched" persist with `useSaved`, so a reloaded lesson does not pause again. Not found renders nothing.
 - **Settings.** `YOUTUBE_API_KEY` enables live search. Without it, demo mode uses `createDemoVideoLookup()` (the demo lesson's clip, picked by hand from a YouTube search for the demo query and kept in `DEMO_VIDEOS`), and Claude mode leaves Videos out. `WONDER_VIDEOS=off`, or `videoLookup: null` in `createWonderCore`, turns videos off; the tests stub the lookup. `/api/status` reports `videos`.
@@ -843,7 +843,7 @@ Three catalog components put pictures or video next to the explanation.
 
 ## Accounts, sync, daily limits and plans
 
-Accounts are off unless **both** Neon Auth and a database are set. Without them Wonder runs exactly as before: browser-only, one local learner.
+Accounts are off unless **both** Neon Auth and a database are set. Without them Mull runs exactly as before: browser-only, one local learner.
 
 **Settings.** These go in `.env`, `.env.local` or `~/.config/wonder/.env`:
 - `NEON_AUTH_BASE_URL`, the Neon Auth URL of the database branch. Adding Neon from the Vercel Marketplace provisions Neon Auth with the database; `vercel env pull` fetches it.
@@ -882,7 +882,7 @@ Accounts are off unless **both** Neon Auth and a database are set. Without them 
 - **Retries.** A dropped stream's automatic retries (same `streamKey`/`turnId`) are free twice within 10 minutes; reusing a key beyond that is charged.
 - **Database errors** fail open and are logged, so a hiccup never locks everyone out.
 - **Where caps don't apply.** Demo mode has no caps, since it costs nothing. Without accounts there is neither sign-in nor caps.
-- **You page.** The signed-in account card shows the plan and today's use.
+- **You page.** The signed-in account card shows the plan; today's use comes back from `GET /api/account` (`usage`) but the app does not show it.
 
 **Plans** (`server/plans.js`). Every signed-in user is on **Free** unless they are on **Pro**. The plan only decides which daily caps apply.
 - **Who is Pro.** A user whose plan record (`wonder_plans`, one row per user) says `pro` with status `active`, `trialing` or `past_due`, until 3 days after its period end (so a late renewal never drops a payer to Free). Or a user id listed in `WONDER_PRO_USERS`, which comps Pro without a record.
@@ -893,7 +893,8 @@ Accounts are off unless **both** Neon Auth and a database are set. Without them 
 **Tests.**
 - `test/usage.test.js`: caps per user, kind and day; free retries and their bounds; failing open; 401 and 429 over HTTP; demo mode and accounts off; non-retryable errors in the browser.
 - `test/plans.test.js`: who is Pro (status, period and grace, comped users), record validation, Pro caps and their overrides, and Pro vs Free over HTTP with the plan on `/api/account`.
-- `test/landing.test.js`: who the home page sends to `/welcome`, with account sync on and off.
+- `test/landing.test.js`: who the home page sends to `/welcome`, with account sync on and off, and the signed-out deep link kept for after sign-in.
+- `test/start.test.js`: where `#/start[/<topic>]` goes (sign-in, onboarding, the lesson, home).
 - `test/sync*.test.js`: sync, authorization and statement scoping.
 - **Live checks.** Sign-in with Google, sync of a generated lesson to Neon, and the Postgres cap under 4 concurrent requests (exactly the cap got through).
 

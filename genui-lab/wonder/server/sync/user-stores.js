@@ -36,7 +36,7 @@ export function signedOutMemory() {
 }
 
 export function signedOutMaterials() {
-  return { list: async () => [], meta: async () => null, add: async () => ({ ok: false, error: 'Sign in to add material.' }), read: async () => null, remove: async () => null };
+  return { list: async () => [], meta: async () => null, add: async () => ({ ok: false, error: 'Sign in to add material.' }), save: async () => ({ ok: false, error: 'Sign in to add material.' }), read: async () => null, readText: async () => null, setTextFallback: async () => null, remove: async () => null };
 }
 
 /** Uploaded material for one user. */
@@ -46,10 +46,9 @@ export function userMaterials(sync, userId) {
   const store = {
     list: async () => (await load()).map((m) => ({ ...m })),
     meta: async (id) => (MATERIAL_ID_RE.test(String(id)) ? (await load()).find((m) => m.id === id) || null : null),
-    async add(input) {
-      const prepared = prepareMaterial(input);
-      if (!prepared.ok) return prepared;
-      const { meta, data } = prepared;
+    async add(input) { const prepared = prepareMaterial(input); return prepared.ok ? store.save(prepared) : prepared; },
+    /** Store a material prepareMaterial() accepted. */
+    async save({ meta, data }) {
       const before = await load(); // read the index before this item is stored
       const bytes = Buffer.isBuffer(data) ? data : Buffer.from(data, 'utf8');
       await sync.db.putFile(userId, meta.id, { bytes, contentType: meta.kind === 'pdf' ? 'application/pdf' : 'text/plain; charset=utf-8' });
@@ -57,6 +56,21 @@ export function userMaterials(sync, userId) {
       index = [meta, ...before.filter((m) => m.id !== meta.id)];
       while (index.length > MAX_MATERIALS) await store.remove(index[index.length - 1].id);
       return { ok: true, item: { ...meta } };
+    },
+    /** Keep a PDF's text layer to teach from instead (meta.textFallback: {chars, pages}). */
+    async setTextFallback(id, text, info) {
+      const meta = await store.meta(id);
+      if (!meta) return null;
+      await sync.db.putFile(userId, `${id}.text`, { bytes: Buffer.from(text, 'utf8'), contentType: 'text/plain; charset=utf-8' });
+      const next = { ...meta, textFallback: info };
+      await sync.writeServer(userId, [{ kind: 'material', id, data: next }]);
+      index = (await load()).map((m) => (m.id === id ? next : m));
+      return { ...next };
+    },
+    async readText(id) {
+      if (!(await store.meta(id))?.textFallback) return null;
+      const f = await sync.db.getFile(userId, `${id}.text`);
+      return f ? Buffer.from(f.bytes).toString('utf8') : null;
     },
     /** A string for text, a Buffer for a PDF; null when unknown or not this user's. */
     async read(id) {
@@ -71,9 +85,20 @@ export function userMaterials(sync, userId) {
       if (!meta) return null;
       await sync.writeServer(userId, [{ kind: 'material', id, deleted: true }]);
       await sync.db.deleteFile(userId, id);
+      if (meta.textFallback) await sync.db.deleteFile(userId, `${id}.text`);
       index = (await load()).filter((m) => m.id !== id);
       return meta;
     },
   };
   return store;
+}
+
+/** One user's upload parts (server/materials.js PART_BYTES), as files: any instance can read them. */
+export function userUploadParts(sync, userId) {
+  return {
+    put: (upload, index, bytes) => sync.db.putFile(userId, `${upload}.${index}`, { bytes, contentType: 'application/octet-stream' }),
+    get: async (upload, index) => { const f = await sync.db.getFile(userId, `${upload}.${index}`); return f ? Buffer.from(f.bytes) : null; },
+    remove: (upload, index) => sync.db.deleteFile(userId, `${upload}.${index}`),
+    list: () => sync.db.listFiles(userId, 'up-'),
+  };
 }

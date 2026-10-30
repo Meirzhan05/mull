@@ -15,6 +15,23 @@ export async function neonAuth(env = process.env) {
   return instance;
 }
 
+/**
+ * Delete the signed-in Neon Auth user (and with it every session). False when there is none or
+ * Neon Auth refuses: delete-user turned off, or a session older than its fresh age.
+ */
+export async function deleteRequestUser(env = process.env) {
+  try {
+    const auth = await neonAuth(env);
+    if (!auth) return false;
+    const { error } = await auth.deleteUser({});
+    if (error) console.warn(`[wonder] Neon Auth did not delete the user: ${error.message || error.status}`);
+    return !error;
+  } catch (e) {
+    console.warn(`[wonder] could not delete the user: ${e.message}`);
+    return false;
+  }
+}
+
 /** The signed-in user's id, or null. Never throws: an auth failure is a signed-out request. */
 export async function requestUserId(env = process.env) {
   try {

@@ -1,15 +1,14 @@
-// First-run welcome, a full-screen flow in three steps that ends in the learner's first lesson:
+// First-run welcome, a full-screen flow in two steps that ends in the learner's first lesson:
 // 1. what they're curious about (interests, with a live preview of the topics they unlock),
-// 2. their pace (the level lessons start at and a daily goal),
-// 3. a first lesson, picked from those topics or typed in.
+// 2. a first lesson, picked from those topics or typed in.
 // Skippable at any point (Esc or Skip keeps what was chosen so far); the choices live in
-// store.settings: name, interests, level, dailyGoal. Only what the learner actually set is
+// store.settings: name, interests. Only what the learner actually set is
 // written, so settings that arrive meanwhile (account sync on a new device) are not reset.
 
-import { el, icon } from './ui.js';
-import { INTERESTS, DAILY_GOALS, LEVELS, suggestedTopics, topicInterest, goalOf, levelOf } from './progress-core.js';
+import { el, icon, brandMark } from './ui.js';
+import { INTERESTS, suggestedTopics, topicInterest, levelOf } from './progress-core.js';
 
-const STEPS = ['Interests', 'Pace', 'First lesson'];
+const STEPS = ['Interests', 'First lesson'];
 
 export function needsOnboarding(data) {
   return !data.settings?.onboarded && !Object.keys(data.lessons || {}).length && !(data.courses || []).length;
@@ -28,12 +27,15 @@ export function interestGrid(selected, onToggle) {
 }
 
 /**
- * @param {{store: object, onDone?: () => void, startLesson?: (topic: string, level: string) => void}} opts
- *   startLesson opens the first lesson; without it the last step only finishes.
+ * @param {{store: object, onDone?: () => void, startLesson?: (topic: string, level: string) => void,
+ *   firstTopic?: string, accountName?: Promise<string> | null}} opts
+ *   startLesson opens the first lesson; without it the last step only finishes. firstTopic (the
+ *   topic brought from the landing page) leads the last step, ready to start. accountName fills
+ *   an untouched, empty name field with the signed-in account's first name.
  */
-export function showOnboarding({ store, onDone, startLesson }) {
+export function showOnboarding({ store, onDone, startLesson, firstTopic = '', accountName = null }) {
   const settings = store.data?.settings || {};
-  const pick = { name: String(settings.name || '').trim(), interests: new Set(settings.interests || []), level: levelOf(settings), dailyGoal: goalOf(settings) };
+  const pick = { name: String(settings.name || '').trim(), interests: new Set(settings.interests || []), level: levelOf(settings) };
   const touched = new Set(); // the picks the learner made; only these are saved
   let step = 0;
   let back = false;
@@ -41,7 +43,7 @@ export function showOnboarding({ store, onDone, startLesson }) {
   const progress = el('ol', { class: 'onboard-progress', 'aria-label': 'Steps' });
   const root = el('div', { class: 'onboard', role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': 'onboard-title' },
     el('header', { class: 'onboard-top' },
-      el('p', { class: 'brand', 'aria-hidden': 'true' }, el('span', { class: 'brand-name' }, 'Wonder'), el('span', { class: 'brand-dot' }, '.')),
+      el('p', { class: 'brand', 'aria-hidden': 'true' }, brandMark(), el('span', { class: 'brand-name' }, 'Mull')),
       progress,
       el('button', { class: 'btn btn-ghost btn-sm onboard-skip', type: 'button', onclick: () => finish() }, 'Skip')),
     body);
@@ -56,8 +58,6 @@ export function showOnboarding({ store, onDone, startLesson }) {
   function finish(topic) {
     const patch = { onboarded: true };
     if (touched.has('interests')) patch.interests = [...pick.interests];
-    if (touched.has('level')) patch.level = pick.level;
-    if (touched.has('dailyGoal')) patch.dailyGoal = pick.dailyGoal;
     const name = pick.name.trim();
     store.update((d) => {
       if (touched.has('name') || (name && !d.settings?.name)) patch.name = name;
@@ -99,13 +99,15 @@ export function showOnboarding({ store, onDone, startLesson }) {
       touched.add('interests');
       drawPreview();
     });
-    // the account's first name (Clerk loads on its own time) fills an untouched, empty field
-    if (!pick.name && !touched.has('name')) pick.name = String(globalThis.Clerk?.user?.firstName || '').trim();
     const nameInput = el('input', { class: 'onboard-input', type: 'text', maxlength: '40', placeholder: 'Your first name', value: pick.name, autocomplete: 'given-name', 'aria-label': 'Your first name (optional)', oninput: (e) => { pick.name = e.target.value; touched.add('name'); } });
+    // the Google account's first name (it arrives on its own time) fills an untouched, empty field
+    accountName?.then?.((n) => {
+      if (n && !pick.name && !touched.has('name') && !nameInput.value) { pick.name = n; nameInput.value = n; }
+    }).catch(() => {});
     drawPreview();
     const form = el('form', { class: 'onboard-step', onsubmit: (e) => { e.preventDefault(); go(1); } },
       heading('What are you curious about?',
-        'Wonder writes a short lesson on anything you name, with working diagrams and a tutor beside the text. Pick a few subjects and it will suggest where to start.'),
+        'Mull writes a short lesson on anything you name, with working diagrams and a tutor beside the text. Pick a few subjects and it will suggest where to start.'),
       el('label', { class: 'onboard-field' }, el('span', null, 'What should we call you? ', el('span', { class: 'muted' }, '(optional)')), nameInput),
       el('div', { class: 'onboard-field' }, el('span', { class: 'onboard-field-row' }, el('span', null, 'Subjects'), count), grid),
       el('aside', { class: 'onboard-preview', 'aria-live': 'polite' }, el('p', { class: 'onboard-preview-title' }, icon('sparkles'), 'Your front page will suggest'), preview),
@@ -113,49 +115,25 @@ export function showOnboarding({ store, onDone, startLesson }) {
     return [form, pick.name ? grid.firstChild : nameInput];
   }
 
-  function paceStep() {
-    const choice = (label, items, current, onPick) => {
-      const group = el('div', { class: 'goal-options', role: 'radiogroup', 'aria-label': label }, ...items.map((it) => el('button', {
-        class: 'goal-option', type: 'button', role: 'radio', 'aria-checked': String(it.value === current), tabindex: it.value === current ? '0' : '-1',
-        onclick: (e) => { onPick(it.value); for (const b of group.children) { const on = b === e.currentTarget; b.setAttribute('aria-checked', String(on)); b.tabIndex = on ? 0 : -1; } },
-      }, el('span', { class: 'goal-option-text' }, el('strong', null, it.label), el('span', { class: 'muted small' }, it.hint)), it.tag ? el('b', null, it.tag) : null, el('i', { class: 'goal-option-dot', 'aria-hidden': 'true' }))));
-      // arrow keys move within a radio group, as they do in a native one
-      group.addEventListener('keydown', (e) => {
-        const dir = { ArrowDown: 1, ArrowRight: 1, ArrowUp: -1, ArrowLeft: -1 }[e.key];
-        if (!dir) return;
-        e.preventDefault();
-        const list = [...group.children];
-        const next = list[(list.indexOf(document.activeElement) + dir + list.length) % list.length];
-        next.click();
-        next.focus();
-      });
-      return group;
-    };
-    const level = choice('Level', LEVELS.map((l) => ({ value: l.id, label: l.label, hint: l.hint })), pick.level, (v) => { pick.level = v; touched.add('level'); });
-    const goal = choice('Daily goal', DAILY_GOALS.map((g) => ({ value: g.xp, label: g.label, hint: g.hint, tag: `${g.xp} XP` })), pick.dailyGoal, (v) => { pick.dailyGoal = v; touched.add('dailyGoal'); });
-    const node = el('div', { class: 'onboard-step' },
-      heading(`How should lessons feel${pick.name.trim() ? `, ${pick.name.trim()}` : ''}?`, 'Both are a starting point. You can change the level on any lesson, and the goal in You.'),
-      el('div', { class: 'onboard-pace' },
-        el('div', { class: 'onboard-field' }, el('span', null, 'Start lessons at'), level),
-        el('div', { class: 'onboard-field' }, el('span', null, 'Daily goal'), goal)),
-      actions(el('button', { class: 'btn btn-lg', type: 'button', onclick: () => go(2) }, 'Continue', icon('arrow-right'))));
-    return [node, level.querySelector('[aria-checked="true"]')];
-  }
-
   function firstLessonStep() {
-    const topics = suggestedTopics({ interests: [...pick.interests] }, {}, new Date(), 3);
+    // the topic brought from the landing page leads, ready to start; suggestions follow it
+    const mine = String(firstTopic || '').trim();
+    const suggested = suggestedTopics({ interests: [...pick.interests] }, {}, new Date(), 3).filter((t) => t.toLowerCase() !== mine.toLowerCase());
+    const topics = mine ? [mine, ...suggested.slice(0, 2)] : suggested;
     const input = el('input', { class: 'onboard-input', type: 'text', maxlength: '200', placeholder: 'Or ask about anything: how tides work, the Cold War…', 'aria-label': 'Your own topic' });
     const send = el('button', { class: 'onboard-ask-go', type: 'submit', 'aria-label': 'Begin this lesson' }, icon('arrow-right'));
     input.addEventListener('input', () => send.classList.toggle('ready', !!input.value.trim()));
     const node = el('div', { class: 'onboard-step' },
-      heading('Pick your first lesson', `About eight minutes, written for you as you read${pick.level === 'beginner' ? '' : ` at ${pick.level} level`}. The key ideas come back later as review cards, so they stick.`),
+      heading(mine ? 'Your first lesson' : 'Pick your first lesson', `About eight minutes, written for you as you read${pick.level === 'beginner' ? '' : ` at ${pick.level} level`}. The key ideas come back later as review cards, so they stick.`),
       el('div', { class: 'onboard-topics' }, ...topics.map((t, i) => el('button', { class: `onboard-topic${i === 0 ? ' featured' : ''}`, type: 'button', onclick: () => finish(t) },
-        el('span', { class: 'onboard-topic-tag' }, topicInterest(t) || 'Popular'),
+        el('span', { class: 'onboard-topic-tag' }, mine && i === 0 ? 'Your pick' : topicInterest(t) || 'Popular'),
         el('span', { class: 'onboard-topic-title' }, t),
+        mine && i === 0 ? el('span', { class: 'onboard-topic-go' }, 'Start this lesson') : null,
         icon('arrow-right')))),
+      mine ? el('p', { class: 'onboard-or muted' }, 'Or ask about something else:') : null,
       el('form', { class: 'onboard-ask', onsubmit: (e) => { e.preventDefault(); const t = input.value.trim(); if (t) finish(t); else input.focus(); } }, icon('search'), input, send),
       el('div', { class: 'onboard-actions' },
-        el('button', { class: 'btn btn-ghost', type: 'button', onclick: () => go(1) }, icon('arrow-left'), 'Back'),
+        el('button', { class: 'btn btn-ghost', type: 'button', onclick: () => go(0) }, icon('arrow-left'), 'Back'),
         el('button', { class: 'btn btn-secondary', type: 'button', onclick: () => finish() }, 'Look around first')));
     return [node, node.querySelector('.onboard-topic')];
   }
@@ -163,7 +141,7 @@ export function showOnboarding({ store, onDone, startLesson }) {
   function draw() {
     progress.replaceChildren(...STEPS.map((label, i) => el('li', { class: i < step ? 'done' : i === step ? 'on' : '', 'aria-current': i === step ? 'step' : null },
       el('i', { 'aria-hidden': 'true' }, i < step ? icon('check') : String(i + 1)), el('span', null, label))));
-    const [node, focus] = [interestsStep, paceStep, firstLessonStep][step]();
+    const [node, focus] = [interestsStep, firstLessonStep][step]();
     node.classList.add(back ? 'from-left' : 'from-right');
     body.replaceChildren(node);
     body.scrollTop = 0;

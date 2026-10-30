@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { dailyProgress, weekStrip, activityGrid, learnerTotals, suggestedTopics, upNext, courseProgress, matchScore, goalOf, levelOf, LEVELS, INTERESTS, DEFAULT_GOAL } from '../public/progress-core.js';
-import { emptyStats, awardXp, emptyDeck, addItems } from '../public/deck.js';
+import { studiedToday, weekStrip, activityGrid, learnerTotals, suggestedTopics, upNext, courseProgress, matchScore, levelOf, LEVELS, INTERESTS } from '../public/progress-core.js';
+import { emptyStats, recordActivity, emptyDeck, addItems } from '../public/deck.js';
 import { emptyState } from '../public/store.js';
 
 const TZ = 'UTC';
@@ -14,44 +14,40 @@ test('lesson level: a known settings.level, else beginner', () => {
   assert.equal(levelOf(undefined), 'beginner');
 });
 
-test('daily goal: today XP against the goal, default goal when unset', () => {
+test('studied today: any activity today, and a new day starts fresh', () => {
   let stats = emptyStats();
-  stats = awardXp(stats, 20, T0, TZ);
-  assert.equal(goalOf({}), DEFAULT_GOAL);
-  const p = dailyProgress(stats, { dailyGoal: 10 }, T0, TZ);
-  assert.deepEqual({ xp: p.xp, goal: p.goal, met: p.met, pct: p.pct }, { xp: 20, goal: 10, met: true, pct: 1 });
-  const q = dailyProgress(stats, {}, T0, TZ);
-  assert.equal(q.met, false);
-  assert.ok(Math.abs(q.pct - 20 / 30) < 1e-9);
-  assert.equal(dailyProgress(stats, {}, new Date('2026-10-22T09:00:00Z'), TZ).xp, 0, 'a new day starts at 0');
+  assert.equal(studiedToday(stats, T0, TZ), false);
+  stats = recordActivity(stats, T0, TZ);
+  assert.equal(studiedToday(stats, T0, TZ), true);
+  assert.equal(studiedToday(stats, new Date('2026-10-22T09:00:00Z'), TZ), false, 'a new day starts fresh');
 });
 
-test('week strip: 7 days oldest first, ending today, with activity and goal flags', () => {
+test('week strip: 7 days oldest first, ending today, with activity flags', () => {
   let stats = emptyStats();
-  stats = awardXp(stats, 40, new Date('2026-10-19T09:00:00Z'), TZ);
-  stats = awardXp(stats, 5, T0, TZ);
-  const w = weekStrip(stats, { dailyGoal: 30 }, T0, TZ);
+  stats = recordActivity(stats, new Date('2026-10-19T09:00:00Z'), TZ);
+  stats = recordActivity(stats, T0, TZ);
+  const w = weekStrip(stats, T0, TZ);
   assert.equal(w.length, 7);
   assert.equal(w[6].key, '2026-10-21');
   assert.equal(w[6].today, true);
   assert.equal(w[6].label, 'W');
   assert.equal(w[0].key, '2026-10-15');
-  const mon = w.find((d) => d.key === '2026-10-19');
-  assert.deepEqual([mon.active, mon.met], [true, true]);
-  assert.deepEqual([w[6].active, w[6].met], [true, false]);
+  assert.equal(w.find((d) => d.key === '2026-10-19').active, true);
+  assert.equal(w.find((d) => d.key === '2026-10-20').active, false);
+  assert.equal(w[6].active, true);
 });
 
 test('activity grid: whole weeks, Sunday first, future days flagged, levels scale', () => {
   let stats = emptyStats();
-  stats = awardXp(stats, 100, T0, TZ);
-  stats = awardXp(stats, 10, new Date('2026-10-10T09:00:00Z'), TZ);
+  for (let i = 0; i < 10; i++) stats = recordActivity(stats, T0, TZ);
+  stats = recordActivity(stats, new Date('2026-10-10T09:00:00Z'), TZ);
   const g = activityGrid(stats, T0, { weeks: 4, timeZone: TZ });
   assert.equal(g.length, 4);
   assert.ok(g.every((c) => c.length === 7));
   assert.equal(g[3][0].key, '2026-10-18', 'last column starts on the Sunday of this week');
   const today = g[3][3];
   assert.equal(today.key, '2026-10-21');
-  assert.equal(today.level, 4);
+  assert.deepEqual([today.count, today.level], [10, 4]);
   assert.equal(g[3][4].future, true);
   const small = g.flat().find((c) => c.key === '2026-10-10');
   assert.ok(small.level >= 1 && small.level < 4);
@@ -87,11 +83,12 @@ test('up next: continue an unfinished lesson, then reviews, plan items and cours
 
 test('learner totals and palette matching', () => {
   const d = emptyState();
-  d.stats = awardXp(emptyStats(), 12, T0, TZ);
+  d.stats = recordActivity(emptyStats(), T0, TZ);
   d.lessons.l1 = { id: 'l1', finished: true };
   d.lessons.l2 = { id: 'l2', finished: false };
   const t = learnerTotals(d, T0);
-  assert.deepEqual([t.xp, t.lessonsFinished, t.lessonsStarted, t.activeDays, t.cards], [12, 1, 2, 1, 0]);
+  assert.equal(t.xp, undefined);
+  assert.deepEqual([t.lessonsFinished, t.lessonsStarted, t.activeDays, t.cards], [1, 2, 1, 0]);
   assert.equal(matchScore('Why the sky is blue', 'why'), 4);
   assert.equal(matchScore('Why the sky is blue', 'sky'), 3);
   assert.equal(matchScore('Why the sky is blue', 'ky is'), 2);

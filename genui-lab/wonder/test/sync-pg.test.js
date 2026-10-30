@@ -18,7 +18,7 @@ const quiet = { warn() {}, error() {}, info() {}, log() {} };
 async function fresh() {
   const { default: pg } = await import('pg');
   const pool = new pg.Pool({ connectionString: URL_, max: 8 });
-  await pool.query('DROP TABLE IF EXISTS wonder_records, wonder_users, wonder_push_subscriptions, wonder_reminders_sent, wonder_files');
+  await pool.query('DROP TABLE IF EXISTS wonder_records, wonder_users, wonder_push_subscriptions, wonder_reminders_sent, wonder_usage, wonder_files');
   const db = createPgDb({ pool });
   return { db, svc: createSyncService({ db }) };
 }
@@ -91,7 +91,27 @@ test('postgres: memory, material files, push subscriptions and reminder claims a
     const sent = [];
     const r = await sendDueReminders({ sync: svc, send: async (s, p) => sent.push([s.endpoint, JSON.parse(p).title]), now: new Date('2026-10-22T10:00:00Z'), logger: quiet });
     assert.equal(r.sent, 1);
-    assert.deepEqual(sent, [['https://push.example.test/2', 'Wonder']]);
+    assert.deepEqual(sent, [['https://push.example.test/2', 'Mull']]);
     await (await import('../server/sync/import-local.js')); // loads without a database connection
+  } finally { await db.close(); }
+});
+
+test('postgres: delete account wipes one user, keeps the revision counter and usage counts', { skip: !URL_ && 'set WONDER_TEST_DATABASE_URL' }, async () => {
+  const { db, svc } = await fresh();
+  try {
+    const put = (u, id) => svc.sync(u, { changes: [{ kind: 'lesson', id, data: { id }, baseRev: 0, updatedAt: 1 }] });
+    const { rev } = await put('alice', 'a1');
+    await put('bob', 'b1');
+    await db.putFile('alice', 'm1', { bytes: Buffer.from('notes'), contentType: 'text/plain' });
+    await db.addSubscription('alice', { endpoint: 'https://push.example.test/a', keys: {} });
+    await db.useQuota('alice', '2026-10-28', 'lesson', 10);
+    await svc.deleteAccount('alice');
+    assert.equal(await svc.count('alice'), 0);
+    assert.equal(await db.getFile('alice', 'm1'), null);
+    assert.deepEqual(await db.listSubscriptions('alice'), []);
+    assert.deepEqual(await db.quotaUsed('alice', '2026-10-28'), { lesson: 1 });
+    await assert.rejects(svc.sync('alice', { since: rev }), { status: 410 });
+    assert.ok((await put('alice', 'a2')).rev > rev, 'revisions keep counting up');
+    assert.equal(await svc.count('bob'), 1);
   } finally { await db.close(); }
 });

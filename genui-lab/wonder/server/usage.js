@@ -68,18 +68,24 @@ export const RETRY_WINDOW_MS = 10 * 60 * 1000;
 
 const hoursLeft = (ms) => { const h = Math.ceil(ms / 3_600_000); return h <= 1 ? 'within the hour' : `in about ${h} hours`; };
 
-/** The 429 body for a used-up cap. `limited` tells the browser not to retry. */
-export function limitBody(kind, max, now = Date.now(), plan = 'free') {
+/**
+ * The 429 body for a used-up cap. `limited` tells the browser not to retry. `units` > 1: the
+ * request counted as several (a lesson from a long material, server/materials.js materialCharge).
+ */
+export function limitBody(kind, max, now = Date.now(), { plan = 'free', units = 1 } = {}) {
   const { resetsAt } = usageDay(now);
   const what = NOUN[kind] || 'requests';
+  const more = `More ${hoursLeft(resetsAt - now)} (midnight UTC).`;
   const error = max === 0
     ? `${what[0].toUpperCase()}${what.slice(1)} are turned off on this server.`
-    : `You've used today's ${max} ${what}. More ${hoursLeft(resetsAt - now)} (midnight UTC).`;
+    : units > 1
+      ? `Your material is long, so each one taught from it counts as ${units} of today's ${max} ${what}, and not enough are left. ${more}`
+      : `You've used today's ${max} ${what}. ${more}`;
   return { ok: false, error, limited: { kind, max, plan, resetsAt: new Date(resetsAt).toISOString() } };
 }
 
 /**
- * Per-user spending gate. `charge(userId, kind, {retryKey, plan})` resolves {ok:true} or
+ * Per-user spending gate. `charge(userId, kind, {retryKey, units, plan})` resolves {ok:true} or
  * {ok:false, body} (send it with HTTP 429). `plan` ('free' or 'pro') picks `limits` or `proLimits`. The browser retries a dropped stream with the same
  * retryKey, so up to RETRY_FREE retries within RETRY_WINDOW_MS of a charged request are free;
  * any reuse beyond that is charged like a new request (a reused key is not a free pass).
@@ -91,24 +97,24 @@ export function createUsageGate({ db, limits = usageLimits(), proLimits = limits
   return {
     limits,
     proLimits,
-    async charge(userId, kind, { retryKey, plan = 'free' } = {}) {
+    async charge(userId, kind, { retryKey, units = 1, plan = 'free' } = {}) {
       const max = capsFor(plan)[kind];
       if (max === undefined || max === Infinity) return { ok: true };
       const t = now();
       const { day } = usageDay(t);
-      if (max <= 0) return { ok: false, body: limitBody(kind, 0, t, plan) };
+      if (max <= 0) return { ok: false, body: limitBody(kind, 0, t, { plan }) };
       const rk = retryKey ? `${userId}|${kind}|${retryKey}` : null;
       const prev = rk ? recent.get(rk) : null;
       if (prev && t - prev.at < RETRY_WINDOW_MS && prev.free < RETRY_FREE) { prev.free++; return { ok: true, retried: true }; }
       let r;
       try {
-        r = await db.useQuota(userId, day, kind, max);
+        r = await db.useQuota(userId, day, kind, max, units);
       } catch (e) {
         // fail open: a database hiccup should not lock everyone out; the miss is logged
         logger.warn?.(`[wonder] usage count failed (${kind}): ${e.message}`);
         return { ok: true };
       }
-      if (!r.ok) return { ok: false, body: limitBody(kind, max, t, plan) };
+      if (!r.ok) return { ok: false, body: limitBody(kind, max, t, { plan, units }) };
       if (rk) {
         recent.delete(rk);
         recent.set(rk, { at: t, free: 0 });

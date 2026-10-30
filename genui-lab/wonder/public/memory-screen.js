@@ -36,7 +36,7 @@ export function memoryPanel(ctx) {
   });
   setToggle();
 
-  const fact = el('input', { type: 'text', maxlength: '200', placeholder: 'e.g. I learn best with worked examples', 'aria-label': 'Something Wonder should remember' });
+  const fact = el('input', { type: 'text', maxlength: '200', placeholder: 'e.g. I learn best with worked examples', 'aria-label': 'Something Mull should remember' });
   const kind = el('select', { 'aria-label': 'Kind' }, ...KINDS.map(([v, l]) => el('option', { value: v }, l)));
   kind.value = 'preference';
   const addBtn = el('button', { class: 'btn', type: 'submit' }, icon('plus'), 'Add');
@@ -48,20 +48,20 @@ export function memoryPanel(ctx) {
     try {
       const r = await api('POST', { fact: f, kind: kind.value });
       fact.value = '';
-      toast(r.duplicate ? 'Wonder already remembers that' : 'Remembered');
+      toast(r.duplicate ? 'Mull already remembers that' : 'Remembered');
       draw(r.items);
     } catch (err) { toast(err.message); } finally { addBtn.disabled = false; }
   } }, fact, kind, addBtn);
 
   const forgetAll = el('button', { class: 'btn btn-secondary btn-danger', type: 'button', onclick: async () => {
-    if (!confirm('Forget everything Wonder remembers about you? This cannot be undone.')) return;
+    if (!confirm('Forget everything Mull remembers about you? This cannot be undone.')) return;
     try { const r = await api('DELETE', { all: true }); toast(`Forgot ${r.removed} item${r.removed === 1 ? '' : 's'}`); draw([]); } catch (err) { toast(err.message); }
   } }, icon('trash'), 'Forget everything');
 
   function draw(items) {
     forgetAll.disabled = !items.length;
     if (!items.length) {
-      list.replaceChildren(el('div', { class: 'mem-empty' }, el('p', { class: 'muted' }, 'Nothing yet. Tell your Teacher about your goals, or add a fact above. After each lesson Wonder may note what you found tricky.')));
+      list.replaceChildren(el('div', { class: 'mem-empty' }, el('p', { class: 'muted' }, 'Nothing yet. Tell your Teacher about your goals, or add a fact above. After each lesson Mull may note what you found tricky.')));
       return;
     }
     list.replaceChildren(...KINDS.map(([k, label]) => {
@@ -83,7 +83,7 @@ export function memoryPanel(ctx) {
   return el('div', { class: 'memory-page', id: 'memory' },
     el('header', { class: 'card mem-head' },
       el('div', { class: 'mem-head-row' },
-        el('div', null, el('h2', { class: 'rubric' }, 'Memory'), el('p', { class: 'muted small' }, 'A few facts that personalize your lessons, tutor and Teacher. Stored by your local Wonder server.'))),
+        el('div', null, el('h2', { class: 'rubric' }, 'Memory'), el('p', { class: 'muted small' }, 'A few facts that personalize your lessons, tutor and Teacher. Stored by your local Mull server.'))),
       el('div', { class: 'mem-toggle' }, el('div', null, el('strong', null, 'Use memory'), toggleNote), toggle),
       form),
     list,

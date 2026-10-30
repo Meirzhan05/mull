@@ -69,7 +69,23 @@
 .steer-open .ui-icon { width: 14px; height: 14px; color: var(--accent); }
 .steer-open:hover { background: var(--hover); }
 @media (min-width: 1240px) { .steer-bar[data-mode="revise"]:not(.is-open) { justify-self: center; } }
-@media (max-width: 1239px) { .steer-bar[data-mode="revise"].is-open { bottom: calc(max(18px, env(safe-area-inset-bottom)) + 58px); } }
+
+/* ---- Phones: one bar docked at the bottom (Revise + Tutor), instead of pills floating over the text */
+.lesson-dock { display: none; }
+@media (max-width: 560px) {
+  .lesson-dock {
+    display: flex; align-items: center; gap: 8px; position: fixed; left: 0; right: 0; bottom: var(--kb, 0px); z-index: 40; /* --kb: the on-screen keyboard (app.js) */
+    padding: 8px 12px; padding-bottom: max(8px, env(safe-area-inset-bottom)); border-top: 1px solid var(--line);
+    background: color-mix(in srgb, var(--bg) 88%, transparent); backdrop-filter: saturate(1.8) blur(14px); -webkit-backdrop-filter: saturate(1.8) blur(14px);
+    transition: transform 220ms cubic-bezier(.2,.8,.2,1);
+  }
+  .lesson-dock.away { transform: translateY(100%); }
+  .lesson-dock-steer { flex: 1; min-width: 0; display: flex; }
+  .lesson-dock-tutor { margin-left: auto; height: 36px; }
+  .lesson-dock .steer-bar[data-mode="revise"] { position: static; }
+  .lesson-dock .steer-bar[data-mode="revise"]:not(.is-open) .steer-open { box-shadow: none; border-color: var(--control-border); }
+  .lesson-dock .steer-bar[data-mode="revise"].is-open { position: absolute; left: 8px; right: 8px; bottom: calc(100% + 8px); }
+}
 
 /* ---------------------------------------------------------------- Phases 6-8 (AI layer) */
 
@@ -103,19 +119,6 @@
   .mastery-item { grid-template-columns: minmax(0, 1fr) 3em 32px; row-gap: 6px; }
   .mastery-bar { grid-column: 1 / -1; grid-row: 2; }
 }
-
-/* Lesson quality check, last child of the end panel */
-.quality-note { width: 100%; max-width: 520px; margin-top: 6px; text-align: left; font-size: 0.8125rem; color: var(--ink-2); border: 1px solid var(--line); border-radius: var(--r-md); padding: 10px 12px; background: var(--surface); }
-.quality-note p, .quality-note summary { margin: 0; display: flex; gap: 8px; align-items: flex-start; }
-.quality-note summary { cursor: pointer; list-style: none; border-radius: var(--r-sm); }
-.quality-note summary::-webkit-details-marker { display: none; }
-.quality-note summary:focus-visible { outline: none; box-shadow: var(--ring); }
-.quality-note .ui-icon { width: 15px; height: 15px; flex: 0 0 auto; margin-top: 2px; color: var(--ink-3); }
-.quality-note.ok .ui-icon, .quality-note.fixed .ui-icon { color: var(--success); }
-.quality-note.warn .ui-icon { color: var(--warning); }
-.quality-note ul { margin: 8px 0 0; padding-left: 23px; display: grid; gap: 4px; }
-.quality-note li strong { font-weight: 600; color: var(--ink); }
-.quality-note li.major strong { color: var(--danger); }
 
 /* Free-response review cards */
 .explain-form { display: grid; gap: 10px; }

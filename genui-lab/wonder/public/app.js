@@ -3,11 +3,12 @@
 // and You (stats, settings, learner memory).
 
 import { createStore, uid } from './store.js';
-import { openLocalCache, startAccount, pushActive, onSyncStatus, signIn } from './account.js'; // account sync
+import { openLocalCache, startAccount, pushActive, onSyncStatus, signIn, accountFirstName, accountSwitching, accountAwaitsFirstSync } from './account.js'; // account sync
+import { startAction, startTopic } from './start-core.js'; // sign in, onboarding, first lesson
 import { DilSurface, mergeComponentResults } from './dil-surface.js';
 import { streamTurn, postJson, failureError, retryDelay } from './stream-client.js';
 import { retryControl } from './retry-ui.js'; // recoverable streams
-import { addItems, deckStats, awardXp, formatDue, XP } from './deck.js';
+import { addItems, deckStats, recordActivity, formatDue } from './deck.js';
 import { normalizePracticeItem } from './practice-core.js';
 import { renderReview } from './review.js';
 import { renderCourseReview, courseReviewButton } from './course-review-screen.js'; // whole-course review
@@ -28,9 +29,8 @@ import { renderToday } from './today.js';
 import { renderLibrary } from './library.js';
 import { renderYou, TEXT_SIZES } from './you.js';
 import { needsOnboarding, showOnboarding } from './onboarding.js';
-import { dailyProgress, courseProgress, roman, readingMinutes, levelOf } from './progress-core.js';
+import { courseProgress, roman, readingMinutes, levelOf } from './progress-core.js';
 import { storeEvidence, quizEvidence, explainEvidence, requestMastery } from './mastery-core.js'; // Phase 6 + 8
-import { qualitySummary } from './quality-core.js'; // Phase 7
 import { pickVariant, insightsForPrompt, lessonOutcome, RECALL_MIN, STYLE_VARIANTS } from './outcomes-core.js'; // Phase 9
 
 // Signed in: this account's IndexedDB cache (synced with the server); signed out: localStorage.
@@ -72,6 +72,29 @@ const AFTER_SIGN_IN = 'wonder.afterSignIn';
 function startAfterSignIn(topic, level) {
   try { sessionStorage.setItem(AFTER_SIGN_IN, JSON.stringify({ topic, level, at: Date.now() })); } catch {}
 }
+// Accounts on (app/layout.js data-accounts): everything needs a signed-in user, so a topic waits
+// through sign-in and onboarding comes after it.
+const ACCOUNTS = document.documentElement.dataset.accounts === 'on';
+let signingIn = false; // a Google redirect is starting: nothing else should open over it
+// On the way to Google and back, the pre-paint script (app/landing-script.js) hides the app behind
+// a short note (<html data-handoff>); it shows again once there is somewhere to land.
+const endHandoff = () => document.documentElement.removeAttribute('data-handoff');
+setTimeout(endHandoff, 20_000); // a hand-off that never lands still ends in the app
+
+/** Sign in with Google; a topic waits for the first page load with an account (startAfterSignIn). */
+function beginSignIn(topic) {
+  if (topic) startAfterSignIn(topic, levelOf(store.data.settings));
+  signingIn = true;
+  signIn().catch((err) => { signingIn = false; endHandoff(); toast(err.message || 'Sign-in is not available right now'); });
+}
+
+/** First-run onboarding; firstTopic is the topic brought from the landing page (its last step). */
+function openOnboarding(firstTopic = '') {
+  if (signingIn || document.querySelector('.onboard')) return;
+  showOnboarding({ store, startLesson, firstTopic, accountName: localCache.account ? accountFirstName() : null,
+    onDone: () => { refreshChrome(); if (!location.hash || location.hash === '#/') route(); } });
+}
+
 function takeAfterSignIn() {
   if (!localCache.account) return null;
   try {
@@ -172,7 +195,7 @@ function exportPlan(planId) {
 const actions = { startLesson, startMaterialLesson, planCourse, askTeacher, openPlanItem, openCourseLesson, teacherCheckIn, exportPlan };
 
 // Phase 10: the daily reminder. While any Wonder tab is open, a notification fires once a day at
-// the learner's time if today's goal is not met, saying what the brief would put first. The
+// the learner's time if they have not studied yet today, saying what the brief would put first. The
 // "shown today" mark lives outside the synced state so two tabs don't both fire.
 const REMINDED_KEY = 'wonder.reminded';
 function checkReminder() {
@@ -196,15 +219,11 @@ const shell = createShell({ store, getStatus: () => status, actions });
 
 function refreshChrome() { shell.refresh(); }
 
-function giveXp(amount, why) {
-  if (amount <= 0) return;
-  const before = dailyProgress(store.data.stats, store.data.settings);
-  store.update((d) => { d.stats = awardXp(d.stats, amount); return d; });
+/** Count a lesson, quiz or explanation toward today's activity and the streak. */
+function logActivity() {
+  store.update((d) => { d.stats = recordActivity(d.stats); return d; });
   refreshChrome();
   shell.bump();
-  const after = dailyProgress(store.data.stats, store.data.settings);
-  if (!before.met && after.met) toast(`Today’s goal is met · +${amount} XP`, 3600);
-  else toast(`+${amount} XP${why ? ` · ${why}` : ''}`);
 }
 
 async function loadStatus() {
@@ -219,7 +238,7 @@ const memoryEnabled = () => store.data.settings?.memoryEnabled !== false;
 const applyFontScale = () => document.documentElement.style.setProperty('--lesson-scale', String(Number(store.data.settings?.fontScale) || 1));
 
 /** Shared context for the screens that live in their own modules. */
-const screenCtx = () => ({ app, store, status, teardown, createLesson, giveXp, reroute: route, actions, shell, refresh: () => { refreshChrome(); applyFontScale(); } });
+const screenCtx = () => ({ app, store, status, teardown, createLesson, logActivity, reroute: route, actions, shell, refresh: () => { refreshChrome(); applyFontScale(); } });
 
 function cleanupScreen() {
   for (const fn of teardown.splice(0)) { try { fn(); } catch {} }
@@ -343,12 +362,47 @@ function renderLesson(lessonId) {
   const errorBox = el('div', { class: 'card error-card', hidden: true });
   const finishBtn = el('button', { class: 'btn btn-lg', type: 'button', disabled: true }, 'Collect the cards');
   const endPanel = el('section', { class: 'card lesson-end pending', 'aria-label': 'End of lesson' });
-  // Phase 4: live steer (a pill beside the status line), resume (open, top) and revise (sticky, after the lesson)
+  // phones: one bar docked at the bottom holds Revise and the tutor, instead of pills over the text.
+  // Whether it is shown is the stylesheet's call (.lesson-dock, extras.css), so there is one breakpoint.
+  const dockSteer = el('div', { class: 'lesson-dock-steer' });
+  const dockTutor = el('button', { class: 'btn btn-secondary lesson-dock-tutor', type: 'button', 'aria-expanded': 'false', onclick: () => setTutorOpen(true) }, icon('chat'), el('span', null, 'Tutor'));
+  const dock = el('div', { class: 'lesson-dock' }, dockSteer, dockTutor);
+  let docked = false; // the dock is displayed (kept current on resize)
+  const readDocked = () => { docked = dock.isConnected && getComputedStyle(dock).display !== 'none'; return docked; };
+  const placeRevise = (node) => { if (readDocked()) dockSteer.append(node); else errorBox.before(node); };
+  // Phase 4: live steer (a pill beside the status line), resume (open, top) and revise (sticky, after the lesson; in the dock on phones)
+  let steerNode = null;
   const steerBar = createSteerBar({
     onContinue: (req) => { autoRetried = false; continueLesson(req); },
     onOpen: () => onPageScroll(),
-    onMode: (mode, node) => { if (mode === 'revise') errorBox.before(node); else writingRow.append(node); },
+    onMode: (mode, node) => { steerNode = node; if (mode === 'revise') placeRevise(node); else writingRow.append(node); },
   });
+  const setDockAway = (away) => { dock.classList.toggle('away', away); dock.inert = away; };
+  // the on-screen keyboard covers fixed-bottom elements: lift the dock (and an open Revise) above it
+  const vv = window.visualViewport;
+  const onViewport = () => {
+    const was = docked;
+    if (readDocked() !== was && steerNode && steerBar.mode === 'revise') placeRevise(steerNode);
+    if (!docked) { setDockAway(false); dock.style.removeProperty('--kb'); return; }
+    const kb = vv ? Math.max(0, window.innerHeight - vv.height - vv.offsetTop) : 0;
+    dock.style.setProperty('--kb', `${Math.round(kb)}px`);
+  };
+  window.addEventListener('resize', onViewport);
+  vv?.addEventListener('resize', onViewport);
+  vv?.addEventListener('scroll', onViewport);
+  teardown.push(() => { window.removeEventListener('resize', onViewport); vv?.removeEventListener('resize', onViewport); vv?.removeEventListener('scroll', onViewport); });
+  // the dock steps aside while reading down, and comes back on any scroll up or at the end
+  let dockY = window.scrollY;
+  const onDockScroll = () => {
+    if (!docked) return;
+    const y = window.scrollY;
+    if (Math.abs(y - dockY) < 8) return;
+    const atEnd = y + window.innerHeight > document.documentElement.scrollHeight - 120;
+    setDockAway(y > dockY && y > 160 && !atEnd && !dock.querySelector('.steer-bar.is-open'));
+    dockY = y;
+  };
+  window.addEventListener('scroll', onDockScroll, { passive: true });
+  teardown.push(() => window.removeEventListener('scroll', onDockScroll));
   const tutorToggle = el('button', { class: 'btn btn-secondary btn-sm tutor-toggle', type: 'button', 'aria-expanded': 'false', title: 'Ask the tutor about this lesson' }, icon('chat'), el('span', null, 'Tutor'));
 
   // contents menu: jump to any page
@@ -423,16 +477,18 @@ function renderLesson(lessonId) {
     writingRow,
     card,
     errorBox,
-    endPanel);
+    endPanel,
+    dock);
 
   const tutor = createTutor(lessonId);
-  const layout = el('div', { class: 'lesson-layout' }, lessonMain, tutor.scrim, tutor.panel, tutor.fab);
+  const layout = el('div', { class: 'lesson-layout' }, lessonMain, tutor.scrim, tutor.panel);
   app.replaceChildren(layout);
+  onViewport(); // now in the page: is the dock shown at this width?
   teardown.push(() => tutor.destroy());
   const setTutorOpen = (open) => {
     layout.classList.toggle('tutor-open', open);
     tutorToggle.setAttribute('aria-expanded', String(open));
-    tutor.fab.hidden = open;
+    dockTutor.setAttribute('aria-expanded', String(open));
     if (open) tutor.focus();
   };
   tutor.onOpenChange = setTutorOpen;
@@ -573,10 +629,9 @@ function renderLesson(lessonId) {
         el('p', { class: 'kicker' }, 'End of the lesson'),
         el('h2', { class: 'h-lg' }, 'File what you have learned'),
         el('p', { class: 'muted' }, 'The key ideas become index cards in your review deck. Each returns just before you would forget it.'),
-        el('div', { class: 'end-stats' }, pages ? el('span', { class: 'tag' }, `${pages} pages`) : null, score, el('span', { class: 'tag' }, `+${XP.lessonComplete} XP`)),
+        el('div', { class: 'end-stats' }, pages ? el('span', { class: 'tag' }, `${pages} pages`) : null, score),
         el('div', { class: 'end-actions' }, finishBtn,
-          el('button', { class: 'btn btn-secondary btn-lg', type: 'button', onclick: () => setTutorOpen(true) }, 'Ask the tutor first')),
-        qualityNote(l.quality));
+          el('button', { class: 'btn btn-secondary btn-lg', type: 'button', onclick: () => setTutorOpen(true) }, 'Ask the tutor first')));
       return;
     }
     endPanel.className = 'card lesson-end finished';
@@ -591,8 +646,7 @@ function renderLesson(lessonId) {
       el('div', { class: 'end-actions' },
         nxt ? el('button', { class: 'btn btn-lg', type: 'button', onclick: () => openCourseLesson(l.courseId, nxt.si, nxt.li) }, `Next: ${nxt.title}`, icon('arrow-right')) : null,
         due ? el('a', { class: `btn btn-lg ${nxt ? 'btn-secondary' : ''}`, href: '#/review' }, `Review ${due} card${due === 1 ? '' : 's'}`) : null,
-        el('a', { class: `btn btn-lg ${nxt || due ? 'btn-secondary' : ''}`, href: '#/' }, 'Back to Today')),
-      qualityNote(l.quality));
+        el('a', { class: `btn btn-lg ${nxt || due ? 'btn-secondary' : ''}`, href: '#/' }, 'Back to Today')));
   }
 
   function markComplete() {
@@ -798,7 +852,7 @@ function renderLesson(lessonId) {
     drawEnd();
     steerBar.setMode('live');
     let r = null;
-    let quality = null; // Phase 7: the server's quality-report control
+    let quality = null; // Phase 7: the server's quality-report control (its quiz fixes are announced, not kept)
     let instruction = continueFrom?.instruction || ''; // the steer in force, carried into a retry
     try {
       r = await streamTurn('/api/lesson/stream', {
@@ -848,9 +902,9 @@ function renderLesson(lessonId) {
       latest = { markdown: msg.markdown, dil };
       streaming = false;
       autoRetried = false;
-      saveLesson(lessonId, { status: 'complete', streamOwner: null, markdown: msg.markdown, dil, appData: current.appData, messageId, title: lessonTitleFrom(msg.markdown, l.title), truncated: !!r.final?.debug?.truncated, interruptedReason: null, quality });
-      const qs = qualitySummary(quality);
-      if (qs?.tone === 'fixed') toast(qs.headline, 4200);
+      saveLesson(lessonId, { status: 'complete', streamOwner: null, markdown: msg.markdown, dil, appData: current.appData, messageId, title: lessonTitleFrom(msg.markdown, l.title), truncated: !!r.final?.debug?.truncated, interruptedReason: null });
+      const fixed = quality?.critic?.fixed?.length || 0;
+      if (fixed) toast(`${fixed} quiz answer${fixed === 1 ? '' : 's'} corrected.`, 4200);
       store.flush();
       if (dil) surface.pruneViewState(resolutionIdsOf(dil)); // widget state: drop widgets a revision removed or rewrote
       if (r.final?.debug?.truncated) toast('The lesson was cut short (length limit).');
@@ -930,16 +984,6 @@ function renderLesson(lessonId) {
   }
 }
 
-/** Phase 7: the lesson's quality check, a collapsed note in the end panel. */
-function qualityNote(report) {
-  const q = qualitySummary(report);
-  if (!q) return null;
-  const ic = q.tone === 'warn' ? 'quote' : q.tone === 'lint' ? 'list' : 'check';
-  if (!q.items.length) return el('div', { class: `quality-note ${q.tone}` }, el('p', null, icon(ic), el('span', null, q.headline)));
-  return el('details', { class: `quality-note ${q.tone}` }, el('summary', null, icon(ic), el('span', null, q.headline)),
-    el('ul', null, ...q.items.map((i) => el('li', { class: i.major ? 'major' : '' }, el('strong', null, `${i.label}. `), i.text))));
-}
-
 function handleClientAction(a, { lessonId, openTutor, tutor }) {
   const p = a.payload || {};
   switch (a.type) {
@@ -953,7 +997,7 @@ function handleClientAction(a, { lessonId, openTutor, tutor }) {
       store.update((d) => { d.awarded = { ...(d.awarded || {}), [key]: true }; return d; });
       // first attempt only: a retake right after seeing the answers is not evidence of mastery
       if (memoryEnabled()) storeEvidence(store, quizEvidence(p.results, { topic: store.data.lessons[lessonId]?.title || '' }));
-      giveXp((Number(p.score) || 0) * XP.quizCorrect, `${p.score}/${p.total} on the quiz`);
+      logActivity();
       break;
     }
     case 'explain_graded': { // Phase 8: once per ExplainBack attempt
@@ -961,8 +1005,7 @@ function handleClientAction(a, { lessonId, openTutor, tutor }) {
       if (store.data.awarded?.[key]) break;
       store.update((d) => { d.awarded = { ...(d.awarded || {}), [key]: true }; return d; });
       if (memoryEnabled()) storeEvidence(store, explainEvidence(p, { topic: store.data.lessons[lessonId]?.title || '' }));
-      const pts = Math.max(0, Math.min(3, Number(p.score) || 0));
-      if (pts && !(Number(p.attempt) > 0)) giveXp(pts * XP.explainPoint, `${pts}/3 on your explanation`);
+      if (!(Number(p.attempt) > 0)) logActivity();
       break;
     }
     case 'save_flashcards': {
@@ -1023,7 +1066,6 @@ function createTutor(lessonId) {
     el('div', { class: 'tutor-scroll' }, empty, log, followups),
     form);
   const scrim = el('div', { class: 'tutor-scrim', 'aria-hidden': 'true', onclick: () => api.onOpenChange?.(false) });
-  const fab = el('button', { class: 'tutor-fab btn', type: 'button', onclick: () => api.onOpenChange?.(true) }, icon('chat'), 'Ask tutor');
   const surfaces = [];
   let busy = false;
   let failed = null; // {rc, bot}: the reply waiting for a Retry (recoverable streams)
@@ -1117,7 +1159,6 @@ function createTutor(lessonId) {
       return graded;
     },
     panel,
-    fab,
     scrim,
     onOpenChange: null,
     focus() { setTimeout(() => input.focus(), 50); },
@@ -1212,7 +1253,7 @@ async function finishLesson(lessonId, btn, { onFinished } = {}) {
       saveLesson(lessonId, { memoryExtracted: true });
       const tutorThread = (lesson.tutor || []).filter((m) => m.role === 'user').map((m) => m.content);
       postJson('/api/memory/extract', { lessonTitle: lesson.title, quizResults: lesson.quizResults || [], tutorThread, memoryEnabled: true })
-        .then((r) => { if (r.added?.length) setTimeout(() => toast(`Wonder will remember: ${r.added[0].fact}`, 4200), 1400); })
+        .then((r) => { if (r.added?.length) setTimeout(() => toast(`Mull will remember: ${r.added[0].fact}`, 4200), 1400); })
         .catch(() => {});
     }
   } catch (e) {
@@ -1271,12 +1312,10 @@ function showPack(lesson, data, { onFinished } = {}) {
       return d;
     });
     store.flush();
-    const gained = first ? XP.lessonComplete + added * XP.cardsCollected : 0;
-    if (gained) giveXp(gained, 'lesson finished');
+    if (first) logActivity();
     else toast(added ? `${added} new cards filed` : 'These cards are already in your deck');
     onFinished?.();
     // what next: the next course lesson, a review, or back to Today
-    const day = dailyProgress(store.data.stats, store.data.settings);
     const nxt = lesson.courseId ? nextInCourse(lesson.courseId, lesson.id) : null;
     const due = deckStats(store.data.deck).due;
     const step = (title, sub2, onclick) => el('li', null, el('button', { class: 'numbered-row', type: 'button', onclick: () => { close(); onclick(); } },
@@ -1284,9 +1323,6 @@ function showPack(lesson, data, { onFinished } = {}) {
     panel.replaceChildren(el('div', { class: 'pack-done' },
       el('p', { class: 'kicker' }, 'Filed'),
       el('h2', { class: 'h-lg' }, `${added} card${added === 1 ? '' : 's'} added to your deck`),
-      el('div', { class: 'ledger ledger-compact' },
-        el('div', { class: 'ledger-item' }, el('span', { class: 'ledger-label' }, 'Earned'), el('span', { class: 'ledger-value' }, `+${gained}`, el('small', null, ' XP'))),
-        el('div', { class: 'ledger-item' }, el('span', { class: 'ledger-label' }, 'Today'), el('span', { class: 'ledger-value' }, String(day.xp), el('small', null, ` / ${day.goal} XP`)), el('span', { class: `ledger-bar ${day.met ? 'met' : ''}`, 'aria-hidden': 'true' }, el('i', { style: { width: `${Math.round(day.pct * 100)}%` } })))),
       el('h3', { class: 'rubric' }, 'What next'),
       el('ol', { class: 'numbered' },
         nxt ? step(nxt.title, `Next in ${nxt.course.title}`, () => openCourseLesson(lesson.courseId, nxt.si, nxt.li)) : null,
@@ -1305,7 +1341,7 @@ function showPack(lesson, data, { onFinished } = {}) {
 function renderReviewScreen(lessonId = null) {
   const root = el('div', { class: 'review-wrap' });
   app.replaceChildren(root);
-  const cleanup = renderReview(root, { store, lessonId, onExit: () => { location.hash = lessonId ? '#/you' : '#/'; }, onXp: () => { refreshChrome(); shell.bump(); } });
+  const cleanup = renderReview(root, { store, lessonId, onExit: () => { location.hash = lessonId ? '#/you' : '#/'; }, onActivity: () => { refreshChrome(); shell.bump(); } });
   if (typeof cleanup === 'function') teardown.push(cleanup);
 }
 
@@ -1329,14 +1365,26 @@ function route() {
     let t = '';
     try { t = decodeURIComponent(m[1]); } catch {}
     location.replace('#/');
-    if (t.trim()) startLesson(t.slice(0, 200));
+    t = t.trim().slice(0, 200);
+    if (ACCOUNTS && !localCache.account) beginSignIn(t); // an old link, signed out: sign in first
+    else if (t) startLesson(t);
+    return;
+  }
+  // #/start[/<topic>] is the landing page's "Continue with Google": sign in first, then onboarding
+  // (offering the topic as the first lesson), then the lesson (public/start-core.js).
+  if (/^#\/start(\/|$)/.test(h)) {
+    const next = startAction({ accounts: ACCOUNTS, signedIn: !!localCache.account, needsOnboarding: needsOnboarding(store.data), topic: startTopic(h) });
+    location.replace('#/');
+    if (next.action === 'signin') beginSignIn(next.topic);
+    else if (next.action === 'onboard') openOnboarding(next.topic);
+    else if (next.action === 'lesson') startLesson(next.topic);
     return;
   }
   // #/signin opens sign-in over Today (the landing page's "Sign in" link; a plain / would send a
   // signed-out visitor back to the landing page).
   if (h === '#/signin') {
     location.replace('#/');
-    signIn().catch((err) => toast(err.message || 'Sign-in is not available right now'));
+    beginSignIn();
     return;
   }
   if ((m = /^#\/lesson\/([\w-]+)$/.exec(h))) { screen = 'lesson'; document.body.dataset.screen = screen; renderLesson(m[1]); }
@@ -1352,7 +1400,7 @@ function route() {
   refreshChrome();
   if (h !== '#/memory' && h !== '#/mastery' && h !== '#/interests') window.scrollTo(0, 0);
   const titles = { home: 'Today', library: 'Library', review: 'Review', teacher: 'Teacher', you: 'You', course: 'Course', lesson: 'Lesson' };
-  document.title = screen === 'home' ? 'Wonder' : `${titles[screen]} · Wonder`;
+  document.title = screen === 'home' ? 'Mull' : `${titles[screen]} · Mull`;
 }
 
 window.addEventListener('hashchange', route);
@@ -1361,15 +1409,34 @@ store.subscribe?.(() => refreshChrome());
 applyFontScale();
 observeMath(document.body);
 refreshChrome();
-loadStatus().then(() => {
+// A new account onboards first (the topic it brought waits in onboarding's last step); with
+// accounts on, onboarding only ever runs signed in.
+function land() {
   const afterSignIn = takeAfterSignIn();
-  if (afterSignIn) startLesson(afterSignIn.topic, afterSignIn.level || undefined); // its hashchange routes
+  const onboard = needsOnboarding(store.data) && (!ACCOUNTS || !!localCache.account);
+  if (afterSignIn && !onboard) startLesson(afterSignIn.topic, afterSignIn.level || undefined); // its hashchange routes
   else route();
-  if (needsOnboarding(store.data)) showOnboarding({ store, startLesson, onDone: () => { refreshChrome(); if (!location.hash || location.hash === '#/') route(); } });
+  if (onboard) openOnboarding(afterSignIn?.topic || '');
+}
+
+loadStatus().then(() => {
+  // The account cache has not had its first sync (the one before sign-in's reload timed out or
+  // failed): an account that already onboarded would look new, and a lesson link kept through
+  // sign-in would not be found. Land once that sync is in, which also redraws the screen; a failed
+  // one shows Today and waits for the retry.
+  let awaitingAccount = accountAwaitsFirstSync();
+  if (awaitingAccount) route();
+  else land();
+  // back from Google, startAccount() finishes the sign-in and reloads into the account
+  const finishingSignIn = !localCache.account && new URLSearchParams(location.search).has('neon_auth_session_verifier');
+  if (!signingIn && !finishingSignIn && !awaitingAccount) endHandoff();
   // account sync: changes from other devices redraw Today / Library when that cannot disturb reading
   onSyncStatus((s) => {
-    if (s.state === 'synced' && s.applied && ['home', 'library'].includes(document.body.dataset.screen) && window.scrollY < 40 && !document.querySelector('.onboard, dialog[open]')) route();
+    if (awaitingAccount && !['syncing', 'error', 'offline'].includes(s.state)) { awaitingAccount = false; land(); }
+    else if (s.state === 'synced' && s.applied && ['home', 'library'].includes(document.body.dataset.screen) && window.scrollY < 40 && !document.querySelector('.onboard, dialog[open]')) route();
     else refreshChrome();
   });
-  startAccount({ store, toast }).catch((e) => console.warn('[wonder] account sync could not start', e));
+  startAccount({ store, toast })
+    .then(() => { if (!signingIn && !accountSwitching()) endHandoff(); })
+    .catch((e) => { if (awaitingAccount) { awaitingAccount = false; land(); } endHandoff(); console.warn('[wonder] account sync could not start', e); });
 });

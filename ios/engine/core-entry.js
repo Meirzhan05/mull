@@ -23,7 +23,6 @@ import { pruneViewState, hasViewState } from '../../genui-lab/wonder/public/view
 import { progressSnapshot, historyForModel, threadTitle, TEACHER_OPENER } from '../../genui-lab/wonder/public/teacher-core.js';
 import { storeEvidence, quizEvidence, explainEvidence, requestMastery, recordEvidence, ratingScore, masterySummary } from '../../genui-lab/wonder/public/mastery-core.js';
 import { pickVariant, insightsForPrompt } from '../../genui-lab/wonder/public/outcomes-core.js';
-import { qualitySummary } from '../../genui-lab/wonder/public/quality-core.js';
 
 const native = globalThis.__wonderCoreNative; // storage + change events, installed by Swift
 try { delete globalThis.__wonderCoreNative; } catch {}
@@ -300,7 +299,6 @@ const API = {
   pruneViewState: ({ viewState, dil }) => pruneViewState(viewState, resolutionIdsOf(dil)),
   hasViewState: ({ viewState }) => hasViewState(viewState),
   mergeComponentResults: ({ appData, componentResults }) => mergeComponentResults(appData, componentResults),
-  quality: ({ report }) => qualitySummary(report),
   clientAction: (o) => clientAction(o),
   nextInCourse: ({ courseId, lessonId }) => nextInCourse(courseId, lessonId),
 

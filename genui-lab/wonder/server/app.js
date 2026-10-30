@@ -13,6 +13,7 @@
 //   GET/POST/DELETE /api/memory -> learner memory items
 //   POST /api/memory/extract    -> 0-3 new memory facts from a finished lesson
 //   GET  /api/account           -> {sync, signedIn, plan, billing, usage, push} (account sync: server/sync/)
+//   DELETE /api/account         -> delete everything kept for the signed-in user, then the sign-in
 //   POST /api/sync              -> push changed records, pull newer ones (signed in)
 //   POST/DELETE /api/push/subscribe -> this browser's Web Push subscription (signed in)
 //   GET  /api/cron/reminders    -> daily reminders over Web Push (Vercel Cron, CRON_SECRET)
@@ -27,9 +28,9 @@ import { WONDER_ROOT, LAB_ROOT } from './paths.js';
 import { CONTENT_TYPE, createTurnWriter } from './ndjson.js';
 import {
   MODEL, detectMode, createClaudeClient, buildStreamParams, buildStructuredParams, streamText, createStructured,
-  isCredentialError, friendlyError, REFUSAL_MESSAGE,
+  isCredentialError, friendlyError, badRequestMessage, REFUSAL_MESSAGE,
 } from './claude.js';
-import { createMaterialStore, DEFAULT_MATERIALS_DIR, MATERIAL_BODY_LIMIT, documentBlock, materialCitation, demoMaterialLesson, demoMaterialCourse } from './materials.js'; // Phase 10
+import { createMaterialStore, DEFAULT_MATERIALS_DIR, MATERIAL_BODY_LIMIT, PART_BODY_LIMIT, PART_BYTES, MAX_PARTS, MAX_PDF_BYTES, MAX_MATERIAL_TOKENS, UPLOAD_ID_RE, isBase64, pdfTooLarge, materialCharge, prepareMaterial, extractPdfText, MIN_FALLBACK_CHARS, newUploadId, createPartStore, pruneUploads, takeUpload, documentBlock, materialCitation, demoMaterialLesson, demoMaterialCourse } from './materials.js'; // Phase 10
 import { TEACHER_OPENER } from '../public/teacher-core.js'; // Phase 10
 import { LESSON_SYSTEM_PROMPT, TUTOR_SYSTEM_PROMPT, TEACHER_SYSTEM_PROMPT, COURSE_SYSTEM_PROMPT, COURSE_PLAN_SCHEMA, lessonUserMessage, tutorLessonContext, joinContext, insightsContext } from './prompts.js';
 import { pickDemoLesson, streamDemoText, buildDemoTutorReply, demoCoursePlan } from './demo.js';
@@ -55,7 +56,7 @@ import { createInflight, createTurnLedger, cleanKey, retryNote } from './retry.j
 // account sync + Web Push
 import { createSyncFromEnv } from './sync/index.js';
 import { SYNC_BODY_LIMIT } from './sync/service.js';
-import { loadUserMemory, signedOutMemory, userMaterials, signedOutMaterials } from './sync/user-stores.js';
+import { loadUserMemory, signedOutMemory, userMaterials, signedOutMaterials, userUploadParts } from './sync/user-stores.js';
 import { pushConfig, webPushSender, sendDueReminders } from './push.js';
 import { usageKind, usageLimits, createUsageGate } from './usage.js'; // sign-in + daily caps for Claude routes
 import { createPlans } from './plans.js'; // Free/Pro: which daily caps apply
@@ -72,7 +73,7 @@ export const MAX_BODY = 2 * 1024 * 1024;
 const DEFAULT_TUTOR_FOLLOWUPS = ['Quiz me on this lesson', 'Give me a real-world example', 'What should I learn next?'];
 const DEFAULT_TEACHER_FOLLOWUPS = ['What should I study today?', 'Make me a study plan', 'Quiz me'];
 // with account sync on: routes that need a signed-in user, and routes that read learner memory
-const SIGNED_IN_ONLY = new Set(['POST /api/sync', 'POST /api/push/subscribe', 'DELETE /api/push/subscribe', 'POST /api/memory', 'DELETE /api/memory', 'POST /api/materials', 'DELETE /api/materials', 'GET /api/materials/file']);
+const SIGNED_IN_ONLY = new Set(['DELETE /api/account', 'POST /api/sync', 'POST /api/push/subscribe', 'DELETE /api/push/subscribe', 'POST /api/memory', 'DELETE /api/memory', 'POST /api/materials', 'POST /api/materials/part', 'DELETE /api/materials', 'GET /api/materials/file']);
 const MEMORY_PATHS = /^\/api\/(lesson|tutor|teacher|memory|widget_action)(\/|$)/;
 const MEMORY_OFF_CONTEXT = 'The learner turned memory off for this conversation: do not save or forget memory items, and do not assume anything about them beyond this conversation.';
 
@@ -108,9 +109,10 @@ function sendJson(res, status, body) {
   res.end(data);
 }
 
-/** Largest JSON body a path accepts: material uploads (Phase 10) carry a PDF as base64. */
+/** Largest JSON body a path accepts: material uploads (Phase 10) carry a PDF (or a part of one) as base64. */
 export function bodyLimit(pathname) {
   if (pathname === '/api/sync') return SYNC_BODY_LIMIT;
+  if (pathname === '/api/materials/part') return PART_BODY_LIMIT;
   return pathname === '/api/materials' ? MATERIAL_BODY_LIMIT : MAX_BODY;
 }
 
@@ -213,6 +215,7 @@ export function createWonderCore(opts = {}) {
   });
   const memory = scoped('memory', () => localMemory);
   const materials = scoped('materials', () => localMaterials);
+  const uploadParts = scoped('parts', () => localParts);
   const teacherCards = createCardStore();
   const grade = createGrader({ getClient: () => state.client, getMode: () => state.mode, logger }); // Phase 8
   const widgetAction = createWidgetActionHandler({ cards: teacherCards, memory, grade });
@@ -232,13 +235,53 @@ export function createWonderCore(opts = {}) {
   // Phase 10: the learner's own material. Tests that keep memory in-process (memoryFile: null)
   // keep materials in-process too unless they pass materialsDir.
   const localMaterials = opts.materials ?? createMaterialStore({ dir: 'materialsDir' in opts ? opts.materialsDir : opts.memoryFile === null ? null : (env.WONDER_MATERIALS_DIR || DEFAULT_MATERIALS_DIR) });
+  const localParts = createPartStore();
+  /**
+   * How many tokens Claude reads for a new material (count_tokens is free), so a document too long
+   * for a lesson's request (over MAX_MATERIAL_TOKENS, or over 600 PDF pages) is refused at upload
+   * rather than when a course is planned. {error} when Claude can't take it; null when it can't be
+   * counted (demo mode, a network error), and the material is kept anyway.
+   */
+  async function materialTokens(meta, data) {
+    if (state.mode !== 'claude') return null;
+    let tokens;
+    try {
+      ({ input_tokens: tokens } = await state.client.messages.countTokens({ model: MODEL, messages: [{ role: 'user', content: [documentBlock(meta, data, { citations: false, cache: false }), { type: 'text', text: 'Read this.' }] }] }));
+    } catch (err) {
+      const refused = badRequestMessage(err);
+      if (refused) return { error: `Claude can't read that file: ${refused}` };
+      logger.warn?.(`[wonder] could not count material tokens: ${err?.message}`);
+      return null;
+    }
+    if (tokens > MAX_MATERIAL_TOKENS) return { error: `That ${meta.kind === 'pdf' ? 'PDF' : 'text'} is too long for one lesson (about ${Math.round(tokens / 1000)}k tokens; the limit is ${MAX_MATERIAL_TOKENS / 1000}k). Split it and add the part you need.` };
+    return tokens;
+  }
+
+  /** A PDF taught from its text layer: the same material, as text. */
+  const asText = (meta, text) => ({ meta: { ...meta, kind: 'text' }, data: text });
   /** {meta, data} for a client-sent material id, or null. */
   const loadMaterial = async (id) => {
     if (id == null || id === '') return null;
     const meta = await materials.meta(id);
+    if (meta?.textFallback) { const text = await materials.readText(id); if (text != null) return asText(meta, text); }
     const data = meta ? await materials.read(id) : null;
     return meta && data != null ? { meta, data } : { missing: true };
   };
+  /** Claude refused this PDF itself ("Could not process PDF", too many pages): its text layer may still do. */
+  const unreadablePdf = (err, material) => material?.meta.kind === 'pdf' && /\bPDF\b/i.test(badRequestMessage(err) || '');
+  /**
+   * The material Claude could not read as a PDF, as its text layer from now on (kept with the
+   * material, so later lessons go straight to it), or {error} when it has no usable text.
+   */
+  async function pdfAsText(material) {
+    let text = '';
+    try { text = await extractPdfText(material.data); } catch (e) { logger.warn?.(`[wonder] could not read the PDF's text layer: ${e.message}`); }
+    if (text.length < MIN_FALLBACK_CHARS) return { error: "Claude can't read this PDF, and it has no text layer to teach from. Export it again as a PDF (for example with Preview's Export as PDF) and add that, or paste its text." };
+    const pages = (text.match(/^\[Page \d+\]$/gm) || []).length;
+    const meta = await materials.setTextFallback(material.meta.id, text, { chars: text.length, pages });
+    logger.info?.(`[wonder] material ${material.meta.id}: Claude could not read the PDF; teaching from its text layer (${pages} pages, ${text.length} chars)`);
+    return asText(meta || material.meta, text);
+  }
 
   // <Figure/> images come from Wikimedia Commons; WONDER_FIGURES=off (or figureLookup: null) skips the network
   const figureLookup = opts.figureLookup !== undefined ? opts.figureLookup : env.WONDER_FIGURES === 'off' ? null : createCommonsLookup();
@@ -317,7 +360,8 @@ export function createWonderCore(opts = {}) {
   }
 
   /** Run Claude, falling back to demo on missing credentials. Returns 'done' | 'demo' | 'failed'. */
-  async function runClaude(writer, params, onText, signal, stream = (p, o) => streamText(state.client, p, o)) {
+  /** `retryable(err)`: an error the caller recovers from itself ({status: 'retry', err}, nothing shown). */
+  async function runClaude(writer, params, onText, signal, stream = (p, o) => streamText(state.client, p, o), { retryable } = {}) {
     try {
       const { stopReason } = await stream(params, { onText, signal });
       if (stopReason === 'refusal') {
@@ -332,6 +376,7 @@ export function createWonderCore(opts = {}) {
         writer.reasoning('Claude credentials were not accepted. Showing demo content…');
         return { status: 'demo' };
       }
+      if (retryable?.(err)) return { status: 'retry', err };
       const f = friendlyError(err);
       // The API error body (type + message) never contains credentials; log it for diagnosis.
       const detail = err?.status ? ` (HTTP ${err.status}: ${err?.error?.error?.message || err.message})` : '';
@@ -378,7 +423,7 @@ export function createWonderCore(opts = {}) {
     const cont = normalizeContinueFrom(body.continueFrom);
     if (cont?.error) return t.json(cont.status, { ok: false, error: cont.error });
     const level = ['beginner', 'intermediate', 'advanced'].includes(body.level) ? body.level : 'beginner';
-    const material = await loadMaterial(body.materialId); // Phase 10
+    let material = await loadMaterial(body.materialId); // Phase 10
     if (material?.missing) return t.json(404, { ok: false, error: 'That material is no longer stored on this server. Add it again from Today.' });
     // Phase 3: web search on by default for lessons; a lesson taught from the learner's own
     // material stays faithful to it unless search is asked for explicitly
@@ -415,13 +460,22 @@ export function createWonderCore(opts = {}) {
           learnerKnows(body, 'lesson'),
           body.memoryEnabled !== false ? insightsContext(body.learnerInsights) : '', // Phase 9
         );
-        let messages = cont
+        const firstMessages = () => (cont
           ? [{ role: 'user', content: userTurn(steeringUserContent(request, cont.kept, cont.instruction, { mode: cont.mode, fromPage: cont.fromPage })) }]
-          : [{ role: 'user', content: userTurn(request) }];
+          : [{ role: 'user', content: userTurn(request) }]);
+        let messages = firstMessages();
         for (;;) {
           const params = withWebSearch(buildStreamParams({ system: LESSON_SYSTEM_PROMPT, context, messages, effort: 'medium' }), useWebSearch);
           const grounded = useWebSearch || material ? groundedStream(writer, sources, material ? materialCitation([material.meta]) : undefined) : undefined;
-          result = await runClaude(writer, params, onText, op.attempt(), grounded);
+          result = await runClaude(writer, params, onText, op.attempt(), grounded, { retryable: (err) => !writer.markdown && unreadablePdf(err, material) });
+          if (result.status === 'retry') { // the PDF itself was refused: teach from its text layer
+            const text = await pdfAsText(material);
+            if (text.error) { writer.fail(text.error, 'bad_request'); result = { status: 'failed' }; break; }
+            material = text;
+            writer.reasoning("Claude couldn't read the PDF's pages, so this lesson uses the book's text…");
+            messages = firstMessages();
+            continue;
+          }
           if (result.status === 'done') endAttempt();
           if (result.status !== 'aborted' && result.status !== 'done') break;
           const instruction = nextSteer();
@@ -545,16 +599,25 @@ export function createWonderCore(opts = {}) {
     const topic = clean(body.topic, 300);
     if (!topic) return t.json(400, { ok: false, error: 'topic is required' });
     const level = ['beginner', 'intermediate', 'advanced'].includes(body.level) ? body.level : 'beginner';
-    const material = await loadMaterial(body.materialId); // Phase 10: a course that follows the learner's material
+    let material = await loadMaterial(body.materialId); // Phase 10: a course that follows the learner's material
     if (material?.missing) return t.json(404, { ok: false, error: 'That material is no longer stored on this server.' });
     if (state.mode === 'claude') {
       try {
         const params = buildStructuredParams({ system: COURSE_SYSTEM_PROMPT, schema: COURSE_PLAN_SCHEMA, user: `Topic: ${topic}\nLevel: ${level}`, effort: 'low' });
-        if (material) {
-          // structured output: the document goes in without citations (they don't combine)
-          params.messages = [{ role: 'user', content: [documentBlock(material.meta, material.data, { citations: false }), { type: 'text', text: `Plan a course that teaches the attached material "${material.meta.title}", following its structure and order. Each lesson covers one part of it; lesson summaries name what the learner will be able to explain from that part.\nLevel: ${level}` }] }];
+        // structured output: the document goes in without citations (they don't combine)
+        const fromMaterial = () => { params.messages = [{ role: 'user', content: [documentBlock(material.meta, material.data, { citations: false }), { type: 'text', text: `Plan a course that teaches the attached material "${material.meta.title}", following its structure and order. Each lesson covers one part of it; lesson summaries name what the learner will be able to explain from that part.\nLevel: ${level}` }] }]; };
+        if (material) fromMaterial();
+        let plan;
+        try {
+          plan = await createStructured(state.client, params);
+        } catch (err) {
+          if (!unreadablePdf(err, material)) throw err;
+          const text = await pdfAsText(material); // the PDF itself was refused: plan from its text layer
+          if (text.error) return t.json(422, { ok: false, error: text.error, code: 'bad_request' });
+          material = text;
+          fromMaterial();
+          plan = await createStructured(state.client, params);
         }
-        const plan = await createStructured(state.client, params);
         const sections = (plan.sections || []).map((s) => ({ title: clean(s.title, 120), lessons: (s.lessons || []).map((l) => ({ title: clean(l.title, 160), summary: clean(l.summary, 300) })).filter((l) => l.title).slice(0, 4) })).filter((s) => s.title && s.lessons.length).slice(0, 4);
         if (!sections.length) throw new Error('empty plan');
         return t.json(200, { ok: true, plan: { title: clean(plan.title, 120) || topic, description: clean(plan.description, 400), level, sections } });
@@ -709,10 +772,33 @@ export function createWonderCore(opts = {}) {
     // Phase 10: the learner's own material
     'GET /api/materials': async (t) => t.json(200, { ok: true, items: await materials.list() }),
     'POST /api/materials': async (t, body) => {
-      const r = await materials.add({ title: body.title, kind: body.kind, text: body.text, base64: body.base64, filename: body.filename });
-      if (!r.ok) return t.json(400, r);
+      let bytes;
+      if (body.upload != null) { // a PDF sent in parts
+        bytes = await takeUpload(uploadParts, body.upload, body.parts);
+        if (!bytes) return t.json(400, { ok: false, error: 'Part of that upload is missing. Attach the file again.' });
+      }
+      const prepared = prepareMaterial({ title: body.title, kind: body.kind, text: body.text, base64: body.base64, bytes, filename: body.filename });
+      if (!prepared.ok) return t.json(400, prepared);
+      const tokens = await materialTokens(prepared.meta, prepared.data);
+      if (tokens?.error) return t.json(400, { ok: false, error: tokens.error });
+      if (tokens) prepared.meta.tokens = tokens;
+      const r = await materials.save(prepared);
       logger.info?.(`[wonder] material added: ${r.item.kind}, ${r.item.chars ?? r.item.bytes} ${r.item.kind === 'pdf' ? 'bytes' : 'chars'}`);
       t.json(200, { ok: true, item: r.item, items: await materials.list() });
+    },
+    'POST /api/materials/part': async (t, body) => {
+      const index = Number(body.index);
+      const total = Number(body.total);
+      if (!Number.isInteger(total) || total < 1 || !Number.isInteger(index) || index < 0 || index >= total) return t.json(400, { ok: false, error: 'Bad upload part' });
+      if (total > MAX_PARTS) return t.json(400, { ok: false, error: pdfTooLarge(total * PART_BYTES) });
+      const upload = index === 0 ? newUploadId() : String(body.upload ?? '');
+      const b64 = String(body.base64 ?? '');
+      if (!UPLOAD_ID_RE.test(upload) || !isBase64(b64)) return t.json(400, { ok: false, error: 'Bad upload part' });
+      const bytes = Buffer.from(b64, 'base64');
+      if (bytes.length > PART_BYTES) return t.json(413, { ok: false, error: 'Upload part too large' });
+      if (index === 0) await pruneUploads(uploadParts); // a new upload: drop abandoned ones first
+      await uploadParts.put(upload, index, bytes);
+      t.json(200, { ok: true, upload });
     },
     'DELETE /api/materials': async (t, body) => {
       const id = new URL(t.url, 'http://localhost').searchParams.get('id') || body.id;
@@ -730,13 +816,15 @@ export function createWonderCore(opts = {}) {
     },
     // account sync + Web Push
     'GET /api/account': account,
+    'DELETE /api/account': deleteAccount,
     'POST /api/sync': syncRoute,
     'POST /api/push/subscribe': pushSubscribe,
     'DELETE /api/push/subscribe': pushUnsubscribe,
     'GET /api/cron/reminders': cronReminders,
   };
 
-  const status = () => ({ mode: state.mode, model: MODEL, videos: videoSource(), ...(state.mode === 'demo' ? { demoReason: state.demoReason } : {}) });
+  // materials: the upload limits public/today.js checks before sending a file
+  const status = () => ({ mode: state.mode, model: MODEL, videos: videoSource(), materials: { maxPdfBytes: MAX_PDF_BYTES, partBytes: PART_BYTES }, ...(state.mode === 'demo' ? { demoReason: state.demoReason } : {}) });
 
   /** Run one API request. Resolves when the response has ended; a 404 for unknown API paths. */
   async function handle(method, pathname, body, t) {
@@ -748,19 +836,23 @@ export function createWonderCore(opts = {}) {
     // account sync on: memory and material are the signed-in user's, and nobody else's
     const userId = typeof t.userId === 'string' && t.userId ? t.userId : null;
     if (!userId && SIGNED_IN_ONLY.has(`${method} ${pathname}`)) return t.json(401, { ok: false, error: 'Sign in first', signedOut: true });
-    // routes that call Claude: signed in only, and within the user's daily caps (server/usage.js)
+    const userMats = userId ? userMaterials(sync, userId) : null;
+    // routes that call Claude: signed in only, and within the user's daily caps (server/usage.js).
+    // A lesson or course plan taught from a long material counts as more than one.
     const spend = usageKind(method, pathname, body);
     if (spend) {
-      if (!userId) return t.json(401, { ok: false, error: 'Sign in to use Wonder: lessons, the tutor and the Teacher need an account.', signedOut: true });
+      if (!userId) return t.json(401, { ok: false, error: 'Sign in to use Mull: lessons, the tutor and the Teacher need an account.', signedOut: true });
       if (state.mode === 'claude') {
         const plan = await userPlans(sync).planId(userId);
-        const r = await usageGate(sync).charge(userId, spend, { retryKey: cleanKey(body?.streamKey) || cleanKey(body?.turnId), plan });
+        const units = body?.materialId ? materialCharge(await userMats.meta(body.materialId)) : 1;
+        const r = await usageGate(sync).charge(userId, spend, { retryKey: cleanKey(body?.streamKey) || cleanKey(body?.turnId), units, plan });
         if (!r.ok) return t.json(429, r.body);
       }
     }
     const scope = { userId, sync, memory: signedOutMemory(), materials: signedOutMaterials() };
     if (userId) {
-      scope.materials = userMaterials(sync, userId);
+      scope.materials = userMats;
+      scope.parts = userUploadParts(sync, userId);
       if (MEMORY_PATHS.test(pathname)) scope.memory = await loadUserMemory(sync, userId, { logger });
     }
     // memory saves finish before the response does: a serverless function may be frozen once
@@ -794,6 +886,16 @@ export function createWonderCore(opts = {}) {
       ...(userId && state.mode === 'claude' ? { usage: await usageGate(sync).today(userId, plan.id) } : {}),
       push: sync && push ? { publicKey: push.publicKey } : null,
     });
+  }
+
+  async function deleteAccount(t) {
+    const { userId, sync } = scopes.getStore() || {};
+    if (!sync) return t.json(404, { ok: false, error: 'Accounts are not configured on this server' });
+    await sync.deleteAccount(userId);
+    // then the sign-in itself, in the same request, so a closed tab cannot leave it behind
+    const authDeleted = (await t.deleteAuthUser?.()) === true;
+    logger.info?.(`[wonder] account deleted${authDeleted ? ' with its sign-in' : ''}`);
+    t.json(200, { ok: true, authDeleted });
   }
 
   async function syncRoute(t, body) {
@@ -839,10 +941,11 @@ export function createWonderCore(opts = {}) {
 }
 
 /** Node transport: the core over node:http req/res. */
-function nodeTransport(req, res, userId = null) {
+function nodeTransport(req, res, userId = null, deleteAuthUser = null) {
   return {
     url: req.url,
     userId,
+    deleteAuthUser,
     authorization: req.headers.authorization || '',
     json: (status, body) => sendJson(res, status, body),
     send: (status, headers, bytes) => { res.writeHead(status, headers); res.end(bytes); },
@@ -871,7 +974,7 @@ export function createWonderServer(opts = {}) {
     try {
       if (core.hasRoute(req.method, url.pathname)) {
         const body = req.method === 'GET' ? {} : await readJson(req, bodyLimit(url.pathname));
-        return await core.handle(req.method, url.pathname, body, nodeTransport(req, res, (await opts.getUserId?.(req)) || null));
+        return await core.handle(req.method, url.pathname, body, nodeTransport(req, res, (await opts.getUserId?.(req)) || null, opts.deleteAuthUser ?? null));
       }
       if (url.pathname.startsWith('/api/')) return sendJson(res, 404, { ok: false, error: 'Not found' });
       if ((req.method === 'GET' || req.method === 'HEAD') && serveStatic(req, res, url.pathname)) return;
