@@ -861,7 +861,7 @@ export function createWonderCore(opts = {}) {
     const spend = usageKind(method, pathname, body);
     if (spend) {
       if (!userId) return t.json(401, { ok: false, error: 'Sign in to use Mull: lessons, the tutor and the Teacher need an account.', signedOut: true });
-      if (state.mode === 'claude') {
+      if (state.mode === 'claude' && !userPlans(sync).isAdmin(userId)) { // admins have no caps
         const plan = await userPlans(sync).planId(userId);
         const units = body?.materialId ? materialCharge(await userMats.meta(body.materialId)) : 1;
         const r = await usageGate(sync).charge(userId, spend, { retryKey: cleanKey(body?.streamKey) || cleanKey(body?.turnId), units, plan });
@@ -904,7 +904,7 @@ export function createWonderCore(opts = {}) {
       signedIn: !!userId,
       // billing: what the browser may offer (upgrade, manage); null without a payment provider
       ...(userId ? { userId, records: await sync.count(userId), plan, billing: pay ? await pay.offer(record, plan) : null } : {}),
-      ...(userId && state.mode === 'claude' ? { usage: await usageGate(sync).today(userId, plan.id) } : {}),
+      ...(userId && state.mode === 'claude' ? { usage: await usageGate(sync).today(userId, plan.id, { unlimited: plan.source === 'admin' }) } : {}),
       push: sync && push ? { publicKey: push.publicKey } : null,
     });
   }

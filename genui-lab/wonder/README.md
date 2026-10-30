@@ -886,6 +886,7 @@ Accounts are off unless **both** Neon Auth and a database are set. Without them 
 
 **Plans** (`server/plans.js`). Every signed-in user is on **Free** unless they are on **Pro**. The plan only decides which daily caps apply.
 - **Who is Pro.** A user whose plan record (`wonder_plans`, one row per user) says `pro` with status `active`, `trialing` or `past_due`, until 3 days after its period end (so a late renewal never drops a payer to Free). Or a user id listed in `WONDER_PRO_USERS`, which comps Pro without a record.
+- **Admins.** User ids in `WONDER_ADMIN_USERS` show as Pro ("Admin on this Mull server") and skip the daily caps entirely; their requests are not counted. Find an id with `GET /api/account` while signed in (`userId`).
 - **Plan records** are provider-neutral: `{plan, status, provider, customerId, subscriptionId, periodEnd, cancelAtPeriodEnd}`. `createPlans().setPlan()` validates and stores one.
 - **Failing safe.** A plan lookup that fails is logged and counts as Free.
 
@@ -908,7 +909,7 @@ Accounts are off unless **both** Neon Auth and a database are set. Without them 
 
 **Tests.**
 - `test/usage.test.js`: caps per user, kind and day; free retries and their bounds; failing open; 401 and 429 over HTTP; demo mode and accounts off; non-retryable errors in the browser.
-- `test/plans.test.js`: who is Pro (status, period and grace, comped users), record validation, Pro caps and their overrides, and Pro vs Free over HTTP with the plan on `/api/account`.
+- `test/plans.test.js`: who is Pro (status, period and grace, comped users, admins), record validation, Pro caps and their overrides, and Pro vs Free over HTTP with the plan on `/api/account`.
 - `test/billing.test.js`: webhook signatures (both key kinds, replay window), subscription to plan record, picking the deciding subscription, older reads dropped, and against a fake Polar API: checkout and its second-subscription guard, webhook to Pro, portal, cancel, two subscriptions, product switches, ignored events, which errors are retried, account deletion ending every subscription and the customer (and its failure paths), and a slow price lookup.
 - `test/sync-pg.test.js` (with `WONDER_TEST_DATABASE_URL`): plan records round-trip in Postgres, an older read is dropped, and the plan goes with the account.
 - `test/landing.test.js`: who the home page sends to `/welcome`, with account sync on and off, and the signed-out deep link kept for after sign-in.

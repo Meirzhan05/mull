@@ -1,6 +1,7 @@
 // Free and Pro plans (accounts on). Every signed-in user is on Free unless their plan record says
 // Pro and is in good standing, or the server comps them with WONDER_PRO_USERS. The plan only
 // picks which daily caps apply (server/usage.js); nothing else in the app changes with it.
+// Admins (WONDER_ADMIN_USERS) show as Pro and have no daily caps at all.
 //
 // Pro is bought through Polar (server/billing.js), whose webhooks write plan records with
 // setPlan(). The record is provider-neutral, so another provider could write it too.
@@ -13,9 +14,16 @@ export const PLAN_STATUSES = Object.freeze([...GOOD_STANDING, 'canceled', 'unpai
 /** Pro outlasts its period end by this much, so a late renewal webhook never drops a payer to Free. */
 export const PERIOD_GRACE_MS = 3 * 24 * 3600_000;
 
+const userList = (v) => new Set(String(v || '').split(/[\s,]+/).filter(Boolean));
+
 /** User ids comped to Pro (WONDER_PRO_USERS, comma or space separated). */
 export function compedUsers(env = process.env) {
-  return new Set(String(env.WONDER_PRO_USERS || '').split(/[\s,]+/).filter(Boolean));
+  return userList(env.WONDER_PRO_USERS);
+}
+
+/** Admin user ids (WONDER_ADMIN_USERS, comma or space separated): Pro, with no daily caps. */
+export function adminUsers(env = process.env) {
+  return userList(env.WONDER_ADMIN_USERS);
 }
 
 /**
@@ -53,7 +61,8 @@ export function effectivePlan(record, { now = Date.now(), comped = false } = {})
  * planOf never throws: a database error is logged and counts as Free.
  */
 export function createPlans({ db, env = process.env, now = () => Date.now(), logger = console } = {}) {
-  const comped = compedUsers(env);
+  const admins = adminUsers(env);
+  const comped = new Set([...compedUsers(env), ...admins]);
   async function record(userId) {
     try {
       return await db.getPlan(userId);
@@ -67,6 +76,8 @@ export function createPlans({ db, env = process.env, now = () => Date.now(), log
     stored: (userId) => db.getPlan(userId),
     /** The stored record, or null on a database error (logged). */
     record,
+    /** Admins skip the daily caps (server/usage.js) entirely. */
+    isAdmin: (userId) => admins.has(userId),
     /** Just the plan id, for the usage gate. */
     async planId(userId) {
       if (comped.has(userId)) return 'pro';
@@ -79,7 +90,7 @@ export function createPlans({ db, env = process.env, now = () => Date.now(), log
       return {
         id,
         name: PLAN_NAMES[id],
-        source: comped.has(userId) ? 'comped' : id === 'pro' ? 'subscription' : null,
+        source: admins.has(userId) ? 'admin' : comped.has(userId) ? 'comped' : id === 'pro' ? 'subscription' : null,
         status: id === 'pro' && r ? r.status : null,
         renewsAt: id === 'pro' && r?.periodEnd && !r.cancelAtPeriodEnd ? new Date(r.periodEnd).toISOString() : null,
         endsAt: id === 'pro' && r?.periodEnd && r.cancelAtPeriodEnd ? new Date(r.periodEnd).toISOString() : null,

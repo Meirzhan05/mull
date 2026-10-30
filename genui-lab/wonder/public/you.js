@@ -117,7 +117,8 @@ async function showPlan(row, btn, live = () => true) {
   }
   if (!live()) return;
   const { plan, billing } = a;
-  const standing = plan.source === 'comped' ? 'Given to you by this Mull server.'
+  const standing = plan.source === 'admin' ? 'Admin on this Mull server: no daily limits.'
+    : plan.source === 'comped' ? 'Given to you by this Mull server.'
     : plan.endsAt ? `Ends ${shortDate(plan.endsAt)}.`
       : plan.renewsAt ? `Renews ${shortDate(plan.renewsAt)}.`
         : plan.id === 'pro' ? '' : 'Every account starts here.';

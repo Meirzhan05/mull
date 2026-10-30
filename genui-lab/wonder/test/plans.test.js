@@ -6,7 +6,7 @@ import { createWonderServer } from '../server/app.js';
 import { createMemoryStore } from '../server/memory.js';
 import { createSyncService } from '../server/sync/service.js';
 import { createMemoryDb } from '../server/sync/memory-db.js';
-import { createPlans, effectivePlan, cleanPlanRecord, compedUsers, PERIOD_GRACE_MS } from '../server/plans.js';
+import { createPlans, effectivePlan, cleanPlanRecord, compedUsers, adminUsers, PERIOD_GRACE_MS } from '../server/plans.js';
 import { usageLimits, createUsageGate, DEFAULT_LIMITS, DEFAULT_PRO_LIMITS } from '../server/usage.js';
 import { fakeClient } from './helpers.js';
 
@@ -26,6 +26,10 @@ test('effective plan: Pro only in good standing and within its period (plus grac
   assert.equal(effectivePlan({ plan: 'free', status: 'active' }, { now }), 'free');
   assert.deepEqual([...compedUsers({ WONDER_PRO_USERS: ' u1, u2 u3,,' })], ['u1', 'u2', 'u3']);
   assert.equal(compedUsers({}).size, 0);
+  assert.deepEqual([...adminUsers({ WONDER_ADMIN_USERS: 'me, you' })], ['me', 'you']);
+  const plans = createPlans({ db: createMemoryDb(), env: { WONDER_ADMIN_USERS: 'me' }, logger: quiet });
+  assert.equal(plans.isAdmin('me'), true);
+  assert.equal(plans.isAdmin('bob'), false);
 });
 
 test('plan records are cleaned; unknown plans and statuses are refused', () => {
@@ -78,7 +82,7 @@ test('over HTTP: a Pro user (stored or comped) gets Pro caps, and /api/account s
   const server = createWonderServer({
     mode: 'claude', client: fakeClient({ text: '# T\n\nBody.' }), demoDelayMs: 0, logger: quiet, memory: createMemoryStore({ file: null }), push: null, sync,
     getUserId: (req) => req.headers['x-test-user'] || null,
-    env: { WONDER_LIMIT_LESSON: '1', WONDER_PRO_LIMIT_LESSON: '2', WONDER_PRO_USERS: 'carol' },
+    env: { WONDER_LIMIT_LESSON: '1', WONDER_PRO_LIMIT_LESSON: '2', WONDER_PRO_USERS: 'carol', WONDER_ADMIN_USERS: 'dana' },
   });
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   const base = `http://127.0.0.1:${server.address().port}`;
@@ -95,6 +99,11 @@ test('over HTTP: a Pro user (stored or comped) gets Pro caps, and /api/account s
     assert.deepEqual(await statuses('alice'), [200, 200, 429], 'stored Pro: 2 a day');
     assert.deepEqual(await statuses('carol'), [200, 200, 429], 'comped Pro: 2 a day');
     assert.deepEqual(await statuses('bob'), [200, 429, 429], 'Free: 1 a day');
+    assert.deepEqual(await statuses('dana'), [200, 200, 200], 'admin: no caps');
+    const dana = (await call('dana', 'GET', '/api/account')).body;
+    assert.equal(dana.plan.id, 'pro');
+    assert.equal(dana.plan.source, 'admin');
+    assert.equal(dana.usage.kinds.lesson.max, null);
     const alice = (await call('alice', 'GET', '/api/account')).body;
     assert.equal(alice.plan.id, 'pro');
     assert.equal(alice.plan.source, 'subscription');

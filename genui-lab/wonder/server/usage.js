@@ -122,11 +122,11 @@ export function createUsageGate({ db, limits = usageLimits(), proLimits = limits
       }
       return { ok: true, used: r.used };
     },
-    /** Today's counts for one user on their plan (the You page). */
-    async today(userId, plan = 'free') {
+    /** Today's counts for one user on their plan (the You page); `unlimited`: no caps (admins). */
+    async today(userId, plan = 'free', { unlimited = false } = {}) {
       const { day, resetsAt } = usageDay(now());
       const used = await db.quotaUsed(userId, day).catch(() => ({}));
-      return { day, plan, resetsAt: new Date(resetsAt).toISOString(), kinds: Object.fromEntries(Object.entries(capsFor(plan)).map(([k, max]) => [k, { used: used[k] || 0, max: max === Infinity ? null : max }])) };
+      return { day, plan, resetsAt: new Date(resetsAt).toISOString(), kinds: Object.fromEntries(Object.entries(capsFor(plan)).map(([k, max]) => [k, { used: used[k] || 0, max: unlimited || max === Infinity ? null : max }])) };
     },
   };
 }
