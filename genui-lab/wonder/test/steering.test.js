@@ -6,6 +6,7 @@ import { steeringUserContent, createSteeringRegistry } from '../server/steering.
 import { trimToLastPage, steerReducer, STEER_CHIPS, pageCount } from '../public/steering-core.js';
 import { ConversationSourceParser, ConversationTurn, validateRecord } from '../../chatgpt-dil/src/stream.js';
 import { compileWonder } from '../server/compile.js';
+import { steerableClient, STEADY_LESSON as LESSON } from './helpers.js';
 
 const quiet = { warn() {}, error() {}, log() {} };
 async function withServer(opts, fn) {
@@ -32,43 +33,6 @@ async function readStream(res, onRecord) {
   }
   parser.finish();
   return { recs, turn };
-}
-
-const LESSON = '# Steady lesson\n\nA hook sentence here.\n\n## Page one\n\nFirst page text that is complete.\n\n## Page two\n\nSecond page is still being wr';
-
-/** Fake client: the first stream emits LESSON slowly and stalls until aborted; later streams emit `rest`. */
-function steerableClient(rest) {
-  const calls = [];
-  return {
-    calls,
-    beta: {
-      messages: {
-        stream(params, opts) {
-          const n = calls.push({ params: structuredClone(params), opts });
-          const signal = opts?.signal;
-          const text = n === 1 ? LESSON : rest;
-          return {
-            async *[Symbol.asyncIterator]() {
-              yield { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } };
-              for (const piece of text.match(/[\s\S]{1,12}/g)) {
-                if (signal?.aborted) throw Object.assign(new Error('Request was aborted.'), { name: 'AbortError' });
-                yield { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: piece } };
-                await new Promise((r) => setTimeout(r, 1));
-              }
-              if (n === 1) {
-                // stall like a long generation until the steer aborts us
-                await new Promise((resolve) => { if (signal?.aborted) resolve(); else signal?.addEventListener('abort', resolve, { once: true }); });
-                throw Object.assign(new Error('Request was aborted.'), { name: 'AbortError' });
-              }
-              yield { type: 'content_block_stop', index: 0 };
-            },
-            async finalMessage() { return { stop_reason: 'end_turn', content: [{ type: 'text', text }] }; },
-          };
-        },
-      },
-    },
-    messages: { async create() { throw new Error('unused'); } },
-  };
 }
 
 test('trimToLastPage keeps complete pages only (fence-aware); pageCount', () => {

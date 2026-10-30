@@ -279,6 +279,9 @@ class Emitter {
     this.ordinals = new Map();
     this.partial = !!opts.partial;
     this.resolutionIdFor = opts.resolutionIdFor || defaultResolutionId;
+    // the component names a program may use; a capitalized tag outside it is not compiled to a
+    // component (its name would otherwise become a bare identifier, e.g. GenUI.dispatchAction)
+    this.allowed = opts.components ? new Set(opts.components) : null;
   }
   hoist(value) {
     const key = String(this.n++);
@@ -305,6 +308,11 @@ class Emitter {
   }
   component(node) {
     const name = node.name;
+    if (this.allowed && !this.allowed.has(name)) {
+      // keep what it wraps, drop the tag
+      const kids = node.children.length ? this.blocks(node.children) : [];
+      return kids.length ? `__dil.jsx(__dil.Fragment,null${kids.map((k) => ',' + k).join('')})` : 'null';
+    }
     this.components.add(name);
     const ord = this.ordinals.get(name) || 0;
     this.ordinals.set(name, ord + 1);
@@ -678,7 +686,9 @@ function stableStringify(v) {
 /**
  * Compile model output to a DIL program.
  * @param {string} markdown accumulated message markdown (may be a streamed prefix)
- * @param {{partial?: boolean, resolutionIdFor?: (name:string, props:object, ordinal:number)=>string}} [opts]
+ * @param {{partial?: boolean, resolutionIdFor?: (name:string, props:object, ordinal:number)=>string, components?: Iterable<string>}} [opts]
+ *   components: the only component names allowed; any other capitalized tag keeps its children
+ *   but is not compiled to a component (default: any name, as the stock compiler)
  * @returns {{code:string, constants:Record<string,any>, requiredComponents:string[], fallbackMarkdown:string}}
  */
 export function compile(markdown, opts = {}) {

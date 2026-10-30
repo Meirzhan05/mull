@@ -9,14 +9,16 @@
 // Pro users (server/plans.js) get the higher Pro caps instead, overridden with
 // WONDER_PRO_LIMIT_<KIND>.
 
+import { normalizePracticeItem } from '../public/practice-core.js';
+
 /** Default daily caps per Free user. */
 export const DEFAULT_LIMITS = Object.freeze({
-  lesson: 20, // POST /api/lesson/stream: new lessons, steers, resumes and revisions
+  lesson: 20, // POST /api/lesson/stream (new lessons, resumes, revisions) and accepted live steers
   tutor: 100, // POST /api/tutor/stream
   teacher: 60, // POST /api/teacher/stream
   course: 10, // POST /api/course/plan
   extract: 60, // POST /api/practice/extract and /api/memory/extract (after each lesson)
-  grade: 150, // free-response grading (widget action explain_grade)
+  grade: 150, // free-response grading (widget actions explain_grade, and practice_grade on an explain item)
 });
 
 /** Default daily caps per Pro user. */
@@ -24,7 +26,11 @@ export const DEFAULT_PRO_LIMITS = Object.freeze({ lesson: 100, tutor: 500, teach
 
 const NOUN = { lesson: 'lessons', tutor: 'tutor messages', teacher: 'Teacher messages', course: 'course plans', extract: 'card and memory extractions', grade: 'graded answers' };
 
-/** Routes that call Claude. A function decides from the body (widget actions vary). */
+/**
+ * Routes that call Claude. A function decides from the body (widget actions vary). A live steer
+ * (POST /api/lesson/steer) is charged as a lesson in app.js once the stream applies it, so a
+ * rejected steer costs nothing.
+ */
 const CLAUDE_ROUTES = {
   'POST /api/lesson/stream': 'lesson',
   'POST /api/tutor/stream': 'tutor',
@@ -32,7 +38,7 @@ const CLAUDE_ROUTES = {
   'POST /api/course/plan': 'course',
   'POST /api/practice/extract': 'extract',
   'POST /api/memory/extract': 'extract',
-  'POST /api/widget_action': (body) => (body?.action_type === 'explain_grade' ? 'grade' : null),
+  'POST /api/widget_action': (body) => (body?.action_type === 'explain_grade' || (body?.action_type === 'practice_grade' && normalizePracticeItem(body?.payload?.item)?.type === 'explain') ? 'grade' : null),
 };
 
 /** The usage kind a request spends, or null when it does not call Claude. */
