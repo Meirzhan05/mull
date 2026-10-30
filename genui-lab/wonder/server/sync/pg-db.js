@@ -90,7 +90,7 @@ export function createPgDb({ pool, blob = null }) {
         rev: async () => rev,
         deletedRev: async () => Number(u.deleted_rev),
         /**
-         * Delete account: the user's records, files, push subscriptions and reminder log. The
+         * Delete account: the user's records, files, push subscriptions, reminder log and plan. The
          * revision counter stays (deleted_rev marks where the delete happened), and so do usage
          * counts, so deleting and signing in again does not reset the day's caps.
          * @returns {Promise<string[]>} Blob paths to delete once this commits
@@ -100,6 +100,7 @@ export function createPgDb({ pool, blob = null }) {
           const { rows } = await client.query('DELETE FROM wonder_files WHERE user_id = $1 RETURNING blob_path', [userId]);
           await client.query('DELETE FROM wonder_push_subscriptions WHERE user_id = $1', [userId]);
           await client.query('DELETE FROM wonder_reminders_sent WHERE user_id = $1', [userId]);
+          await client.query('DELETE FROM wonder_plans WHERE user_id = $1', [userId]);
           await client.query('UPDATE wonder_users SET deleted_rev = rev WHERE id = $1', [userId]);
           return rows.map((r) => r.blob_path).filter(Boolean);
         },

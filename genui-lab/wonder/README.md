@@ -882,17 +882,31 @@ Accounts are off unless **both** Neon Auth and a database are set. Without them 
 - **Retries.** A dropped stream's automatic retries (same `streamKey`/`turnId`) are free twice within 10 minutes; reusing a key beyond that is charged.
 - **Database errors** fail open and are logged, so a hiccup never locks everyone out.
 - **Where caps don't apply.** Demo mode has no caps, since it costs nothing. Without accounts there is neither sign-in nor caps.
-- **You page.** The signed-in account card shows the plan; today's use comes back from `GET /api/account` (`usage`) but the app does not show it.
+- **You page.** The signed-in account card shows the plan, with Upgrade or Manage billing when billing is on; today's use comes back from `GET /api/account` (`usage`) but the app does not show it.
 
 **Plans** (`server/plans.js`). Every signed-in user is on **Free** unless they are on **Pro**. The plan only decides which daily caps apply.
 - **Who is Pro.** A user whose plan record (`wonder_plans`, one row per user) says `pro` with status `active`, `trialing` or `past_due`, until 3 days after its period end (so a late renewal never drops a payer to Free). Or a user id listed in `WONDER_PRO_USERS`, which comps Pro without a record.
 - **Plan records** are provider-neutral: `{plan, status, provider, customerId, subscriptionId, periodEnd, cancelAtPeriodEnd}`. `createPlans().setPlan()` validates and stores one.
-- **Payments are not wired.** No payment provider is configured, so nobody can buy Pro, `/api/account` sends `billing: null` and the You page has no upgrade button. Adding a provider means a checkout route, a billing-portal route and a webhook that calls `setPlan()`.
 - **Failing safe.** A plan lookup that fails is logged and counts as Free.
+
+**Buying Pro** (`server/billing.js`). Pro is sold through [Polar](https://polar.sh), a merchant of record: Polar runs the checkout, charges sales tax and VAT, and pays the seller out (it pays out to many countries Stripe does not, Kazakhstan among them). Off unless all three of `POLAR_ACCESS_TOKEN`, `POLAR_WEBHOOK_SECRET` and `POLAR_PRODUCT_ID` are set; then `/api/account` sends `billing: {provider, sandbox, price, canUpgrade, canManage}` and the You page shows **Upgrade** or **Manage billing**.
+- **Checkout.** `POST /api/billing/checkout` makes a Polar checkout for the Pro product with the user id as Polar's external customer id, and the browser goes there. Back on `/?checkout_id=…#/you`, the You page waits up to 30 seconds for the webhook to make the account Pro.
+- **Manage.** `POST /api/billing/portal` opens Polar's customer portal (card, invoices, cancel) for the stored customer.
+- **Webhook.** `POST /api/billing/webhook` checks the Standard Webhooks signature over the raw body (secrets made since September 2026 and older ones both work), then fetches the subscription from Polar and stores it as the plan record, so late or out-of-order events cannot leave a stale state. Events for other products or naming no user are ignored; an ended old subscription never replaces a live one. Any failure answers 500 so Polar redelivers.
+- **Cancelling.** Cancel at period end keeps Pro until then (`endsAt`); a revoked subscription is Free.
+- **Deleting an account** ends its Pro subscription in Polar first. If Polar cannot be reached, nothing is deleted and the user is told to try again, so a deleted account is never charged again.
+- **Sandbox first.** `POLAR_SERVER` is `sandbox` unless set to `production`. Sandbox has its own dashboard (sandbox.polar.sh), tokens and test card (4242 4242 4242 4242).
+- **Setup.**
+  1. Create an organization on [sandbox.polar.sh](https://sandbox.polar.sh) (later the same on polar.sh, with payouts set up under Finance).
+  2. Add a product **Pro** with a monthly price. Copy its id into `POLAR_PRODUCT_ID`.
+  3. Settings → Developers: create an organization access token with `checkouts:write`, `customer_sessions:write`, `products:read`, `subscriptions:read` and `subscriptions:write` scopes, into `POLAR_ACCESS_TOKEN`.
+  4. Settings → Webhooks: add an endpoint `https://<your domain>/api/billing/webhook`, format **Raw**, with the `subscription.*` events. Copy its secret into `POLAR_WEBHOOK_SECRET`.
+  5. Set the same variables on Vercel (`vercel env add`) and redeploy.
 
 **Tests.**
 - `test/usage.test.js`: caps per user, kind and day; free retries and their bounds; failing open; 401 and 429 over HTTP; demo mode and accounts off; non-retryable errors in the browser.
 - `test/plans.test.js`: who is Pro (status, period and grace, comped users), record validation, Pro caps and their overrides, and Pro vs Free over HTTP with the plan on `/api/account`.
+- `test/billing.test.js`: webhook signatures (both key kinds, replay window), subscription to plan record, and against a fake Polar API: checkout, webhook to Pro, portal, cancel, ignored and stale events, retries, and account deletion ending the subscription.
 - `test/landing.test.js`: who the home page sends to `/welcome`, with account sync on and off, and the signed-out deep link kept for after sign-in.
 - `test/start.test.js`: where `#/start[/<topic>]` goes (sign-in, onboarding, the lesson, home).
 - `test/sync*.test.js`: sync, authorization and statement scoping.

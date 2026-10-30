@@ -53,6 +53,7 @@ export function createMemoryDb() {
       const result = await fn(tx);
       if (wiped) {
         for (const m of [u.records, u.subs, u.reminders, u.files]) m.clear();
+        u.plan = null;
         u.deletedRev = rev;
       }
       for (const [k, r] of pending) u.records.set(k, r);
@@ -113,7 +114,7 @@ export function createMemoryDb() {
     async getFile(userId, id) { const f = users.get(userId)?.files.get(id); return f ? { bytes: Buffer.from(f.bytes), contentType: f.contentType } : null; },
     async deleteFile(userId, id) { users.get(userId)?.files.delete(id); },
     async listFiles(userId, prefix = '') { return [...(users.get(userId)?.files.keys() || [])].filter((id) => id.startsWith(prefix)); },
-    /** Delete account: records, files, push subscriptions and the reminder log (tx.wipe). */
+    /** Delete account: records, files, push subscriptions, the reminder log and the plan (tx.wipe). */
     async deleteUser(userId) { await transaction(userId, (tx) => tx.wipe()); },
     async close() {},
   };

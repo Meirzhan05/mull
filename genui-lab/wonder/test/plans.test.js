@@ -1,5 +1,5 @@
-// Free and Pro plans (server/plans.js): which daily caps a signed-in user gets. Payments are not
-// wired, so Pro comes from a stored plan record or WONDER_PRO_USERS.
+// Free and Pro plans (server/plans.js): which daily caps a signed-in user gets. Pro comes from a
+// stored plan record (written by Polar webhooks, test/billing.test.js) or WONDER_PRO_USERS.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createWonderServer } from '../server/app.js';
@@ -19,7 +19,7 @@ test('effective plan: Pro only in good standing and within its period (plus grac
   assert.equal(effectivePlan(null, { now }), 'free');
   assert.equal(effectivePlan(null, { now, comped: true }), 'pro');
   for (const s of ['active', 'trialing', 'past_due']) assert.equal(effectivePlan(pro(s), { now }), 'pro', s);
-  for (const s of ['canceled', 'unpaid', 'incomplete', 'expired']) assert.equal(effectivePlan(pro(s), { now }), 'free', s);
+  for (const s of ['canceled', 'unpaid', 'incomplete', 'expired', 'paused']) assert.equal(effectivePlan(pro(s), { now }), 'free', s);
   assert.equal(effectivePlan(pro('active', null), { now }), 'pro', 'no period end: open-ended');
   assert.equal(effectivePlan(pro('active', now - PERIOD_GRACE_MS + 1000), { now }), 'pro', 'a late renewal keeps Pro during the grace');
   assert.equal(effectivePlan(pro('active', now - PERIOD_GRACE_MS - 1000), { now }), 'free', 'past the grace: Free');
@@ -39,7 +39,6 @@ test('plans over the database: describe, comped users, and a failing lookup coun
   const now = Date.UTC(2026, 9, 24);
   const db = createMemoryDb();
   const plans = createPlans({ db, env: { WONDER_PRO_USERS: 'carol' }, now: () => now, logger: quiet });
-  assert.equal(plans.billing, null, 'no payment provider yet');
   assert.deepEqual(await plans.describe('alice'), { id: 'free', name: 'Free', source: null, status: null, renewsAt: null, endsAt: null });
   await plans.setPlan('alice', { plan: 'pro', status: 'active', provider: 'test', periodEnd: now + 30 * DAY });
   assert.equal(await plans.planId('alice'), 'pro');

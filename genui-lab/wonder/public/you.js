@@ -11,8 +11,8 @@ import { accountInfo, signedInAccount, currentSyncStatus, onSyncStatus, syncEngi
 export const TEXT_SIZES = [['0.92', 'Small'], ['1', 'Default'], ['1.1', 'Large'], ['1.2', 'Larger']];
 
 /**
- * Account, at the end of the page: sign in or out, and delete the account. Shown only when the
- * server has accounts configured.
+ * Account, at the end of the page: sign in or out, the plan (upgrade or manage billing), and
+ * delete the account. Shown only when the server has accounts configured.
  */
 function accountPanel(ctx) {
   const body = el('div', { class: 'card settings' });
@@ -31,7 +31,7 @@ function accountPanel(ctx) {
   // the plan, fetched once per sign-in rather than on every sync status change
   const planEl = el('div', { class: 'setting', hidden: true });
   let planFor = null;
-  const planRow = () => { if (planFor !== accountLabel()) { planFor = accountLabel(); showPlan(planEl); } return planEl; };
+  const planRow = () => { if (planFor !== accountLabel()) { planFor = accountLabel(); showPlan(planEl, btn); } return planEl; };
   const draw = () => {
     const info = accountInfo();
     sec.hidden = !info?.sync;
@@ -60,7 +60,7 @@ function accountPanel(ctx) {
         planRow(),
         row('Delete account', 'Deletes your lessons, cards, progress, memory and material for good.',
           btn('Delete account', 'btn-danger', async () => {
-            if (confirm('Delete your Mull account? Your lessons, cards, progress, memory and material are deleted for good. This cannot be undone.')) await deleteAccount();
+            if (confirm('Delete your Mull account? Your lessons, cards, progress, memory and material are deleted for good, and a Pro subscription ends now. This cannot be undone.')) await deleteAccount();
           }, 'Deleting…')));
     }
   };
@@ -73,25 +73,48 @@ function accountPanel(ctx) {
 const shortDate = (iso) => new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
 
 /**
- * The account's plan (server/plans.js) and today's use of its daily caps (server/usage.js), from
- * /api/account. Hidden when the server sends no plan. No upgrade button until payments are wired.
+ * The account's plan (server/plans.js) from /api/account, with Upgrade (a Polar checkout) or
+ * Manage billing (Polar's customer portal) when the server offers billing (server/billing.js).
+ * Hidden when the server sends no plan. Back from a checkout (?checkout_id=), it waits for the
+ * webhook to make the account Pro.
  */
-async function showPlan(row) {
-  let a = null;
-  try { a = await (await fetch('/api/account', { headers: { Accept: 'application/json' } })).json(); } catch {}
+async function showPlan(row, btn) {
+  const load = async () => { try { return await (await fetch('/api/account', { headers: { Accept: 'application/json' } })).json(); } catch { return null; } };
+  let a = await load();
   if (!a?.plan) return;
-  const { plan, usage } = a;
-  const kinds = usage?.kinds || {};
-  const part = (k, noun) => (kinds[k]?.max != null ? `${kinds[k].used} of ${kinds[k].max} ${noun}` : null);
-  const parts = [part('lesson', 'lessons'), part('tutor', 'tutor messages'), part('teacher', 'Teacher messages')].filter(Boolean);
+  const back = new URLSearchParams(location.search).has('checkout_id');
+  if (back) {
+    history.replaceState(null, '', location.pathname + location.hash);
+    for (let i = 0; i < 15 && a?.plan?.id !== 'pro'; i++) {
+      row.replaceChildren(el('div', { class: 'setting-text' }, el('strong', null, 'Finishing your upgrade…'), el('p', { class: 'muted small' }, 'Waiting for the payment to come through.')));
+      row.hidden = false;
+      await new Promise((r) => setTimeout(r, 2000));
+      a = (await load()) || a;
+    }
+    toast(a.plan.id === 'pro' ? 'You are on Pro' : 'Payment received? Pro can take a minute to show up. Reload this page soon.');
+  }
+  const { plan, billing } = a;
   const standing = plan.source === 'comped' ? 'Given to you by this Mull server.'
     : plan.endsAt ? `Ends ${shortDate(plan.endsAt)}.`
       : plan.renewsAt ? `Renews ${shortDate(plan.renewsAt)}.`
         : plan.id === 'pro' ? '' : 'Every account starts here.';
-  const today = parts.length ? `Today: ${parts.join(' · ')}. Resets at midnight UTC.` : '';
+  const pitch = plan.id === 'free' && billing?.canUpgrade ? 'Pro gives you more lessons, tutor and Teacher messages each day.' : '';
+  const test = billing?.sandbox && (billing.canUpgrade || billing.canManage) ? 'Test mode: pay with card 4242 4242 4242 4242.' : '';
+  const go = (path) => async () => {
+    const r = await fetch(path, { method: 'POST', headers: { Accept: 'application/json' } });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok || !d.url) throw new Error(d.error || 'That did not work');
+    location.href = d.url;
+    await new Promise(() => {}); // keep the button busy while the page leaves
+  };
+  const actions = [
+    billing?.canUpgrade ? btn(billing.price ? `Upgrade · ${billing.price}` : 'Upgrade to Pro', 'btn-primary', go('/api/billing/checkout'), 'Opening checkout…') : null,
+    billing?.canManage ? btn('Manage billing', 'btn-secondary', go('/api/billing/portal'), 'Opening…') : null,
+  ].filter(Boolean);
   row.replaceChildren(el('div', { class: 'setting-text' },
     el('strong', null, `${plan.name} plan`),
-    el('p', { class: 'muted small' }, [standing, today].filter(Boolean).join(' '))));
+    el('p', { class: 'muted small' }, [standing, pitch, test].filter(Boolean).join(' '))),
+  actions.length ? el('div', { style: { display: 'flex', gap: '8px', flexWrap: 'wrap' } }, ...actions) : null);
   row.hidden = false;
 }
 

@@ -2,15 +2,14 @@
 // Pro and is in good standing, or the server comps them with WONDER_PRO_USERS. The plan only
 // picks which daily caps apply (server/usage.js); nothing else in the app changes with it.
 //
-// Payments are not wired yet: no provider is configured, so nobody can buy Pro and the You page
-// shows no upgrade button. A provider integration (checkout, billing portal, webhook) will write
-// plan records with setPlan(); the record below is provider-neutral so any provider fits.
+// Pro is bought through Polar (server/billing.js), whose webhooks write plan records with
+// setPlan(). The record is provider-neutral, so another provider could write it too.
 
 export const PLAN_IDS = Object.freeze(['free', 'pro']);
 export const PLAN_NAMES = Object.freeze({ free: 'Free', pro: 'Pro' });
 /** Subscription states that keep Pro. past_due keeps it while the provider retries the card. */
 export const GOOD_STANDING = Object.freeze(['active', 'trialing', 'past_due']);
-export const PLAN_STATUSES = Object.freeze([...GOOD_STANDING, 'canceled', 'unpaid', 'incomplete', 'expired']);
+export const PLAN_STATUSES = Object.freeze([...GOOD_STANDING, 'canceled', 'unpaid', 'incomplete', 'expired', 'paused']);
 /** Pro outlasts its period end by this much, so a late renewal webhook never drops a payer to Free. */
 export const PERIOD_GRACE_MS = 3 * 24 * 3600_000;
 
@@ -61,8 +60,10 @@ export function createPlans({ db, env = process.env, now = () => Date.now(), log
     }
   }
   return {
-    /** The billing provider; null until payments are wired, so nothing can be bought. */
-    billing: null,
+    /** The stored record (or null); unlike the rest, a database error throws. */
+    stored: (userId) => db.getPlan(userId),
+    /** The stored record, or null on a database error (logged). */
+    record,
     /** Just the plan id, for the usage gate. */
     async planId(userId) {
       if (comped.has(userId)) return 'pro';
@@ -81,7 +82,7 @@ export function createPlans({ db, env = process.env, now = () => Date.now(), log
         endsAt: id === 'pro' && r?.periodEnd && r.cancelAtPeriodEnd ? new Date(r.periodEnd).toISOString() : null,
       };
     },
-    /** Store a user's plan (a provider webhook, later). */
+    /** Store a user's plan (a provider webhook). */
     async setPlan(userId, rec) {
       await db.setPlan(userId, cleanPlanRecord(rec));
     },
