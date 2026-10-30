@@ -202,6 +202,7 @@ test('postgres adapter: every statement on learner data is scoped to one user', 
   for (const sql of statements) {
     if (/^(BEGIN|COMMIT|ROLLBACK)$/.test(sql)) continue;
     if (/wonder_users/.test(sql)) { assert.match(sql, /\bid = \$1\b|VALUES \(\$1\)/, sql); continue; }
+    if (/^(INSERT INTO|SELECT micro_usd FROM) wonder_spend\b/.test(sql)) continue; // the server-wide budget: one total per day, no learner data
     if (/user_id = \$1\b/.test(sql) || /INSERT INTO \w+ \(user_id[^)]*\) VALUES \(\$1/.test(sql) || /SELECT \$1, \* FROM unnest/.test(sql)) continue;
     crossUser.push(sql);
   }

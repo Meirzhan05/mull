@@ -72,7 +72,7 @@ export function usageDay(now = Date.now()) {
 export const RETRY_FREE = 2;
 export const RETRY_WINDOW_MS = 10 * 60 * 1000;
 
-const hoursLeft = (ms) => { const h = Math.ceil(ms / 3_600_000); return h <= 1 ? 'within the hour' : `in about ${h} hours`; };
+export const hoursLeft = (ms) => { const h = Math.ceil(ms / 3_600_000); return h <= 1 ? 'within the hour' : `in about ${h} hours`; };
 
 /**
  * The 429 body for a used-up cap. `limited` tells the browser not to retry. `units` > 1: the
@@ -96,6 +96,9 @@ export function limitBody(kind, max, now = Date.now(), { plan = 'free', units = 
  * retryKey, so up to RETRY_FREE retries within RETRY_WINDOW_MS of a charged request are free;
  * any reuse beyond that is charged like a new request (a reused key is not a free pass).
  */
+/** The 503 body when today's usage can't be read or counted (the database is unreachable). */
+export const UNCOUNTED = Object.freeze({ ok: false, error: "Couldn't check today's limits just now. Try again in a moment.", code: 'usage_unavailable' });
+
 export function createUsageGate({ db, limits = usageLimits(), proLimits = limits, now = () => Date.now(), logger = console } = {}) {
   const capsFor = (plan) => (plan === 'pro' ? proLimits : limits);
   const recent = new Map(); // `${userId}|${kind}|${retryKey}` -> {at, free}, best effort per instance
@@ -116,9 +119,9 @@ export function createUsageGate({ db, limits = usageLimits(), proLimits = limits
       try {
         r = await db.useQuota(userId, day, kind, max, units);
       } catch (e) {
-        // fail open: a database hiccup should not lock everyone out; the miss is logged
+        // fail closed: a request that can't be counted could go past any cap; the browser may retry
         logger.warn?.(`[wonder] usage count failed (${kind}): ${e.message}`);
-        return { ok: true };
+        return { ok: false, body: UNCOUNTED };
       }
       if (!r.ok) return { ok: false, body: limitBody(kind, max, t, { plan, units }) };
       if (rk) {
@@ -131,7 +134,7 @@ export function createUsageGate({ db, limits = usageLimits(), proLimits = limits
     /** Today's counts for one user on their plan (the You page); `unlimited`: no caps (admins). */
     async today(userId, plan = 'free', { unlimited = false } = {}) {
       const { day, resetsAt } = usageDay(now());
-      const used = await db.quotaUsed(userId, day).catch(() => ({}));
+      const used = await db.quotaUsed(userId, day).catch(() => ({})); // display only: charge() is the gate
       return { day, plan, resetsAt: new Date(resetsAt).toISOString(), kinds: Object.fromEntries(Object.entries(capsFor(plan)).map(([k, max]) => [k, { used: used[k] || 0, max: unlimited || max === Infinity ? null : max }])) };
     },
   };

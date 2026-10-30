@@ -6,7 +6,7 @@ import { createWonderServer } from '../server/app.js';
 import { createMemoryStore } from '../server/memory.js';
 import { createSyncService } from '../server/sync/service.js';
 import { createMemoryDb } from '../server/sync/memory-db.js';
-import { usageKind, usageLimits, usageDay, limitBody, createUsageGate, DEFAULT_LIMITS, RETRY_FREE, RETRY_WINDOW_MS } from '../server/usage.js';
+import { usageKind, usageLimits, usageDay, limitBody, createUsageGate, DEFAULT_LIMITS, RETRY_FREE, RETRY_WINDOW_MS, UNCOUNTED } from '../server/usage.js';
 import { streamTurn, classifyFailure, postJson } from '../public/stream-client.js';
 import { fakeClient } from './helpers.js';
 import { materialCharge } from '../server/materials.js';
@@ -62,10 +62,10 @@ test('usage gate: counts per user, per kind and per UTC day; retries of one stre
   assert.equal((await g2.charge('alice', 'lesson', { retryKey: 'L1' })).retried, true);
   assert.equal((await g2.charge('alice', 'lesson', { retryKey: 'L2' })).ok, false, 'cap reached');
 
-  // a database error fails open (logged), never locking everyone out
+  // a database error fails closed (logged): a request that can't be counted could pass any cap
   const warned = [];
   const broken = createUsageGate({ db: { useQuota: async () => { throw new Error('db down'); }, quotaUsed: async () => ({}) }, limits: { lesson: 1 }, logger: { warn: (m) => warned.push(m) } });
-  assert.equal((await broken.charge('alice', 'lesson')).ok, true);
+  assert.deepEqual(await broken.charge('alice', 'lesson'), { ok: false, body: UNCOUNTED });
   assert.match(warned[0], /usage count failed \(lesson\): db down/);
 });
 

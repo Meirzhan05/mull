@@ -127,7 +127,7 @@ export function reportMarkdown(report) {
   if (fc.length) lines.push('', `Most failed format checks: ${fc.map(([id, n]) => `\`${id}\` ×${n}`).join(', ')}`);
   const u = report.usage;
   if (u?.byTask?.length) {
-    lines.push('', '## Tokens and cost', '', `About **$${u.lessonUsd ?? '–'}** per lesson (lesson, critic and figure check; the judge is not part of the app) · $${u.usd} for the whole run, judge included. Estimated from list prices (evals/run.js PRICES).`,
+    lines.push('', '## Tokens and cost', '', `About **$${u.lessonUsd ?? '–'}** per lesson (lesson, critic and figure check; the judge is not part of the app) · $${u.usd} for the whole run, judge included. Estimated from list prices (server/spend.js PRICES).`,
       '', '| Task | Model | Requests | Input | Cache read | Cache write | Output | Searches | USD |', '| --- | --- | --- | --- | --- | --- | --- | --- | --- |');
     for (const r of u.byTask) lines.push(`| ${r.task} | \`${r.model}\` | ${r.requests} | ${r.input} | ${r.cacheRead} | ${r.cacheWrite} | ${r.output} | ${r.searches} | ${cell(r.usd, 4)} |`);
   }

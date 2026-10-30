@@ -5,6 +5,7 @@
 const key = (kind, id) => `${kind}:${id}`;
 
 export function createMemoryDb() {
+  const spend = new Map(); // day -> micro-USD, all users
   const users = new Map(); // userId -> {rev, deletedRev, records: Map, subs: Map, reminders: Set, files: Map, usage: Map, plan}
   const locks = new Map(); // userId -> tail of the transaction queue
   const user = (id) => {
@@ -106,6 +107,9 @@ export function createMemoryDb() {
       for (const [k, n] of users.get(userId)?.usage || []) if (k.startsWith(`${day}|`)) out[k.slice(day.length + 1)] = n;
       return out;
     },
+    // -- the server-wide daily budget (server/spend.js), in millionths of a dollar
+    async addSpend(day, microUsd) { spend.set(day, (spend.get(day) || 0) + microUsd); },
+    async spendToday(day) { return spend.get(day) || 0; },
     // -- Free/Pro plans (server/plans.js)
     async getPlan(userId) { const p = users.get(userId)?.plan; return p ? { ...p } : null; },
     async setPlan(userId, p) {

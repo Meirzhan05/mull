@@ -27,6 +27,7 @@ import { createWonderServer } from '../server/app.js';
 import { createMemoryStore } from '../server/memory.js';
 import { loadUserEnv } from '../server/web.js'; // ~/.config/wonder/.env fallback, as for the Next app
 import { taskModels, onUsage, CLAUDE_NOT_CONFIGURED } from '../server/claude.js';
+import { PRICES, usageCost } from '../server/spend.js'; // list prices; web searches are priced too
 import { judgeLesson, summarizeRuns, reportMarkdown } from '../server/judge.js';
 import { lessonMedia } from '../server/critic.js';
 import { figureRefs } from '../server/figures.js';
@@ -100,19 +101,7 @@ export async function generateLesson(base, { topic, level, web, verify }) {
   return { markdown, title: /^#\s+(.+)$/m.exec(markdown)?.[1]?.trim() || '', quality, failure, dil: turn.primary?.dil || null };
 }
 
-/**
- * USD per million tokens, Claude API list prices (October 2026). Cache writes are the 5-minute
- * kind (1.25x input). Haiku's prices hold for prompts up to 100K tokens; its cache read is
- * assumed at 0.1x input. Web searches are counted, not priced.
- */
-export const PRICES = Object.freeze({
-  'claude-opus-5-5': { input: 4, output: 20, cacheRead: 0.2, cacheWrite: 5 },
-  'claude-sonnet-5-5': { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5 },
-  'claude-haiku-5-5': { input: 0.1, output: 0.5, cacheRead: 0.01, cacheWrite: 0.125 },
-});
-
 const FIELDS = ['input', 'cacheRead', 'cacheWrite', 'output', 'searches'];
-const dollars = (r) => { const p = PRICES[r.model]; return p ? (r.input * p.input + r.cacheRead * p.cacheRead + r.cacheWrite * p.cacheWrite + r.output * p.output) / 1e6 : null; };
 const cents = (x) => Math.round(x * 10000) / 10000;
 
 /** Token usage per task and model across a run (claude.js onUsage entries), with estimated cost. */
@@ -124,11 +113,12 @@ export function createUsageTally() {
       const r = rows.get(key) || { task: e.task, model: e.model, requests: 0, ...Object.fromEntries(FIELDS.map((f) => [f, 0])) };
       r.requests++;
       for (const f of FIELDS) r[f] += e[f] || 0;
+      r.cost = (r.cost || 0) + usageCost(e); // per request: Haiku's rate depends on each prompt's length
       rows.set(key, r);
     },
     /** {byTask, usd, lessonUsd}: lessonUsd is everything but the judge, per generated lesson. */
     summary(lessons) {
-      const byTask = [...rows.values()].map((r) => ({ ...r, usd: dollars(r) == null ? null : cents(dollars(r)) }));
+      const byTask = [...rows.values()].map(({ cost, ...r }) => ({ ...r, usd: PRICES[r.model] ? cents(cost) : null }));
       const sum = (list) => cents(list.reduce((a, r) => a + (r.usd || 0), 0));
       return { byTask, usd: sum(byTask), lessonUsd: lessons ? cents(sum(byTask.filter((r) => r.task !== 'judge')) / lessons) : null };
     },

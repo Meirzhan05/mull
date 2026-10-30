@@ -32,7 +32,7 @@ import { WONDER_ROOT, LAB_ROOT } from './paths.js';
 import { CONTENT_TYPE, createTurnWriter } from './ndjson.js';
 import {
   taskModels, hasClaudeCredentials, createClaudeClient, buildStreamParams, buildStructuredParams, streamText, createStructured,
-  friendlyError, badRequestMessage, REFUSAL_MESSAGE, CLAUDE_NOT_CONFIGURED,
+  friendlyError, badRequestMessage, REFUSAL_MESSAGE, CLAUDE_NOT_CONFIGURED, onUsage,
 } from './claude.js';
 import { createMaterialStore, DEFAULT_MATERIALS_DIR, MATERIAL_BODY_LIMIT, PART_BODY_LIMIT, PART_BYTES, MAX_PARTS, MAX_PDF_BYTES, MAX_MATERIAL_TOKENS, UPLOAD_ID_RE, isBase64, pdfTooLarge, materialCharge, prepareMaterial, extractPdfText, MIN_FALLBACK_CHARS, newUploadId, createPartStore, pruneUploads, takeUpload, documentBlock, materialCitation } from './materials.js'; // Phase 10
 import { TEACHER_OPENER } from '../public/teacher-core.js'; // Phase 10
@@ -59,7 +59,8 @@ import { createSyncFromEnv } from './sync/index.js';
 import { SYNC_BODY_LIMIT } from './sync/service.js';
 import { loadUserMemory, signedOutMemory, userMaterials, signedOutMaterials, userUploadParts } from './sync/user-stores.js';
 import { pushConfig, webPushSender, sendDueReminders } from './push.js';
-import { usageKind, usageLimits, createUsageGate, limitBody } from './usage.js'; // sign-in + daily caps for Claude routes
+import { usageKind, usageLimits, createUsageGate, limitBody, UNCOUNTED } from './usage.js'; // sign-in + daily caps for Claude routes
+import { createSpendGuard, dailyBudget, budgetBody } from './spend.js'; // the daily budget across all users
 import { createPlans } from './plans.js'; // Free/Pro: which daily caps apply
 import { polarConfig, createPolarBilling } from './billing.js'; // buying Pro through Polar
 
@@ -211,12 +212,26 @@ export function createWonderCore(opts = {}) {
   let plans = opts.plans ?? null; // Free/Pro per user (server/plans.js), made on first use
   const usageGate = (sync) => (usage ??= createUsageGate({ db: sync.db, limits: usageLimits(env), proLimits: usageLimits(env, 'pro'), logger }));
   const userPlans = (sync) => (plans ??= createPlans({ db: sync.db, env, logger }));
+  // every Claude response this server makes is priced into today's total (server/spend.js);
+  // scopes.getStore() is set only inside this server's own requests
+  let spendGuard = opts.spend ?? null;
+  const spendFor = (sync) => (spendGuard ??= createSpendGuard({ db: sync.db, budgetUsd: dailyBudget(env), logger }));
+  onUsage((entry) => { const s = scopes.getStore(); if (s?.sync) spendFor(s.sync).record(entry); });
+  /** The 429 body once today's budget for everyone is spent, the 503 one when it can't be read. */
+  async function overBudget(sync) {
+    try { return (await spendFor(sync).reached()) ? budgetBody() : null; } catch (e) { logger.warn?.(`[wonder] spend check failed: ${e.message}`); return UNCOUNTED; }
+  }
+  /** The status for an overCap/capReached body: 429 for a used-up cap or budget, 503 when uncounted. */
+  const capStatus = (body) => (body.limited ? 429 : 503);
   /**
-   * Charge one Claude call to a user's daily caps: null when it may go ahead, else the 429 body.
-   * `units` may be a function, called only when the user has caps (a material's size is a read).
+   * Charge one Claude call to a user's daily caps: null when it may go ahead, else the body
+   * (send it with capStatus). `units` may be a function, called only when the user has caps (a
+   * material's size is a read).
    */
   async function overCap(sync, userId, kind, { retryKey, units = 1 } = {}) {
     if (!state.client || userPlans(sync).isAdmin(userId)) return null; // a server without Claude spends nothing; admins have no caps
+    const over = await overBudget(sync);
+    if (over) return over;
     const plan = await userPlans(sync).planId(userId);
     const r = await usageGate(sync).charge(userId, kind, { retryKey, units: typeof units === 'function' ? await units() : units, plan });
     return r.ok ? null : r.body;
@@ -224,6 +239,8 @@ export function createWonderCore(opts = {}) {
   /** Would `units` more of `kind` go over today's cap? A read only: the charge comes later (overCap). */
   async function capReached(sync, userId, kind, units = 1) {
     if (!state.client || userPlans(sync).isAdmin(userId)) return null;
+    const over = await overBudget(sync);
+    if (over) return over;
     const plan = await userPlans(sync).planId(userId);
     const k = (await usageGate(sync).today(userId, plan)).kinds[kind];
     return k?.max != null && k.used + units > k.max ? limitBody(kind, k.max, Date.now(), { plan, units }) : null;
@@ -504,7 +521,7 @@ export function createWonderCore(opts = {}) {
         // was posted: a steer that arrives as the lesson ends is rejected there, uncharged, and the
         // client's continueFrom fallback is charged instead (handle)
         const over = sync && op.owner ? await overCap(sync, op.owner, 'lesson', { units: op.units }) : null;
-        if (over) { writer.fail(over.error, 'daily_limit'); result = { status: 'failed' }; break; }
+        if (over) { writer.fail(over.error, over.limited ? 'daily_limit' : 'usage_unavailable'); result = { status: 'failed' }; break; }
         guard = null;
         const kept = applySteer(writer, instruction);
         messages = [{ role: 'user', content: userTurn(steeringUserContent(request, kept, instruction)) }];
@@ -562,7 +579,7 @@ export function createWonderCore(opts = {}) {
     if (op.hasSteer) { op.steer(instruction); return t.json(409, { ok: false, status: 'rejected', reason: 'busy', error: 'Still applying your last change.' }); } // rejects in the stream too
     // an accepted steer counts as a lesson (charged when the stream applies it): refuse it up front
     // when today's cap has no room, so the lesson keeps streaming
-    if (sync) { const over = await capReached(sync, userId, 'lesson', op.units); if (over) return t.json(429, over); }
+    if (sync) { const over = await capReached(sync, userId, 'lesson', op.units); if (over) return t.json(capStatus(over), over); }
     if (!op.steer(instruction)) return t.json(409, { ok: false, status: 'rejected', reason: op.hasSteer ? 'busy' : 'not_streaming', error: op.hasSteer ? 'Still applying your last change.' : 'This lesson has finished streaming.' });
     return t.json(200, { ok: true, status: 'accepted', operationId: op.operationId });
   }
@@ -814,16 +831,25 @@ export function createWonderCore(opts = {}) {
     'POST /api/billing/webhook': billingWebhook,
   };
 
+  // A deployment meant for other people (Vercel production, or WONDER_REQUIRE_ACCOUNTS=on) never
+  // runs without accounts: a missing auth or database setting would otherwise turn it into the
+  // single-user app, with Claude open to anyone, no caps and one shared memory and material store.
+  const required = String(env.WONDER_REQUIRE_ACCOUNTS ?? '').trim().toLowerCase();
+  const accountsRequired = required ? !['off', '0', 'false', 'no'].includes(required) : env.VERCEL_ENV === 'production';
+  const ACCOUNTS_OFF = 'Accounts are not set up on this server, so Mull is off. The owner needs to set the Neon Auth and database settings.';
   // materials: the upload limits public/today.js checks before sending a file
   const status = () => ({ claude: !!state.client, model: models.lesson, models, ...(state.client ? {} : { error: CLAUDE_NOT_CONFIGURED }), videos: videoSource(), materials: { maxPdfBytes: MAX_PDF_BYTES, partBytes: PART_BYTES } });
 
   /** Run one API request. Resolves when the response has ended; a 404 for unknown API paths. */
   async function handle(method, pathname, body, t) {
-    if (pathname === '/api/status' && method === 'GET') return t.json(200, status());
+    if (pathname === '/api/status' && method === 'GET') {
+      return t.json(200, accountsRequired && !(await syncReady) ? { ...status(), claude: false, error: ACCOUNTS_OFF } : status());
+    }
     const route = routes[`${method} ${pathname}`];
     if (!route) return t.json(404, { ok: false, error: 'Not found' });
     if (!state.client && NEEDS_CLAUDE.has(`${method} ${pathname}`)) return t.json(503, { ok: false, error: CLAUDE_NOT_CONFIGURED, code: 'not_configured' });
     const sync = await syncReady;
+    if (!sync && accountsRequired) return t.json(503, { ok: false, error: ACCOUNTS_OFF, code: 'not_configured' });
     if (!sync) return route(t, body);
     // account sync on: memory and material are the signed-in user's, and nobody else's
     const userId = typeof t.userId === 'string' && t.userId ? t.userId : null;
@@ -836,7 +862,7 @@ export function createWonderCore(opts = {}) {
       if (!userId) return t.json(401, { ok: false, error: 'Sign in to use Mull: lessons, the tutor and the Teacher need an account.', signedOut: true });
       const units = body?.materialId ? async () => materialCharge(await userMats.meta(body.materialId)) : 1;
       const over = await overCap(sync, userId, spend, { retryKey: cleanKey(body?.streamKey) || cleanKey(body?.turnId), units });
-      if (over) return t.json(429, over);
+      if (over) return t.json(capStatus(over), over);
     }
     const scope = { userId, sync, memory: signedOutMemory(), materials: signedOutMaterials() };
     if (userId) {

@@ -57,6 +57,10 @@ CREATE TABLE IF NOT EXISTS wonder_plans (
   updated_at timestamptz NOT NULL DEFAULT now()
 );
 ALTER TABLE wonder_plans ADD COLUMN IF NOT EXISTS synced_at timestamptz;
+CREATE TABLE IF NOT EXISTS wonder_spend (
+  day text PRIMARY KEY,
+  micro_usd bigint NOT NULL DEFAULT 0
+);
 CREATE TABLE IF NOT EXISTS wonder_files (
   user_id text NOT NULL,
   id text NOT NULL,
@@ -209,6 +213,14 @@ export function createPgDb({ pool, blob = null }) {
         [userId, day, kind, max, units],
       );
       return rows.length ? { ok: true, used: Number(rows[0].count) } : { ok: false, used: max };
+    },
+    // -- the server-wide daily budget (server/spend.js), in millionths of a dollar
+    async addSpend(day, microUsd) {
+      await q('INSERT INTO wonder_spend (day, micro_usd) VALUES ($1, $2) ON CONFLICT (day) DO UPDATE SET micro_usd = wonder_spend.micro_usd + $2', [day, microUsd]);
+    },
+    async spendToday(day) {
+      const { rows } = await q('SELECT micro_usd FROM wonder_spend WHERE day = $1', [day]);
+      return rows.length ? Number(rows[0].micro_usd) : 0;
     },
     async quotaUsed(userId, day) {
       const { rows } = await q('SELECT kind, count FROM wonder_usage WHERE user_id = $1 AND day = $2', [userId, day]);
