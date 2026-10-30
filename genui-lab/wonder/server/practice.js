@@ -107,14 +107,15 @@ export function itemsFromStructured(data) {
   return out;
 }
 
-export async function extractPracticeWithClaude(client, markdown) {
+export async function extractPracticeWithClaude(client, markdown, { model } = {}) {
   const params = buildStructuredParams({
+    model,
     system: PRACTICE_EXTRACT_PROMPT,
     schema: PRACTICE_EXTRACT_SCHEMA,
     user: `Lesson:\n\n${String(markdown).slice(0, 40000)}`,
     effort: 'low',
   });
-  const data = await createStructured(client, params);
+  const data = await createStructured(client, params, { task: 'extract' });
   const cards = (Array.isArray(data.cards) ? data.cards : [])
     .map((c) => ({ term: String(c.term || '').trim(), definition: String(c.definition || '').trim(), example: String(c.example || '').trim() }))
     .filter((c) => c.term && c.definition).slice(0, 6);

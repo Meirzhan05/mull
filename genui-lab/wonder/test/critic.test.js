@@ -13,7 +13,7 @@ import { createMemoryStore } from '../server/memory.js';
 import { lintLesson, lessonParts, applyQuizFixes, normalizeCritique, criticUserMessage, citesAsText, critiqueLesson, CRITIC_SYSTEM_PROMPT } from '../server/critic.js';
 import { normalizeJudgement, summarizeRuns, reportMarkdown, RUBRIC_KEYS, JUDGE_SYSTEM_PROMPT } from '../server/judge.js';
 import { componentsOf } from '../server/practice.js';
-import { parseArgs, runEval, writeReport } from '../evals/run.js';
+import { parseArgs, runEval, writeReport, createUsageTally } from '../evals/run.js';
 import { ConversationSourceParser, ConversationTurn } from '../../chatgpt-dil/src/stream.js';
 import { fakeClient, sampleLesson, LESSON_FILES } from './helpers.js';
 
@@ -165,6 +165,27 @@ test('eval harness: args, no run without Claude, and a fake-Claude run with crit
   assert.equal(r.runs[0].critic.verdict, 'pass');
   assert.equal(client.calls.create.length, 2, 'one critic call + one judge call');
   assert.equal(client.calls.stream[0].params.tools, undefined, 'web search off by default in evals');
+  assert.deepEqual(r.meta.models, { lesson: 'claude-opus-5-5', critic: 'claude-opus-5-5', judge: 'claude-opus-5-5' });
+  assert.equal(client.calls.stream[0].params.model, 'claude-opus-5-5');
+  assert.deepEqual(client.calls.create.map((p) => p.model), ['claude-opus-5-5', 'claude-opus-5-5'], 'critic and judge on Opus');
   const files = writeReport(r, path.join(dir, 'out'));
   assert.match(fs.readFileSync(files.md, 'utf8'), /# Mull lesson eval/);
+});
+
+test('eval usage tally: tokens per task and model, priced; the judge is left out of the per-lesson cost', () => {
+  const t = createUsageTally();
+  const e = (task, model, input, output) => ({ task, model, input, cacheRead: 0, cacheWrite: 0, output, searches: 0 });
+  t.add(e('lesson', 'claude-sonnet-5-5', 1_000_000, 100_000)); // $2 + $1
+  t.add(e('lesson', 'claude-sonnet-5-5', 0, 100_000)); // $1
+  t.add(e('judge', 'claude-opus-5-5', 1_000_000, 0)); // $4
+  t.add(e('figure', 'claude-unknown', 5, 5)); // unpriced
+  const s = t.summary(2);
+  assert.equal(s.byTask.find((r) => r.task === 'lesson').requests, 2);
+  assert.equal(s.byTask.find((r) => r.task === 'lesson').usd, 4);
+  assert.equal(s.byTask.find((r) => r.task === 'figure').usd, null);
+  assert.equal(s.usd, 8);
+  assert.equal(s.lessonUsd, 2);
+  const md = reportMarkdown({ meta: { startedAt: 'now', models: { lesson: 'claude-sonnet-5-5', judge: 'claude-opus-5-5' }, webSearch: false, verify: true, judge: true }, summary: summarizeRuns([]), usage: s, runs: [] });
+  assert.match(md, /Lesson `claude-sonnet-5-5` · Judge `claude-opus-5-5`/);
+  assert.match(md, /About \*\*\$2\*\* per lesson/);
 });

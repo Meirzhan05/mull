@@ -222,7 +222,7 @@ export function createFigureCheck({ client, model = FIGURE_CHECK_MODEL, timeoutM
     if (!c) throw new Error('no Claude client');
     const timeout = AbortSignal.timeout(timeoutMs);
     const sig = signal ? AbortSignal.any([timeout, signal]) : timeout;
-    const ask = (image) => createStructured(c, figureCheckParams(state, ref, { model, image }), { signal: sig, maxRetries: 1 });
+    const ask = (image) => createStructured(c, figureCheckParams(state, ref, { model, image }), { task: 'figure', signal: sig, maxRetries: 1 });
     let raw;
     try {
       raw = await ask();

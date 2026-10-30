@@ -5,7 +5,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import Anthropic from '@anthropic-ai/sdk';
 import { createWonderServer } from '../server/app.js';
-import { buildStreamParams, buildStructuredParams, hasClaudeCredentials, isCredentialError, friendlyError, CLAUDE_NOT_CONFIGURED } from '../server/claude.js';
+import { buildStreamParams, buildStructuredParams, hasClaudeCredentials, isCredentialError, friendlyError, CLAUDE_NOT_CONFIGURED, taskModels, TASK_MODELS, onUsage, createStructured, streamText } from '../server/claude.js';
 import { LESSON_SYSTEM_PROMPT, TUTOR_SYSTEM_PROMPT } from '../server/prompts.js';
 import { parseConversationSource, ConversationTurn } from '../../chatgpt-dil/src/stream.js';
 import { fakeClient, sampleLesson, runProgram, catalogNodes } from './helpers.js';
@@ -40,6 +40,55 @@ test('stream request: model, adaptive thinking, effort, fallbacks + beta, cached
   assert.ok(!('budget_tokens' in (s.thinking || {})));
 });
 
+test('task models: Opus for lessons and their critic, Sonnet for the tutor and Teacher, Haiku for extraction; env overrides one', () => {
+  assert.deepEqual(taskModels({}), { ...TASK_MODELS });
+  assert.equal(TASK_MODELS.lesson, 'claude-opus-5-5');
+  assert.equal(TASK_MODELS.critic, 'claude-opus-5-5');
+  assert.equal(TASK_MODELS.tutor, 'claude-sonnet-5-5');
+  assert.equal(TASK_MODELS.extract, 'claude-haiku-5-5');
+  assert.equal(TASK_MODELS.judge, 'claude-opus-5-5');
+  const m = taskModels({ WONDER_MODEL_LESSON: ' claude-sonnet-5-5 ', WONDER_MODEL_TUTOR: 'gpt-5', WONDER_MODEL_EXTRACT: '' });
+  assert.equal(m.lesson, 'claude-sonnet-5-5');
+  assert.equal(m.tutor, 'claude-sonnet-5-5', 'a value that is not a Claude model id is ignored');
+  assert.equal(m.extract, 'claude-haiku-5-5');
+});
+
+test('stream request on Haiku: no server-side fallback (Haiku has none)', () => {
+  const p = buildStreamParams({ system: 'S', messages: [{ role: 'user', content: 'hi' }], model: 'claude-haiku-5-5' });
+  assert.equal(p.model, 'claude-haiku-5-5');
+  assert.ok(!('fallbacks' in p) && !('betas' in p));
+  assert.equal(buildStreamParams({ system: 'S', messages: [], model: 'claude-sonnet-5-5' }).fallbacks, 'default');
+});
+
+test('token usage: every response is reported with its task and the model that served it', async () => {
+  const usage = { input_tokens: 120, cache_read_input_tokens: 4000, cache_creation_input_tokens: 0, output_tokens: 300, server_tool_use: { web_search_requests: 2 } };
+  const client = {
+    messages: { async create(params, opts) { return { model: params.model, stop_reason: 'end_turn', usage, content: [{ type: 'text', text: '{"ok":true}' }], opts }; } },
+    beta: { messages: { stream: (params) => ({ async *[Symbol.asyncIterator]() {}, finalMessage: async () => ({ model: params.model, stop_reason: 'end_turn', usage, content: [] }) }) } },
+  };
+  const seen = [];
+  const off = onUsage((e) => seen.push(e));
+  try {
+    assert.deepEqual(await createStructured(client, buildStructuredParams({ system: 'S', schema: {}, user: 'u', model: 'claude-haiku-5-5' }), { task: 'extract' }), { ok: true });
+    await streamText(client, buildStreamParams({ system: 'S', messages: [], model: 'claude-sonnet-5-5' }), { task: 'lesson' });
+  } finally { off(); }
+  assert.deepEqual(seen, [
+    { task: 'extract', model: 'claude-haiku-5-5', input: 120, cacheRead: 4000, cacheWrite: 0, output: 300, searches: 2 },
+    { task: 'lesson', model: 'claude-sonnet-5-5', input: 120, cacheRead: 4000, cacheWrite: 0, output: 300, searches: 2 },
+  ]);
+});
+
+test('WONDER_MODEL_LESSON reaches the lesson request', async () => {
+  const client = fakeClient({ text: sampleLesson('sky-blue.md') });
+  const server = createWonderServer({ client, logger: quiet, memoryFile: null, env: { WONDER_MODEL_LESSON: 'claude-sonnet-5-5' } });
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  try {
+    await (await post(`http://127.0.0.1:${server.address().port}`, '/api/lesson/stream', { topic: 'sky', verify: false })).text();
+    assert.equal(client.calls.stream[0].params.model, 'claude-sonnet-5-5');
+    assert.equal(client.calls.stream[0].params.fallbacks, 'default');
+  } finally { server.closeAllConnections?.(); await new Promise((r) => server.close(r)); }
+});
+
 test('lesson stream via Claude: deltas flow through compile + NDJSON, params are correct', async () => {
   const md = sampleLesson('transformers.md');
   const client = fakeClient({ text: md });
@@ -53,7 +102,7 @@ test('lesson stream via Claude: deltas flow through compile + NDJSON, params are
     assert.deepEqual(env.errors, []);
     assert.ok(catalogNodes(env.mirror, 'Flowchart').length);
     const { params, opts } = client.calls.stream[0];
-    assert.equal(params.model, 'claude-opus-5-5');
+    assert.equal(params.model, 'claude-opus-5-5', 'lessons run on Opus');
     assert.deepEqual(params.thinking, { type: 'adaptive' });
     assert.equal(params.output_config.effort, 'medium');
     assert.equal(params.fallbacks, 'default');
@@ -193,7 +242,7 @@ test('practice extract via Claude structured output (effort low, json_schema), v
     assert.equal(data.items.length, 3, 'invalid items are dropped');
     assert.equal(data.items[0].choices[1].isCorrect, true);
     const params = client.calls.create[0];
-    assert.equal(params.model, 'claude-opus-5-5');
+    assert.equal(params.model, 'claude-haiku-5-5', 'extraction runs on Haiku');
     assert.equal(params.output_config.effort, 'low');
     assert.equal(params.output_config.format.type, 'json_schema');
     assert.equal(params.output_config.format.schema.additionalProperties, false);

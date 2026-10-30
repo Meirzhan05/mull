@@ -123,7 +123,7 @@ test('teacher request: model, adaptive thinking, effort, fallbacks, cache breakp
     const { final } = await teacherTurn(base, { message: 'Hello', threadId: 'thread-1', progress: {} });
     assert.deepEqual(final.followupPrompts, ['A?', 'B?']);
     const { params, opts } = client.calls[0];
-    assert.equal(params.model, 'claude-opus-5-5');
+    assert.equal(params.model, 'claude-sonnet-5-5');
     assert.deepEqual(params.thinking, { type: 'adaptive' });
     assert.deepEqual(params.output_config, { effort: 'medium' });
     assert.deepEqual(params.betas, ['server-side-fallback-2026-07-01']);

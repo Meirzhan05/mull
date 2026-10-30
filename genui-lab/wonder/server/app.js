@@ -2,7 +2,7 @@
 // Next.js route handlers (server/web.js, app/api/[...route]/route.js) and a small node:http
 // server (createWonderServer) that the test suite drives.
 //
-//   GET  /api/status            -> {claude, model, error?} (claude:false: no credentials, Claude routes answer 503)
+//   GET  /api/status            -> {claude, model (lessons), models (per task), error?} (claude:false: no credentials, Claude routes answer 503)
 //   POST /api/lesson/stream     -> conversation-source NDJSON (lesson in markdown + DIL); continueFrom resumes/revises
 //   POST /api/tutor/stream      -> conversation-source NDJSON (tutor reply + followupPrompts)
 //   POST /api/lesson/steer      -> JSON {ok, status: accepted|rejected} (Phase 4 mid-turn steering)
@@ -31,7 +31,7 @@ import path from 'node:path';
 import { WONDER_ROOT, LAB_ROOT } from './paths.js';
 import { CONTENT_TYPE, createTurnWriter } from './ndjson.js';
 import {
-  MODEL, hasClaudeCredentials, createClaudeClient, buildStreamParams, buildStructuredParams, streamText, createStructured,
+  taskModels, hasClaudeCredentials, createClaudeClient, buildStreamParams, buildStructuredParams, streamText, createStructured,
   friendlyError, badRequestMessage, REFUSAL_MESSAGE, CLAUDE_NOT_CONFIGURED,
 } from './claude.js';
 import { createMaterialStore, DEFAULT_MATERIALS_DIR, MATERIAL_BODY_LIMIT, PART_BODY_LIMIT, PART_BYTES, MAX_PARTS, MAX_PDF_BYTES, MAX_MATERIAL_TOKENS, UPLOAD_ID_RE, isBase64, pdfTooLarge, materialCharge, prepareMaterial, extractPdfText, MIN_FALLBACK_CHARS, newUploadId, createPartStore, pruneUploads, takeUpload, documentBlock, materialCitation } from './materials.js'; // Phase 10
@@ -232,7 +232,8 @@ export function createWonderCore(opts = {}) {
   const materials = scoped('materials', () => localMaterials);
   const uploadParts = scoped('parts', () => localParts);
   const teacherCards = createCardStore();
-  const grade = createGrader({ getClient: () => state.client, logger }); // Phase 8
+  const models = opts.models ?? taskModels(env); // which Claude model each kind of call uses (claude.js TASK_MODELS)
+  const grade = createGrader({ getClient: () => state.client, logger, model: models.grade }); // Phase 8
   const widgetAction = createWidgetActionHandler({ cards: teacherCards, memory, grade });
   const recordDir = opts.recordDir ?? env.WONDER_RECORD_DIR ?? null;
   const memoryContext = (body, { withIds = false } = {}) => (body?.memoryEnabled === false ? '' : memory.promptBlock({ withIds }));
@@ -260,7 +261,7 @@ export function createWonderCore(opts = {}) {
     if (!state.client) return null;
     let tokens;
     try {
-      ({ input_tokens: tokens } = await state.client.messages.countTokens({ model: MODEL, messages: [{ role: 'user', content: [documentBlock(meta, data, { citations: false, cache: false }), { type: 'text', text: 'Read this.' }] }] }));
+      ({ input_tokens: tokens } = await state.client.messages.countTokens({ model: models.lesson, messages: [{ role: 'user', content: [documentBlock(meta, data, { citations: false, cache: false }), { type: 'text', text: 'Read this.' }] }] }));
     } catch (err) {
       const refused = badRequestMessage(err);
       if (refused) return { error: `Claude can't read that file: ${refused}` };
@@ -366,9 +367,9 @@ export function createWonderCore(opts = {}) {
 
   /** Run Claude. Returns {status: 'done' | 'aborted' | 'failed' | 'retry'}. */
   /** `retryable(err)`: an error the caller recovers from itself ({status: 'retry', err}, nothing shown). */
-  async function runClaude(writer, params, onText, signal, stream = (p, o) => streamText(state.client, p, o), { retryable } = {}) {
+  async function runClaude(writer, params, onText, signal, stream = (p, o) => streamText(state.client, p, o), { retryable, task } = {}) {
     try {
-      const { stopReason } = await stream(params, { onText, signal });
+      const { stopReason } = await stream(params, { onText, signal, task });
       if (stopReason === 'refusal') {
         onText(REFUSAL_MESSAGE);
         return { status: 'done', truncated: false, refused: true };
@@ -464,9 +465,9 @@ export function createWonderCore(opts = {}) {
         : [{ role: 'user', content: userTurn(request) }]);
       let messages = firstMessages();
       for (;;) {
-        const params = withWebSearch(buildStreamParams({ system: LESSON_SYSTEM_PROMPT, context, messages, effort: 'medium' }), useWebSearch);
+        const params = withWebSearch(buildStreamParams({ system: LESSON_SYSTEM_PROMPT, context, messages, effort: 'medium', model: models.lesson }), useWebSearch);
         const grounded = useWebSearch || material ? groundedStream(writer, sources, material ? materialCitation([material.meta]) : undefined) : undefined;
-        result = await runClaude(writer, params, onText, op.attempt(), grounded, { retryable: (err) => !writer.markdown && unreadablePdf(err, material) });
+        result = await runClaude(writer, params, onText, op.attempt(), grounded, { task: 'lesson', retryable: (err) => !writer.markdown && unreadablePdf(err, material) });
         if (result.status === 'retry') { // the PDF itself was refused: teach from its text layer
           const text = await pdfAsText(material);
           if (text.error) { writer.fail(text.error, 'bad_request'); result = { status: 'failed' }; break; }
@@ -508,7 +509,7 @@ export function createWonderCore(opts = {}) {
     if (useClaude) {
       writer.reasoning('Double-checking facts and quiz answers…', { icon: 'check' });
       try {
-        critique = await critiqueLesson(state.client, { markdown: md, topic, level, sources: sources.list(), signal });
+        critique = await critiqueLesson(state.client, { markdown: md, topic, level, sources: sources.list(), signal, model: models.critic });
         const fixed = applyQuizFixes(md, critique.quizFixes);
         applied = fixed.applied;
         if (fixed.rejected.length) logger.warn?.(`[wonder] critic quiz fixes rejected: ${fixed.rejected.map((r) => `${r.question_id} (${r.reason})`).join('; ')}`);
@@ -555,8 +556,9 @@ export function createWonderCore(opts = {}) {
       context: joinContext(tutorLessonContext({ ...body.lessonContext, markdown: stripGroundingTags(body.lessonContext?.markdown) }), memoryContext(body), learnerKnows(body, 'tutor'), body.mode === 'socratic' ? SOCRATIC_TUTOR_MODE : ''),
       messages: [...history, { role: 'user', content: message }],
       effort: 'medium',
+      model: models.tutor,
     }), useWebSearch);
-    const result = await runClaude(writer, params, onText, signal, useWebSearch ? groundedStream(writer, sources) : undefined);
+    const result = await runClaude(writer, params, onText, signal, useWebSearch ? groundedStream(writer, sources) : undefined, { task: 'tutor' });
     if (result.status === 'done') finishGrounded(writer, sources);
     if (result.status === 'done') await settleMedia(writer, media, signal);
     if (result.status === 'done') writer.complete({ truncated: result.truncated, defaultFollowups: result.refused ? [] : DEFAULT_TUTOR_FOLLOWUPS });
@@ -570,20 +572,20 @@ export function createWonderCore(opts = {}) {
     let material = await loadMaterial(body.materialId); // Phase 10: a course that follows the learner's material
     if (material?.missing) return t.json(404, { ok: false, error: 'That material is no longer stored on this server.' });
     try {
-      const params = buildStructuredParams({ system: COURSE_SYSTEM_PROMPT, schema: COURSE_PLAN_SCHEMA, user: `Topic: ${topic}\nLevel: ${level}`, effort: 'low' });
+      const params = buildStructuredParams({ system: COURSE_SYSTEM_PROMPT, schema: COURSE_PLAN_SCHEMA, user: `Topic: ${topic}\nLevel: ${level}`, effort: 'low', model: models.course });
       // structured output: the document goes in without citations (they don't combine)
       const fromMaterial = () => { params.messages = [{ role: 'user', content: [documentBlock(material.meta, material.data, { citations: false }), { type: 'text', text: `Plan a course that teaches the attached material "${material.meta.title}", following its structure and order. Each lesson covers one part of it; lesson summaries name what the learner will be able to explain from that part.\nLevel: ${level}` }] }]; };
       if (material) fromMaterial();
       let plan;
       try {
-        plan = await createStructured(state.client, params);
+        plan = await createStructured(state.client, params, { task: 'course' });
       } catch (err) {
         if (!unreadablePdf(err, material)) throw err;
         const text = await pdfAsText(material); // the PDF itself was refused: plan from its text layer
         if (text.error) return t.json(422, { ok: false, error: text.error, code: 'bad_request' });
         material = text;
         fromMaterial();
-        plan = await createStructured(state.client, params);
+        plan = await createStructured(state.client, params, { task: 'course' });
       }
       const sections = (plan.sections || []).map((s) => ({ title: clean(s.title, 120), lessons: (s.lessons || []).map((l) => ({ title: clean(l.title, 160), summary: clean(l.summary, 300) })).filter((l) => l.title).slice(0, 4) })).filter((s) => s.title && s.lessons.length).slice(0, 4);
       if (!sections.length) throw new Error('empty plan');
@@ -601,7 +603,7 @@ export function createWonderCore(opts = {}) {
     if (!markdown.trim()) return t.json(400, { ok: false, error: 'lessonMarkdown is required' });
     if (state.client) {
       try {
-        return t.json(200, { ok: true, ...(await extractPracticeWithClaude(state.client, markdown)) });
+        return t.json(200, { ok: true, ...(await extractPracticeWithClaude(state.client, markdown, { model: models.extract })) });
       } catch (err) {
         logger.warn?.(`[wonder] structured extraction failed (${friendlyError(err).code}); using lesson components`);
       }
@@ -631,6 +633,7 @@ export function createWonderCore(opts = {}) {
       effort: 'medium',
       maxTokens: 32000,
       tools: TEACHER_TOOLS,
+      model: models.teacher,
     });
     const run = (client) => runTeacherLoop({
       client,
@@ -695,7 +698,7 @@ export function createWonderCore(opts = {}) {
     let source = 'quiz-results';
     if (state.client) {
       try {
-        facts = await extractMemoryWithClaude(state.client, input, existing);
+        facts = await extractMemoryWithClaude(state.client, input, existing, { model: models.extract });
         source = 'claude';
       } catch (err) {
         logger.warn?.(`[wonder] memory extraction failed (${err?.code === 'refusal' ? 'refusal' : friendlyError(err).code}); using quiz results`);
@@ -781,7 +784,7 @@ export function createWonderCore(opts = {}) {
   };
 
   // materials: the upload limits public/today.js checks before sending a file
-  const status = () => ({ claude: !!state.client, model: MODEL, ...(state.client ? {} : { error: CLAUDE_NOT_CONFIGURED }), videos: videoSource(), materials: { maxPdfBytes: MAX_PDF_BYTES, partBytes: PART_BYTES } });
+  const status = () => ({ claude: !!state.client, model: models.lesson, models, ...(state.client ? {} : { error: CLAUDE_NOT_CONFIGURED }), videos: videoSource(), materials: { maxPdfBytes: MAX_PDF_BYTES, partBytes: PART_BYTES } });
 
   /** Run one API request. Resolves when the response has ended; a 404 for unknown API paths. */
   async function handle(method, pathname, body, t) {

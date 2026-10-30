@@ -13,7 +13,7 @@
 // Claude never writes Cite tags itself: the server inserts them, so the refs always resolve.
 
 import { scanComponentTags } from './compile.js';
-import { idleWatch } from './claude.js';
+import { idleWatch, reportUsage } from './claude.js';
 import { protectMath } from './math-spans.js';
 import { constRef } from './dil-constants.js';
 import { isMaterialUrl } from './materials.js'; // Phase 10: citations of the learner's own material
@@ -329,7 +329,7 @@ export function createRepeatFilter(asm) {
   };
 }
 
-export async function streamGrounded(client, params, { onText, onSearch, onSearchError, signal, registry, mapCitation, maxContinuations = MAX_PAUSE_CONTINUATIONS, idleMs } = {}) {
+export async function streamGrounded(client, params, { onText, onSearch, onSearchError, signal, registry, mapCitation, maxContinuations = MAX_PAUSE_CONTINUATIONS, idleMs, task } = {}) {
   const sources = registry || createSourceRegistry();
   // mapCitation (Phase 10): document citations of the learner's material -> url-keyed sources
   const reg = mapCitation ? { ...sources, cite: (c) => { const m = mapCitation(c); return m ? sources.cite(m) : null; } } : sources;
@@ -376,6 +376,7 @@ export async function streamGrounded(client, params, { onText, onSearch, onSearc
       }
     }
     message = await stream.finalMessage();
+    reportUsage(task, message); // each pause_turn continuation is its own request
     } catch (err) {
       watch.rethrow(err);
     } finally {

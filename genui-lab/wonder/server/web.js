@@ -131,8 +131,10 @@ export function getWonderCore() {
   if (!g.__wonderCore) {
     loadUserEnv();
     g.__wonderCore = createWonderCore();
-    const { claude, videos } = g.__wonderCore.status();
-    console.log(`[wonder] API ready (${claude ? 'Claude' : 'Claude not configured: set ANTHROPIC_API_KEY'}; videos: ${videos === 'youtube' ? 'YouTube' : 'off'})`);
+    const { claude, videos, models } = g.__wonderCore.status();
+    // e.g. "claude-opus-5-5 for lesson/critic/judge, claude-sonnet-5-5 for tutor/…"
+    const byModel = [...new Set(Object.values(models))].map((m) => `${m} for ${Object.keys(models).filter((k) => models[k] === m).join('/')}`).join(', ');
+    console.log(`[wonder] API ready (${claude ? `Claude: ${byModel}` : 'Claude not configured: set ANTHROPIC_API_KEY'}; videos: ${videos === 'youtube' ? 'YouTube' : 'off'})`);
   }
   return g.__wonderCore;
 }

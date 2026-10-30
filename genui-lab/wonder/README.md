@@ -5,7 +5,7 @@ Mull is a working learning app that combines the two systems reverse-engineered 
 - **wondering.app's product loop.** You pick a topic or plan a course. You get a short paged lesson with interactive widgets and a tutor you can ask about it. When you finish, knowledge cards are revealed in a "pack opening", and spaced-repetition review is scheduled with FSRS. A daily streak is tracked throughout. A **Teacher** agent plans your study, proposes lessons, quizzes you and remembers what matters, and a **learner memory** personalizes every lesson, tutor reply and Teacher turn.
 - **ChatGPT's "intelligent UI" (DIL).** The model writes JSX-like UI tags inline in its markdown. The server recompiles the growing message into a DIL program on every revision and streams it as `conversation-source` NDJSON. The browser runs the program in a sandboxed Web Worker and applies the resulting render ops to the DOM.
 
-The model is Claude (`claude-opus-5-5`), and the app needs it: without credentials, the routes that write lessons, tutor replies, Teacher turns and course plans answer `503` (see [Without a Claude key](#without-a-claude-key)).
+The models are Claude: `claude-opus-5-5` for lessons, `claude-sonnet-5-5` for the tutor and the Teacher, and `claude-haiku-5-5` for the extractions after each lesson (see [Models](#models)). The app needs them: without credentials, the routes that write lessons, tutor replies, Teacher turns and course plans answer `503` (see [Without a Claude key](#without-a-claude-key)).
 
 ```
 Claude                 ──text deltas──▶  server/compile.js  (chatgpt-dil compiler + learning-catalog pass:
@@ -95,7 +95,35 @@ Five sections, in a sidebar on desktop (with the streak and a link to your profi
 
 All of this lives in `server/claude.js`. The client is dependency-injected, so tests pass a fake.
 
-- **Lesson and tutor turns** use `client.beta.messages.stream({ model: "claude-opus-5-5", max_tokens: 64000, betas: ["server-side-fallback-2026-07-01"], fallbacks: "default", thinking: {type: "adaptive"}, output_config: {effort: "medium"}, system: [{…, cache_control: {type: "ephemeral"}}], messages })`.
+### Models
+
+Each kind of call has its own model (`TASK_MODELS`). `WONDER_MODEL_<TASK>` overrides one without a code change, e.g. `WONDER_MODEL_LESSON=claude-sonnet-5-5`.
+
+| Task | Model | Why |
+|---|---|---|
+| `lesson`: new, steered, resumed and revised lessons, and token counts for uploaded material | `claude-opus-5-5` | The product. On the eval below, Sonnet lessons scored lower on accuracy. |
+| `tutor`, `teacher` | `claude-sonnet-5-5` | Chat and short tool calls. |
+| `critic`: facts and quiz keys after a lesson | `claude-opus-5-5` | Catching a wrong fact or answer key takes judgment. |
+| `course`, `grade` | `claude-sonnet-5-5` | The learner reads the plan and the feedback. |
+| `extract`: knowledge cards, practice items and memory facts | `claude-haiku-5-5` | Schema-bound extraction after every lesson, about 40× cheaper per token than Opus. |
+| `judge`: `npm run eval` only | `claude-opus-5-5` | Never weaker than the writer it scores. |
+| The Figure vision check | `claude-haiku-5-5` | Its own setting, `WONDER_FIGURE_CHECK_MODEL` ([Figure](#figure-real-images-from-wikimedia-commons)). |
+
+Lesson eval, 6 topics (`evals/topics.json`, no web search), the Opus judge scoring 1–5, cost per lesson for the lesson plus its critic at list prices (October 2026):
+
+| Lessons and critic on | Judge | Accuracy | Interactivity | Lint | Critic issues | Cost per lesson | Seconds |
+|---|---|---|---|---|---|---|---|
+| `claude-opus-5-5`, effort medium | 4.40 | 4.67 | 4.67 | 0.97 | 0.33 | $0.156 | 58 |
+| `claude-sonnet-5-5`, effort high | 4.23 | 4.33 | 4.00 | 0.92 | 0.67 | $0.058 | 37 |
+| `claude-sonnet-5-5`, effort medium | 4.00 | 3.83 | 4.00 | 0.92 | 1.67 | $0.044 | 22 |
+
+Opus scored at least as high on every topic. Sonnet's pages were also shorter than the prompt asks (90–170 words) in 4 of 6 lessons. Six topics is a small sample.
+
+Haiku has no server-side refusal fallback, so a stream request on Haiku is sent without `fallbacks` and its beta. Every response reports its token usage (`reportUsage`): one `[wonder] usage <task> <model>: in …, cache read …, cache write …, out …` log line per request (`WONDER_LOG_USAGE=off` silences it), and `onUsage` listeners (the eval's cost tally).
+
+### Requests
+
+- **Lesson and tutor turns** use `client.beta.messages.stream({ model: "claude-sonnet-5-5", max_tokens: 64000, betas: ["server-side-fallback-2026-07-01"], fallbacks: "default", thinking: {type: "adaptive"}, output_config: {effort: "medium"}, system: [{…, cache_control: {type: "ephemeral"}}], messages })`.
   - The system prompt is static so the cache prefix stays stable. The per-lesson tutor context goes in a second system block after the breakpoint.
   - There is no temperature, top_p or prefill.
   - Text comes from `content_block_delta`/`text_delta` events, followed by `await stream.finalMessage()`.
@@ -255,10 +283,13 @@ Memory holds free-text facts. The learner model tracks what the learner actually
   - Five topics tagged `media` are physical or spatial (heart, camera lens, plate tectonics, water cycle, Moon phases). `--tag media` runs only those.
   - Options: `--limit n`, `--concurrency n`, `--topics file`, `--tag name`, `--no-judge`, `--no-verify`, `--web`, `--out dir`. Without a Claude key the eval stops before it starts.
   - A Claude run costs about 3 calls per lesson: lesson, critic and judge. Each found Figure adds a vision check on Haiku.
+  - Lessons and the critic use the app's [models](#models); the judge stays on Opus. `WONDER_MODEL_LESSON=claude-sonnet-5-5 npm run eval` writes the lessons on Sonnet instead, to compare.
+  - Tokens per task and model, and an estimated cost from list prices (`PRICES` in `evals/run.js`), go into `usage` in the JSON and a "Tokens and cost" table in the markdown. `lessonUsd` is the cost per lesson without the judge.
 
 ```sh
 npm run eval -- --limit 3
 npm run eval -- --tag media
+WONDER_MODEL_LESSON=claude-sonnet-5-5 WONDER_MODEL_CRITIC=claude-sonnet-5-5 npm run eval -- --limit 3
 ```
 
 ## Free response and "Guide me" (Phase 8)

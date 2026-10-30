@@ -12,6 +12,10 @@
 //   --tag <name>       only topics with this tag (e.g. --tag media: the physical/spatial topics)
 //   --out <dir>        report directory (default evals/reports)
 //
+// Models come from server/claude.js taskModels: WONDER_MODEL_LESSON=claude-sonnet-5-5 npm run eval
+// writes lessons on Sonnet, to compare against the default (Opus). Every response's token usage is
+// tallied per task and model, with an estimated cost (PRICES), into the report.
+//
 // Learner memory is an in-memory empty store, so runs never read or write data/memory.json.
 // Each lesson also reports its media: every <Diagram>/<Figure>, whether it validated, and for a
 // Figure whether the server found an image (or the vision check dropped it), from the final record.
@@ -22,7 +26,7 @@ import { fileURLToPath } from 'node:url';
 import { createWonderServer } from '../server/app.js';
 import { createMemoryStore } from '../server/memory.js';
 import { loadUserEnv } from '../server/web.js'; // ~/.config/wonder/.env fallback, as for the Next app
-import { MODEL, CLAUDE_NOT_CONFIGURED } from '../server/claude.js';
+import { taskModels, onUsage, CLAUDE_NOT_CONFIGURED } from '../server/claude.js';
 import { judgeLesson, summarizeRuns, reportMarkdown } from '../server/judge.js';
 import { lessonMedia } from '../server/critic.js';
 import { figureRefs } from '../server/figures.js';
@@ -96,6 +100,41 @@ export async function generateLesson(base, { topic, level, web, verify }) {
   return { markdown, title: /^#\s+(.+)$/m.exec(markdown)?.[1]?.trim() || '', quality, failure, dil: turn.primary?.dil || null };
 }
 
+/**
+ * USD per million tokens, Claude API list prices (October 2026). Cache writes are the 5-minute
+ * kind (1.25x input). Haiku's prices hold for prompts up to 100K tokens; its cache read is
+ * assumed at 0.1x input. Web searches are counted, not priced.
+ */
+export const PRICES = Object.freeze({
+  'claude-opus-5-5': { input: 4, output: 20, cacheRead: 0.2, cacheWrite: 5 },
+  'claude-sonnet-5-5': { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5 },
+  'claude-haiku-5-5': { input: 0.1, output: 0.5, cacheRead: 0.01, cacheWrite: 0.125 },
+});
+
+const FIELDS = ['input', 'cacheRead', 'cacheWrite', 'output', 'searches'];
+const dollars = (r) => { const p = PRICES[r.model]; return p ? (r.input * p.input + r.cacheRead * p.cacheRead + r.cacheWrite * p.cacheWrite + r.output * p.output) / 1e6 : null; };
+const cents = (x) => Math.round(x * 10000) / 10000;
+
+/** Token usage per task and model across a run (claude.js onUsage entries), with estimated cost. */
+export function createUsageTally() {
+  const rows = new Map();
+  return {
+    add(e) {
+      const key = `${e.task}|${e.model}`;
+      const r = rows.get(key) || { task: e.task, model: e.model, requests: 0, ...Object.fromEntries(FIELDS.map((f) => [f, 0])) };
+      r.requests++;
+      for (const f of FIELDS) r[f] += e[f] || 0;
+      rows.set(key, r);
+    },
+    /** {byTask, usd, lessonUsd}: lessonUsd is everything but the judge, per generated lesson. */
+    summary(lessons) {
+      const byTask = [...rows.values()].map((r) => ({ ...r, usd: dollars(r) == null ? null : cents(dollars(r)) }));
+      const sum = (list) => cents(list.reduce((a, r) => a + (r.usd || 0), 0));
+      return { byTask, usd: sum(byTask), lessonUsd: lessons ? cents(sum(byTask.filter((r) => r.task !== 'judge')) / lessons) : null };
+    },
+  };
+}
+
 async function pool(items, n, fn) {
   const out = new Array(items.length);
   let next = 0;
@@ -114,6 +153,9 @@ export async function runEval(opts, { serverOpts = {}, log = console.log } = {})
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   const base = `http://127.0.0.1:${server.address().port}`;
   const judging = opts.judge;
+  const models = serverOpts.models || taskModels(serverOpts.env || process.env);
+  const tally = createUsageTally();
+  const stopTally = onUsage(tally.add);
   const startedAt = new Date().toISOString();
   log(`Eval: ${topics.length} topic(s), judge ${judging ? 'on' : 'off'}, critic ${opts.verify ? 'on' : 'off'}`);
   try {
@@ -123,7 +165,7 @@ export async function runEval(opts, { serverOpts = {}, log = console.log } = {})
         const g = await generateLesson(base, { topic, level, web: opts.web, verify: opts.verify });
         if (g.failure) throw new Error(g.failure.message || g.failure.code);
         const seconds = (Date.now() - t0) / 1000;
-        const judge = judging ? await judgeLesson(client, { markdown: g.markdown, topic, level }).catch((e) => ({ error: e.message })) : null;
+        const judge = judging ? await judgeLesson(client, { markdown: g.markdown, topic, level, model: models.judge }).catch((e) => ({ error: e.message })) : null;
         const media = lessonMediaReport(g.markdown, g.dil);
         const mediaNote = [media.diagrams.length && `${media.diagrams.length} diagram`, media.figures.length && `${media.figures.length} figure (${media.figures.filter((f) => f.found).length} image)`].filter(Boolean).join(', ');
         log(`[${i + 1}/${topics.length}] ${topic}: lint ${g.quality?.lint?.score ?? '–'}${judge?.mean != null ? `, judge ${judge.mean}` : ''}${mediaNote ? `, ${mediaNote}` : ''} (${seconds.toFixed(1)}s)`);
@@ -133,8 +175,10 @@ export async function runEval(opts, { serverOpts = {}, log = console.log } = {})
         return { topic, level, error: e.message };
       }
     });
-    return { meta: { startedAt, model: MODEL, webSearch: opts.web, verify: opts.verify, judge: judging, topics: path.basename(opts.topics), ...(opts.tag ? { tag: opts.tag } : {}), figureCheck: server.wonder.figureCheck ?? null }, summary: summarizeRuns(runs), runs };
+    const summary = summarizeRuns(runs);
+    return { meta: { startedAt, model: models.lesson, models: { lesson: models.lesson, critic: models.critic, judge: models.judge }, webSearch: opts.web, verify: opts.verify, judge: judging, topics: path.basename(opts.topics), ...(opts.tag ? { tag: opts.tag } : {}), figureCheck: server.wonder.figureCheck ?? null }, summary, usage: tally.summary(summary.ok), runs };
   } finally {
+    stopTally();
     server.closeAllConnections?.();
     await new Promise((r) => server.close(r));
   }
@@ -152,12 +196,14 @@ export function writeReport(report, dir) {
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])) {
   loadUserEnv(); // same ~/.config/wonder/.env fallback as the app
+  process.env.WONDER_LOG_USAGE ??= 'off'; // the report tallies usage instead of a line per request
   const opts = parseArgs(process.argv.slice(2));
   const report = await runEval(opts, { log: (line) => console.log(line) });
   const files = writeReport(report, opts.out);
   const m = report.summary.means;
   const md = report.summary.media;
-  console.log(`\n${report.summary.ok}/${report.summary.runs} lessons · lint ${m.lint ?? '–'} · judge ${m.judge ?? '–'} · critic issues ${m.issues ?? '–'} · diagram in ${md.withDiagram}/${md.lessons} · figure in ${md.withFigure}/${md.lessons} (images ${md.figures.found}/${md.figures.valid})`);
+  const cost = report.usage.lessonUsd != null ? ` · about $${report.usage.lessonUsd.toFixed(3)} per lesson` : '';
+  console.log(`\n${report.summary.ok}/${report.summary.runs} lessons · lint ${m.lint ?? '–'} · judge ${m.judge ?? '–'} · critic issues ${m.issues ?? '–'} · diagram in ${md.withDiagram}/${md.lessons} · figure in ${md.withFigure}/${md.lessons} (images ${md.figures.found}/${md.figures.valid})${cost}`);
   const rel = path.relative(process.cwd(), files.md);
   console.log(`Report: ${rel.startsWith('..') ? files.md : rel}`);
 }

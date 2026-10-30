@@ -6,6 +6,8 @@ process.env.WONDER_FIGURES ??= 'off';
 process.env.WONDER_VIDEOS ??= 'off';
 // ...and the figure vision check is off (tests that need it pass figureCheck)
 process.env.WONDER_FIGURE_CHECK ??= 'off';
+// ...and no per-request token usage lines in the test output
+process.env.WONDER_LOG_USAGE ??= 'off';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
