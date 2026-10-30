@@ -28,7 +28,7 @@ const NOUN = { lesson: 'lessons', tutor: 'tutor messages', teacher: 'Teacher mes
 
 /**
  * Routes that call Claude. A function decides from the body (widget actions vary). A live steer
- * (POST /api/lesson/steer) is charged as a lesson in app.js once the lesson accepts it, so a
+ * (POST /api/lesson/steer) is charged as a lesson in app.js once the stream applies it, so a
  * rejected steer costs nothing.
  */
 const CLAUDE_ROUTES = {

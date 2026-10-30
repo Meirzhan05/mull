@@ -54,13 +54,16 @@ const COLOR_TOKENS = {
   },
 };
 
+// the CSS functions a color may contain: no url(), image-set(), element(), paint()…
+const COLOR_FNS = new Set(['rgb', 'rgba', 'hsl', 'hsla', 'hwb', 'lab', 'lch', 'oklab', 'oklch', 'color', 'color-mix', 'light-dark', 'var', 'calc']);
+
 export function resolveColor(v, ctx = 'text') {
   if (v == null || v === false) return null;
   const s = String(v);
   if (s === 'currentColor' || s === 'none' || s === 'inherit') return s;
   // a CSS color function or hex, and nothing more: "#fff url(https://…)" would otherwise load a
   // URL chosen by the model when it lands in `background`
-  if (/^(#|rgb|hsl|var\(|oklch|color\()/i.test(s)) return /^[\w\s#.,%()/+-]*$/.test(s) && !/url\(|image|element\(/i.test(s) ? s : null;
+  if (/^(#|[\w-]+\()/.test(s)) return /^[\w\s#.,%()/+-]*$/.test(s) && [...s.matchAll(/([\w-]+)\s*\(/g)].every((m) => COLOR_FNS.has(m[1].toLowerCase())) ? s : null;
   const m = /^alpha-(\d+)$/.exec(s);
   if (m) return `var(--d-alpha-${m[1]}, rgba(13,13,13,${Number(m[1]) / 100}))`;
   return COLOR_TOKENS[ctx]?.[s] ?? COLOR_TOKENS.any[s] ?? PALETTE[s] ?? `var(--d-color-${s.replace(/[^\w-]/g, '')}, currentColor)`;
@@ -84,9 +87,9 @@ function borderStyle(style, v) {
   if (v === false || v === 'none') { style.border = 'none'; return; }
   if (v === true) { style.border = '1px solid var(--d-border-default)'; return; }
   if (typeof v === 'number') { style.border = `${v}px solid var(--d-border-default)`; return; }
-  if (typeof v === 'string') { style.border = `1px solid ${resolveColor(v, 'border')}`; return; }
+  if (typeof v === 'string') { style.border = `1px solid ${resolveColor(v, 'border') ?? 'var(--d-border-default)'}`; return; }
   const size = v.size ?? v.width ?? 1;
-  const color = resolveColor(v.color ?? 'default', 'border');
+  const color = resolveColor(v.color ?? 'default', 'border') ?? 'var(--d-border-default)'; // a refused color keeps the default
   const sides = v.side ? [v.side] : null;
   if (sides) for (const s of sides) style[`border${s[0].toUpperCase()}${s.slice(1)}`] = `${size}px solid ${color}`;
   else style.border = `${size}px solid ${color}`;

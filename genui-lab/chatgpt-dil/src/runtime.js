@@ -208,8 +208,12 @@ export function createRuntime(o) {
   const catalog = createCatalog({ __dil: dil, DIL, GenUI });
   const catalogNames = CATALOG_NAMES.filter((n) => catalog[n]);
   // host functions a program may call but never render: as a component type (a tag named
-  // GenUI.dispatchAction) one would run with model-written props on render, without a click
+  // GenUI.dispatchAction) one would run with model-written props on render, without a click.
+  // Built-ins too (postMessage, eval…): a program compiled before the compiler's allowlist may
+  // name any identifier in scope as a tag.
   const notComponents = new Set([...Object.values(GenUI), ...Object.values(DIL), ...Object.values(dil), ...Object.values(timerApi), DateCtor].filter((f) => typeof f === 'function'));
+  const nativeCode = /\{\s*\[native code\]\s*\}\s*$/;
+  const isComponent = (f) => !notComponents.has(f) && !nativeCode.test(Function.prototype.toString.call(f));
 
   function evaluate(code) {
     rootElementCandidate = undefined;
@@ -284,7 +288,7 @@ export function createRuntime(o) {
     hookIndex = 0;
     let out;
     try {
-      if (notComponents.has(f.type)) throw new TypeError('not a component');
+      if (!isComponent(f.type)) throw new TypeError('not a component');
       out = f.type(f.props);
     } catch (err) {
       // Per-component boundary: a throwing component renders nothing (the real runtime
