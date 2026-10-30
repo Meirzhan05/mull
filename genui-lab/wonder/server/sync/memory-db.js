@@ -108,7 +108,12 @@ export function createMemoryDb() {
     },
     // -- Free/Pro plans (server/plans.js)
     async getPlan(userId) { const p = users.get(userId)?.plan; return p ? { ...p } : null; },
-    async setPlan(userId, p) { user(userId).plan = { ...p }; },
+    async setPlan(userId, p) {
+      const u = user(userId);
+      if (u.plan?.syncedAt != null && p.syncedAt != null && p.syncedAt < u.plan.syncedAt) return false; // an older read
+      u.plan = { ...p };
+      return true;
+    },
     // -- material files
     async putFile(userId, id, { bytes, contentType }) { user(userId).files.set(id, { bytes: Buffer.from(bytes), contentType }); },
     async getFile(userId, id) { const f = users.get(userId)?.files.get(id); return f ? { bytes: Buffer.from(f.bytes), contentType: f.contentType } : null; },

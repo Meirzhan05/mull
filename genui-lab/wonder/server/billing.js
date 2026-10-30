@@ -8,8 +8,13 @@
 // "sandbox" (the default, test cards only) or "production".
 //
 // The checkout carries the user id as Polar's external customer id, so every subscription event
-// names its user (customer.external_id). Events can arrive late or out of order, so each one is
-// answered by fetching the subscription as it is now and storing that.
+// names its user (customer.external_id). Events can arrive late, twice or out of order, so an event
+// only says which user to look at: their subscriptions are listed from Polar as they are now and
+// the best one becomes the plan record (stamped with when it was read, so an older read never
+// overwrites a newer one). A user with two subscriptions stays Pro while either is live.
+//
+// POLAR_PRODUCT_ID may list several products (comma separated): the first is the one checkout
+// sells, and a subscription to any of them is Pro (a yearly price, or one a user switched to).
 
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { GOOD_STANDING } from './plans.js';
@@ -20,16 +25,18 @@ export const POLAR_VERSION = '2026-10';
 /** Webhook timestamps further than this from now are refused (Standard Webhooks replay window). */
 export const WEBHOOK_TOLERANCE_MS = 5 * 60_000;
 const PRICE_TTL_MS = 60 * 60_000;
+/** How long GET /api/account waits for a first price label before answering without one. */
+const PRICE_WAIT_MS = 1500;
 
 /** Polar settings from the environment, or null when billing is off. */
 export function polarConfig(env = process.env) {
   const v = (k) => (typeof env[k] === 'string' && env[k].trim() ? env[k].trim() : null);
   const token = v('POLAR_ACCESS_TOKEN');
   const webhookSecret = v('POLAR_WEBHOOK_SECRET');
-  const productId = v('POLAR_PRODUCT_ID');
-  if (!token || !webhookSecret || !productId) return null;
+  const productIds = (v('POLAR_PRODUCT_ID') || '').split(/[\s,]+/).filter(Boolean);
+  if (!token || !webhookSecret || !productIds.length) return null;
   const server = v('POLAR_SERVER')?.toLowerCase() === 'production' ? 'production' : 'sandbox';
-  return { token, webhookSecret, productId, server, apiBase: POLAR_API[server] };
+  return { token, webhookSecret, productId: productIds[0], productIds, server, apiBase: POLAR_API[server] };
 }
 
 /**
@@ -66,6 +73,11 @@ export function verifyWebhook(raw, header, secret, now = Date.now()) {
   });
 }
 
+/** Subscription statuses that are over: nothing more will be charged. */
+export const ENDED = Object.freeze(['canceled', 'incomplete_expired']);
+/** Statuses that count as already subscribed (checkout refuses a second one). */
+const SUBSCRIBED = Object.freeze([...GOOD_STANDING, 'paused']);
+
 /** Polar subscription statuses as plan statuses (server/plans.js PLAN_STATUSES). */
 const STATUS = { incomplete: 'incomplete', incomplete_expired: 'expired', trialing: 'trialing', active: 'active', past_due: 'past_due', canceled: 'canceled', unpaid: 'unpaid', paused: 'paused' };
 
@@ -81,6 +93,21 @@ export function planFromSubscription(sub) {
     cancelAtPeriodEnd: !!sub.cancel_at_period_end,
   };
 }
+
+const time = (v) => { const n = Date.parse(v || ''); return Number.isFinite(n) ? n : 0; };
+
+/**
+ * The subscription that decides a user's plan: a live one (latest period end first), else the
+ * most recently changed one. Null for none.
+ */
+export function bestSubscription(subs) {
+  const live = subs.filter((s) => GOOD_STANDING.includes(s.status)).sort((a, b) => time(b.current_period_end) - time(a.current_period_end));
+  if (live.length) return live[0];
+  return [...subs].sort((a, b) => time(b.modified_at || b.created_at) - time(a.modified_at || a.created_at))[0] || null;
+}
+
+/** A Polar error that retrying cannot fix (4xx other than 429). */
+const permanent = (e) => e.status >= 400 && e.status < 500 && e.status !== 429;
 
 /** "$8 / month" style label for a Polar product's first fixed price, or null. */
 export function priceLabel(product) {
@@ -108,21 +135,63 @@ export function createPolarBilling({ config, plans, fetch: fetchImpl = globalThi
       body: body ? JSON.stringify(body) : undefined,
       signal: AbortSignal.timeout(10_000),
     });
-    const data = await res.json().catch(() => null);
+    const data = res.status === 204 ? null : await res.json().catch(() => null);
     if (!res.ok) throw Object.assign(new Error(`Polar ${method} ${path.split('?')[0]} failed (${res.status})`), { status: res.status, detail: data });
     return data;
   }
 
+  /** Every subscription of this user (by external customer id) to a Pro product. */
+  async function proSubscriptions(userId) {
+    const out = [];
+    for (let page = 1, max = 1; page <= max && page <= 10; page++) {
+      let r;
+      try {
+        r = await api('GET', `/subscriptions/?external_customer_id=${encodeURIComponent(userId)}&limit=100&page=${page}`);
+      } catch (e) {
+        if (e.status === 404) return []; // no Polar customer with this id yet
+        throw e;
+      }
+      out.push(...(r?.items || []));
+      max = r?.pagination?.max_page || 1;
+    }
+    return out.filter((s) => config.productIds.includes(s.product_id));
+  }
+
+  // the price is only a button label: a cold cache waits briefly, a stale one refreshes behind
   let price = { label: null, at: -Infinity };
-  async function currentPrice() {
-    if (now() - price.at < PRICE_TTL_MS) return price.label;
-    try {
-      price = { label: priceLabel(await api('GET', `/products/${encodeURIComponent(config.productId)}`)), at: now() };
-    } catch (e) {
+  let pricePending = null;
+  const refreshPrice = () => (pricePending ??= api('GET', `/products/${encodeURIComponent(config.productId)}`)
+    .then((p) => { price = { label: priceLabel(p), at: now() }; })
+    .catch((e) => {
       logger.warn?.(`[wonder] Pro price lookup failed: ${e.message}`);
       price = { label: price.label, at: now() - PRICE_TTL_MS + 60_000 }; // try again in a minute
+    })
+    .finally(() => { pricePending = null; }));
+  async function currentPrice() {
+    if (now() - price.at >= PRICE_TTL_MS) {
+      const p = refreshPrice();
+      if (price.label == null) await Promise.race([p, new Promise((r) => setTimeout(r, PRICE_WAIT_MS).unref?.())]);
     }
     return price.label;
+  }
+
+  /**
+   * Store the user's plan from their subscriptions as Polar has them now. A user with no record
+   * and nothing live is left alone (a deleted account is not brought back by the cancellation its
+   * deletion caused).
+   */
+  async function syncUser(userId) {
+    const syncedAt = now();
+    const best = bestSubscription(await proSubscriptions(userId));
+    const prev = await plans.stored(userId);
+    if (!best) {
+      // every Pro subscription is gone (or moved off Pro): a stored live one has ended
+      if (prev?.provider !== 'polar' || !GOOD_STANDING.includes(prev.status)) return false;
+      return plans.setPlan(userId, { ...prev, status: 'canceled', cancelAtPeriodEnd: false, syncedAt });
+    }
+    const next = { ...planFromSubscription(best), syncedAt };
+    if (!prev && !GOOD_STANDING.includes(next.status)) return false;
+    return plans.setPlan(userId, next);
   }
 
   return {
@@ -140,8 +209,14 @@ export function createPolarBilling({ config, plans, fetch: fetchImpl = globalThi
       };
     },
 
-    /** A hosted checkout for Pro; resolves its URL. */
+    /**
+     * A hosted checkout for Pro; resolves its URL. Refuses (status 409) when the user already has
+     * a live or paused subscription that the webhook has not recorded yet.
+     */
     async checkout(userId, { origin }) {
+      if ((await proSubscriptions(userId)).some((s) => SUBSCRIBED.includes(s.status))) {
+        throw Object.assign(new Error('You already have a Pro subscription. Manage it with Manage billing.'), { status: 409 });
+      }
       const c = await api('POST', '/checkouts/', {
         products: [config.productId],
         external_customer_id: userId,
@@ -161,42 +236,57 @@ export function createPolarBilling({ config, plans, fetch: fetchImpl = globalThi
       return s.customer_portal_url;
     },
 
-    /** End a user's subscription now (account deletion). Already-ended ones are fine. */
-    async cancelNow(record) {
-      if (record?.provider !== 'polar' || !record.subscriptionId || !GOOD_STANDING.includes(record.status)) return false;
-      try {
-        await api('DELETE', `/subscriptions/${encodeURIComponent(record.subscriptionId)}`);
-      } catch (e) {
-        if (e.status === 403 || e.status === 404) return false; // already canceled, or gone
-        throw e;
+    /**
+     * Account deletion: end every subscription the user has at Polar that is not over yet (paused,
+     * unpaid and not-yet-recorded ones too), then delete and anonymize the Polar customer, which
+     * also clears its external id. Resolves how many were ended; throws when Polar cannot be
+     * reached, so the caller keeps the account.
+     */
+    async cancelAll(userId, record) {
+      const subs = await proSubscriptions(userId);
+      const ids = new Set(subs.filter((s) => !ENDED.includes(s.status)).map((s) => s.id));
+      if (record?.provider === 'polar' && record.subscriptionId && record.status !== 'canceled' && record.status !== 'expired' && !subs.some((s) => s.id === record.subscriptionId)) ids.add(record.subscriptionId);
+      let ended = 0;
+      for (const id of ids) {
+        try {
+          await api('DELETE', `/subscriptions/${encodeURIComponent(id)}`);
+          ended++;
+        } catch (e) {
+          if (e.status !== 403 && e.status !== 404) throw e; // 403: already canceled; 404: gone
+        }
       }
-      return true;
+      try {
+        await api('DELETE', `/customers/external/${encodeURIComponent(userId)}?anonymize=true`);
+      } catch (e) {
+        if (e.status !== 404) throw e; // never bought anything
+      }
+      return ended;
     },
 
     /**
      * One webhook delivery. Resolves the HTTP status to answer: 401 for a bad signature, 2xx once
-     * handled or deliberately ignored; a throw (500) makes Polar retry.
+     * handled or deliberately ignored; a throw (500) makes Polar retry. Polar disables an endpoint
+     * after 10 failed deliveries in a row, so an error retrying cannot fix answers 202 (logged).
      */
     async webhook(raw, header) {
       if (!verifyWebhook(raw, header, config.webhookSecret, now())) return { status: 401 };
       let event;
       try { event = JSON.parse(raw); } catch { return { status: 400 }; }
-      if (!String(event?.type || '').startsWith('subscription.') || !event.data?.id) return { status: 202 };
-      const sub = await api('GET', `/subscriptions/${encodeURIComponent(event.data.id)}`);
-      if (sub.product_id !== config.productId) return { status: 202 };
+      const sub = event?.data;
+      if (!String(event?.type || '').startsWith('subscription.') || !sub?.id) return { status: 202 };
       const userId = sub.customer?.external_id || sub.metadata?.wonderUserId;
       if (typeof userId !== 'string' || !userId) {
         logger.warn?.(`[wonder] Polar subscription ${sub.id} names no user`);
         return { status: 202 };
       }
-      const next = planFromSubscription(sub);
-      const prev = await plans.stored(userId);
-      // a late event for an old subscription never replaces a live one, and a deleted account
-      // is not brought back by the cancellation its deletion caused
-      if (prev && prev.subscriptionId !== next.subscriptionId && GOOD_STANDING.includes(prev.status) && !GOOD_STANDING.includes(next.status)) return { status: 202 };
-      if (!prev && !GOOD_STANDING.includes(next.status)) return { status: 202 };
-      await plans.setPlan(userId, next);
-      logger.info?.(`[wonder] plan from Polar ${event.type}: pro/${next.status}`);
+      try {
+        const stored = await syncUser(userId);
+        logger.info?.(`[wonder] plan from Polar ${event.type}: ${stored ? 'stored' : 'unchanged'}`);
+      } catch (e) {
+        if (!permanent(e)) throw e;
+        logger.error?.(`[wonder] Polar webhook ${event.type} dropped: ${e.message}`);
+        return { status: 202 };
+      }
       return { status: 200 };
     },
   };

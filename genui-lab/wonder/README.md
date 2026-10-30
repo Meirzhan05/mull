@@ -890,23 +890,27 @@ Accounts are off unless **both** Neon Auth and a database are set. Without them 
 - **Failing safe.** A plan lookup that fails is logged and counts as Free.
 
 **Buying Pro** (`server/billing.js`). Pro is sold through [Polar](https://polar.sh), a merchant of record: Polar runs the checkout, charges sales tax and VAT, and pays the seller out (it pays out to many countries Stripe does not, Kazakhstan among them). Off unless all three of `POLAR_ACCESS_TOKEN`, `POLAR_WEBHOOK_SECRET` and `POLAR_PRODUCT_ID` are set; then `/api/account` sends `billing: {provider, sandbox, price, canUpgrade, canManage}` and the You page shows **Upgrade** or **Manage billing**.
-- **Checkout.** `POST /api/billing/checkout` makes a Polar checkout for the Pro product with the user id as Polar's external customer id, and the browser goes there. Back on `/?checkout_id=…#/you`, the You page waits up to 30 seconds for the webhook to make the account Pro.
+- **Pro products.** `POLAR_PRODUCT_ID` is the Pro product checkout sells; list more (comma separated) and a subscription to any of them is Pro too, such as a yearly price or a product a user switched to.
+- **Checkout.** `POST /api/billing/checkout` makes a Polar checkout for the first Pro product with the user id as Polar's external customer id, and the browser goes there. It refuses (409) when Polar already has a live or paused Pro subscription for the user that the webhook has not recorded yet. Back on `/?checkout_id=…#/you`, the You page waits up to 30 seconds for the webhook to make the account Pro, once per checkout.
 - **Manage.** `POST /api/billing/portal` opens Polar's customer portal (card, invoices, cancel) for the stored customer.
-- **Webhook.** `POST /api/billing/webhook` checks the Standard Webhooks signature over the raw body (secrets made since September 2026 and older ones both work), then fetches the subscription from Polar and stores it as the plan record, so late or out-of-order events cannot leave a stale state. Events for other products or naming no user are ignored; an ended old subscription never replaces a live one. Any failure answers 500 so Polar redelivers.
-- **Cancelling.** Cancel at period end keeps Pro until then (`endsAt`); a revoked subscription is Free.
-- **Deleting an account** ends its Pro subscription in Polar first. If Polar cannot be reached, nothing is deleted and the user is told to try again, so a deleted account is never charged again.
+- **Webhook.** `POST /api/billing/webhook` checks the Standard Webhooks signature over the raw body (secrets made since September 2026 and older ones both work). An event only says which user to look at: their Pro subscriptions are listed from Polar as they are now and the best one becomes the plan record (a live one, latest period end first). So late, repeated or out-of-order events cannot leave a stale state, and a user with two subscriptions stays Pro while either lives. Each record is stamped with when Polar was read, and an older read never overwrites a newer one. Events naming no user are ignored. A Polar error that retrying cannot fix (4xx other than 429) is logged and answered 202, because Polar disables an endpoint after 10 failed deliveries in a row; anything else answers 500 so Polar redelivers.
+- **Cancelling.** Cancel at period end keeps Pro until then (`endsAt`); once no Pro subscription is live the account is Free.
+- **Deleting an account** first revokes every Pro subscription Polar has for the user that is not over (paused, unpaid and not-yet-recorded ones too), then deletes and anonymizes the Polar customer. If Polar cannot be reached, nothing is deleted and the user is told to try again, so a deleted account is never charged again.
+- **The price** on the Upgrade button comes from the Pro product, cached for an hour. A cold cache waits at most 1.5 seconds; after that the button reads "Upgrade to Pro" and the price shows next time.
 - **Sandbox first.** `POLAR_SERVER` is `sandbox` unless set to `production`. Sandbox has its own dashboard (sandbox.polar.sh), tokens and test card (4242 4242 4242 4242).
 - **Setup.**
   1. Create an organization on [sandbox.polar.sh](https://sandbox.polar.sh) (later the same on polar.sh, with payouts set up under Finance).
   2. Add a product **Pro** with a monthly price. Copy its id into `POLAR_PRODUCT_ID`.
-  3. Settings → Developers: create an organization access token with `checkouts:write`, `customer_sessions:write`, `products:read`, `subscriptions:read` and `subscriptions:write` scopes, into `POLAR_ACCESS_TOKEN`.
+  3. Settings → Developers: create an organization access token with `checkouts:write`, `customer_sessions:write`, `customers:write`, `products:read`, `subscriptions:read` and `subscriptions:write` scopes, into `POLAR_ACCESS_TOKEN`.
   4. Settings → Webhooks: add an endpoint `https://<your domain>/api/billing/webhook`, format **Raw**, with the `subscription.*` events. Copy its secret into `POLAR_WEBHOOK_SECRET`.
-  5. Set the same variables on Vercel (`vercel env add`) and redeploy.
+  5. Leave Settings → Subscriptions → **Allow multiple subscriptions** off (the default), so Polar itself stops a second purchase.
+  6. Set the same variables on Vercel (`vercel env add`) and redeploy.
 
 **Tests.**
 - `test/usage.test.js`: caps per user, kind and day; free retries and their bounds; failing open; 401 and 429 over HTTP; demo mode and accounts off; non-retryable errors in the browser.
 - `test/plans.test.js`: who is Pro (status, period and grace, comped users), record validation, Pro caps and their overrides, and Pro vs Free over HTTP with the plan on `/api/account`.
-- `test/billing.test.js`: webhook signatures (both key kinds, replay window), subscription to plan record, and against a fake Polar API: checkout, webhook to Pro, portal, cancel, ignored and stale events, retries, and account deletion ending the subscription.
+- `test/billing.test.js`: webhook signatures (both key kinds, replay window), subscription to plan record, picking the deciding subscription, older reads dropped, and against a fake Polar API: checkout and its second-subscription guard, webhook to Pro, portal, cancel, two subscriptions, product switches, ignored events, which errors are retried, account deletion ending every subscription and the customer (and its failure paths), and a slow price lookup.
+- `test/sync-pg.test.js` (with `WONDER_TEST_DATABASE_URL`): plan records round-trip in Postgres, an older read is dropped, and the plan goes with the account.
 - `test/landing.test.js`: who the home page sends to `/welcome`, with account sync on and off, and the signed-out deep link kept for after sign-in.
 - `test/start.test.js`: where `#/start[/<topic>]` goes (sign-in, onboarding, the lesson, home).
 - `test/sync*.test.js`: sync, authorization and statement scoping.

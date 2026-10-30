@@ -30,7 +30,7 @@ test('effective plan: Pro only in good standing and within its period (plus grac
 
 test('plan records are cleaned; unknown plans and statuses are refused', () => {
   const r = cleanPlanRecord({ plan: 'pro', status: 'active', provider: ' stripe ', customerId: '', periodEnd: '2026-11-24T00:00:00Z', cancelAtPeriodEnd: 1, extra: 'x' });
-  assert.deepEqual(r, { plan: 'pro', status: 'active', provider: 'stripe', customerId: null, subscriptionId: null, periodEnd: Date.UTC(2026, 10, 24), cancelAtPeriodEnd: true });
+  assert.deepEqual(r, { plan: 'pro', status: 'active', provider: 'stripe', customerId: null, subscriptionId: null, periodEnd: Date.UTC(2026, 10, 24), cancelAtPeriodEnd: true, syncedAt: null });
   assert.throws(() => cleanPlanRecord({ plan: 'gold', status: 'active' }), /Unknown plan/);
   assert.throws(() => cleanPlanRecord({ plan: 'pro', status: 'paid' }), /Unknown plan status/);
 });

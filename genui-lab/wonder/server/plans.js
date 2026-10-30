@@ -20,21 +20,24 @@ export function compedUsers(env = process.env) {
 
 /**
  * A plan record as stored, from any provider's data. Throws on a plan or status it does not know.
- * {plan, status, provider, customerId, subscriptionId, periodEnd (ms or null), cancelAtPeriodEnd}
+ * {plan, status, provider, customerId, subscriptionId, periodEnd (ms or null), cancelAtPeriodEnd,
+ * syncedAt}. syncedAt (ms or null) is when the provider was read: a write older than the stored
+ * one is dropped, so of two webhooks handled at once the later read wins.
  */
 export function cleanPlanRecord(r) {
   if (!PLAN_IDS.includes(r?.plan)) throw new Error(`Unknown plan: ${r?.plan}`);
   if (!PLAN_STATUSES.includes(r.status)) throw new Error(`Unknown plan status: ${r.status}`);
   const id = (v) => (typeof v === 'string' && v.trim() ? v.trim().slice(0, 200) : null);
-  const end = r.periodEnd == null ? null : Number(new Date(r.periodEnd));
+  const ms = (v) => { const n = v == null ? NaN : Number(new Date(v)); return Number.isFinite(n) ? n : null; };
   return {
     plan: r.plan,
     status: r.status,
     provider: id(r.provider),
     customerId: id(r.customerId),
     subscriptionId: id(r.subscriptionId),
-    periodEnd: Number.isFinite(end) ? end : null,
+    periodEnd: ms(r.periodEnd),
     cancelAtPeriodEnd: !!r.cancelAtPeriodEnd,
+    syncedAt: ms(r.syncedAt),
   };
 }
 
@@ -69,9 +72,9 @@ export function createPlans({ db, env = process.env, now = () => Date.now(), log
       if (comped.has(userId)) return 'pro';
       return effectivePlan(await record(userId), { now: now() });
     },
-    /** What the You page shows. */
-    async describe(userId) {
-      const r = comped.has(userId) ? null : await record(userId);
+    /** What the You page shows; `stored` is the record when the caller already read it. */
+    async describe(userId, stored) {
+      const r = comped.has(userId) ? null : stored !== undefined ? stored : await record(userId);
       const id = effectivePlan(r, { now: now(), comped: comped.has(userId) });
       return {
         id,
@@ -82,9 +85,9 @@ export function createPlans({ db, env = process.env, now = () => Date.now(), log
         endsAt: id === 'pro' && r?.periodEnd && r.cancelAtPeriodEnd ? new Date(r.periodEnd).toISOString() : null,
       };
     },
-    /** Store a user's plan (a provider webhook). */
+    /** Store a user's plan (a provider webhook). False when a newer read is already stored. */
     async setPlan(userId, rec) {
-      await db.setPlan(userId, cleanPlanRecord(rec));
+      return (await db.setPlan(userId, cleanPlanRecord(rec))) !== false;
     },
   };
 }

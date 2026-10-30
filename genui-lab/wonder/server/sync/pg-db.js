@@ -56,6 +56,7 @@ CREATE TABLE IF NOT EXISTS wonder_plans (
   cancel_at_period_end boolean NOT NULL DEFAULT false,
   updated_at timestamptz NOT NULL DEFAULT now()
 );
+ALTER TABLE wonder_plans ADD COLUMN IF NOT EXISTS synced_at timestamptz;
 CREATE TABLE IF NOT EXISTS wonder_files (
   user_id text NOT NULL,
   id text NOT NULL,
@@ -215,16 +216,22 @@ export function createPgDb({ pool, blob = null }) {
     },
     // -- Free/Pro plans (server/plans.js)
     async getPlan(userId) {
-      const { rows: [r] } = await q('SELECT plan, status, provider, customer_id, subscription_id, period_end, cancel_at_period_end FROM wonder_plans WHERE user_id = $1', [userId]);
-      return r ? { plan: r.plan, status: r.status, provider: r.provider, customerId: r.customer_id, subscriptionId: r.subscription_id, periodEnd: r.period_end ? new Date(r.period_end).getTime() : null, cancelAtPeriodEnd: r.cancel_at_period_end } : null;
+      const { rows: [r] } = await q('SELECT plan, status, provider, customer_id, subscription_id, period_end, cancel_at_period_end, synced_at FROM wonder_plans WHERE user_id = $1', [userId]);
+      const ms = (v) => (v ? new Date(v).getTime() : null);
+      return r ? { plan: r.plan, status: r.status, provider: r.provider, customerId: r.customer_id, subscriptionId: r.subscription_id, periodEnd: ms(r.period_end), cancelAtPeriodEnd: r.cancel_at_period_end, syncedAt: ms(r.synced_at) } : null;
     },
+    /** Upsert; a record read from the provider before the stored one (synced_at) is dropped: false. */
     async setPlan(userId, p) {
-      await q(
-        `INSERT INTO wonder_plans (user_id, plan, status, provider, customer_id, subscription_id, period_end, cancel_at_period_end, updated_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now())
+      const at = (v) => (v == null ? null : new Date(v));
+      const { rowCount } = await q(
+        `INSERT INTO wonder_plans (user_id, plan, status, provider, customer_id, subscription_id, period_end, cancel_at_period_end, synced_at, updated_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, now())
          ON CONFLICT (user_id) DO UPDATE SET plan = EXCLUDED.plan, status = EXCLUDED.status, provider = EXCLUDED.provider, customer_id = EXCLUDED.customer_id,
-           subscription_id = EXCLUDED.subscription_id, period_end = EXCLUDED.period_end, cancel_at_period_end = EXCLUDED.cancel_at_period_end, updated_at = now()`,
-        [userId, p.plan, p.status, p.provider, p.customerId, p.subscriptionId, p.periodEnd == null ? null : new Date(p.periodEnd), p.cancelAtPeriodEnd]);
+           subscription_id = EXCLUDED.subscription_id, period_end = EXCLUDED.period_end, cancel_at_period_end = EXCLUDED.cancel_at_period_end,
+           synced_at = EXCLUDED.synced_at, updated_at = now()
+         WHERE wonder_plans.synced_at IS NULL OR EXCLUDED.synced_at IS NULL OR wonder_plans.synced_at <= EXCLUDED.synced_at`,
+        [userId, p.plan, p.status, p.provider, p.customerId, p.subscriptionId, at(p.periodEnd), p.cancelAtPeriodEnd, at(p.syncedAt)]);
+      return rowCount > 0;
     },
     async putFile(userId, id, { bytes, contentType }) {
       let blobPath = null;

@@ -6,19 +6,19 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { createWonderCore, resolveStatic, bodyLimit, RAW_BODY_PATHS } from './app.js';
+import { createWonderCore, resolveStatic, bodyLimit } from './app.js';
 
 const json = (status, body) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' } });
 
-async function readBody(request, limit, raw = false) {
-  if (request.method === 'GET' || request.method === 'HEAD') return {};
+/** The JSON body as {body, raw}: raw is the exact text, for routes that check a signature over it. */
+async function readBody(request, limit) {
+  if (request.method === 'GET' || request.method === 'HEAD') return { body: {}, raw: '' };
   const declared = Number(request.headers.get('content-length') || 0);
   if (declared > limit) throw Object.assign(new Error('Request body too large'), { status: 413 });
   const text = await request.text();
   if (Buffer.byteLength(text) > limit) throw Object.assign(new Error('Request body too large'), { status: 413 });
-  if (raw) return { raw: text };
-  if (!text) return {};
-  try { return JSON.parse(text); } catch { throw Object.assign(new Error('Body must be JSON'), { status: 400 }); }
+  if (!text) return { body: {}, raw: text };
+  try { return { body: JSON.parse(text), raw: text }; } catch { throw Object.assign(new Error('Body must be JSON'), { status: 400 }); }
 }
 
 /**
@@ -33,7 +33,8 @@ export async function handleWebRequest(core, request, { logger = console, userId
   const url = new URL(request.url);
   if (!core.hasRoute(request.method, url.pathname)) return json(404, { ok: false, error: 'Not found' });
   let body;
-  try { body = await readBody(request, bodyLimit(url.pathname), RAW_BODY_PATHS.has(url.pathname)); } catch (err) { return json(err.status || 400, { ok: false, error: err.message }); }
+  let raw;
+  try { ({ body, raw } = await readBody(request, bodyLimit(url.pathname))); } catch (err) { return json(err.status || 400, { ok: false, error: err.message }); }
 
   return new Promise((resolve) => {
     let settled = false;
@@ -54,6 +55,7 @@ export async function handleWebRequest(core, request, { logger = console, userId
       url: url.pathname + url.search,
       origin: url.origin,
       header: (name) => request.headers.get(name),
+      rawBody: raw,
       userId,
       deleteAuthUser,
       authorization: request.headers.get('authorization') || '',

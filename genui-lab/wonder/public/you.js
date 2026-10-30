@@ -28,10 +28,19 @@ function accountPanel(ctx) {
   // being clicked stays put
   let drawn = '';
   const show = (key, ...rows) => { if (key !== drawn) { drawn = key; body.replaceChildren(...rows); } };
-  // the plan, fetched once per sign-in rather than on every sync status change
+  // the plan, fetched once per sign-in rather than on every sync status change; only the latest
+  // fetch may draw it, so a slow one for an earlier sign-in cannot overwrite a newer one
   const planEl = el('div', { class: 'setting', hidden: true });
   let planFor = null;
-  const planRow = () => { if (planFor !== accountLabel()) { planFor = accountLabel(); showPlan(planEl, btn); } return planEl; };
+  let planRun = 0;
+  const planRow = () => {
+    if (planFor !== accountLabel()) {
+      planFor = accountLabel();
+      const run = ++planRun;
+      showPlan(planEl, btn, () => run === planRun && planEl.isConnected);
+    }
+    return planEl;
+  };
   const draw = () => {
     const info = accountInfo();
     sec.hidden = !info?.sync;
@@ -40,6 +49,7 @@ function accountPanel(ctx) {
     const acct = signedInAccount();
     const st = currentSyncStatus();
     if (!acct) {
+      planFor = null; // signing in again fetches the plan again
       show('signedOut', row('Sign in', 'Use Mull with your Google account. What this browser has comes with you.',
         btn('Sign in', 'btn-primary', signIn)));
     } else if (st.state === 'mismatch') {
@@ -72,27 +82,40 @@ function accountPanel(ctx) {
 
 const shortDate = (iso) => new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
 
+// checkout ids already waited for: the ?checkout_id= Polar returns with stays in the URL (Next's
+// router re-applies a history.replaceState), so each one is handled once per tab
+const CHECKOUTS_SEEN = 'wonder.checkoutsSeen';
+function firstVisitAfterCheckout() {
+  const id = new URLSearchParams(location.search).get('checkout_id');
+  if (!id) return false;
+  let seen = [];
+  try { seen = JSON.parse(sessionStorage.getItem(CHECKOUTS_SEEN) || '[]'); } catch {}
+  if (seen.includes(id)) return false;
+  try { sessionStorage.setItem(CHECKOUTS_SEEN, JSON.stringify([...seen, id].slice(-20))); } catch {}
+  return true;
+}
+
 /**
  * The account's plan (server/plans.js) from /api/account, with Upgrade (a Polar checkout) or
  * Manage billing (Polar's customer portal) when the server offers billing (server/billing.js).
  * Hidden when the server sends no plan. Back from a checkout (?checkout_id=), it waits for the
- * webhook to make the account Pro.
+ * webhook to make the account Pro. `live()` turns false once a newer call owns the row.
  */
-async function showPlan(row, btn) {
+async function showPlan(row, btn, live = () => true) {
   const load = async () => { try { return await (await fetch('/api/account', { headers: { Accept: 'application/json' } })).json(); } catch { return null; } };
   let a = await load();
-  if (!a?.plan) return;
-  const back = new URLSearchParams(location.search).has('checkout_id');
-  if (back) {
-    history.replaceState(null, '', location.pathname + location.hash);
+  if (!a?.plan || !live()) return;
+  if (firstVisitAfterCheckout()) {
     for (let i = 0; i < 15 && a?.plan?.id !== 'pro'; i++) {
       row.replaceChildren(el('div', { class: 'setting-text' }, el('strong', null, 'Finishing your upgrade…'), el('p', { class: 'muted small' }, 'Waiting for the payment to come through.')));
       row.hidden = false;
       await new Promise((r) => setTimeout(r, 2000));
+      if (!live()) return;
       a = (await load()) || a;
     }
     toast(a.plan.id === 'pro' ? 'You are on Pro' : 'Payment received? Pro can take a minute to show up. Reload this page soon.');
   }
+  if (!live()) return;
   const { plan, billing } = a;
   const standing = plan.source === 'comped' ? 'Given to you by this Mull server.'
     : plan.endsAt ? `Ends ${shortDate(plan.endsAt)}.`
@@ -105,7 +128,8 @@ async function showPlan(row, btn) {
     const d = await r.json().catch(() => ({}));
     if (!r.ok || !d.url) throw new Error(d.error || 'That did not work');
     location.href = d.url;
-    await new Promise(() => {}); // keep the button busy while the page leaves
+    // busy while the page leaves; Back restores this page from the bfcache, which frees the button
+    await new Promise((r) => window.addEventListener('pageshow', r, { once: true }));
   };
   const actions = [
     billing?.canUpgrade ? btn(billing.price ? `Upgrade · ${billing.price}` : 'Upgrade to Pro', 'btn-primary', go('/api/billing/checkout'), 'Opening checkout…') : null,

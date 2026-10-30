@@ -8,8 +8,8 @@ import { createWonderServer } from '../server/app.js';
 import { createMemoryStore } from '../server/memory.js';
 import { createSyncService } from '../server/sync/service.js';
 import { createMemoryDb } from '../server/sync/memory-db.js';
-import { polarConfig, verifyWebhook, planFromSubscription, priceLabel, POLAR_API, POLAR_VERSION, WEBHOOK_TOLERANCE_MS } from '../server/billing.js';
-import { cleanPlanRecord } from '../server/plans.js';
+import { polarConfig, verifyWebhook, planFromSubscription, priceLabel, bestSubscription, POLAR_API, POLAR_VERSION, WEBHOOK_TOLERANCE_MS } from '../server/billing.js';
+import { cleanPlanRecord, createPlans } from '../server/plans.js';
 import { fakeClient } from './helpers.js';
 
 const quiet = { warn() {}, error() {}, log() {}, info() {} };
@@ -29,6 +29,9 @@ test('polar config: off unless token, webhook secret and product are all set; sa
   assert.equal(polarConfig(ENV).server, 'sandbox');
   assert.equal(polarConfig(ENV).apiBase, POLAR_API.sandbox);
   assert.equal(polarConfig({ ...ENV, POLAR_SERVER: 'Production' }).apiBase, POLAR_API.production);
+  const two = polarConfig({ ...ENV, POLAR_PRODUCT_ID: 'prod_pro, prod_year' });
+  assert.equal(two.productId, 'prod_pro', 'checkout sells the first');
+  assert.deepEqual(two.productIds, ['prod_pro', 'prod_year']);
 });
 
 test('webhook signatures: Standard Webhooks and legacy keys, multiple signatures, replay window', () => {
@@ -51,7 +54,7 @@ test('webhook signatures: Standard Webhooks and legacy keys, multiple signatures
 test('subscription -> plan record, and price labels', () => {
   const end = '2026-11-24T00:00:00Z';
   assert.deepEqual(cleanPlanRecord(planFromSubscription({ id: 'sub_1', status: 'active', customer_id: 'cus_1', current_period_end: end, cancel_at_period_end: true })),
-    { plan: 'pro', status: 'active', provider: 'polar', customerId: 'cus_1', subscriptionId: 'sub_1', periodEnd: Date.parse(end), cancelAtPeriodEnd: true });
+    { plan: 'pro', status: 'active', provider: 'polar', customerId: 'cus_1', subscriptionId: 'sub_1', periodEnd: Date.parse(end), cancelAtPeriodEnd: true, syncedAt: null });
   assert.equal(planFromSubscription({ id: 's', status: 'incomplete_expired' }).status, 'expired');
   assert.equal(cleanPlanRecord(planFromSubscription({ id: 's', status: 'paused' })).status, 'paused');
   assert.equal(planFromSubscription({ id: 's', status: 'canceled', current_period_end: end, ended_at: '2026-11-01T00:00:00Z' }).periodEnd, '2026-11-01T00:00:00Z');
@@ -59,39 +62,68 @@ test('subscription -> plan record, and price labels', () => {
   assert.equal(priceLabel({ recurring_interval: 'year', recurring_interval_count: 1, prices: [{ amount_type: 'fixed', price_amount: 7999, price_currency: 'usd' }] }), '$79.99 / year');
   assert.equal(priceLabel({ recurring_interval: 'month', recurring_interval_count: 3, prices: [{ amount_type: 'fixed', price_amount: 2000, price_currency: 'eur' }] }), '€20 / 3 months');
   assert.equal(priceLabel({ prices: [{ amount_type: 'custom' }] }), null);
+  const s = (id, status, end, mod) => ({ id, status, current_period_end: end, modified_at: mod });
+  assert.equal(bestSubscription([]), null);
+  assert.equal(bestSubscription([s('a', 'canceled', '2026-12-01'), s('b', 'active', '2026-11-01'), s('c', 'past_due', '2026-11-15')]).id, 'c', 'live first, latest period end');
+  assert.equal(bestSubscription([s('a', 'canceled', null, '2026-10-01'), s('b', 'paused', null, '2026-10-20')]).id, 'b', 'else the latest change');
 });
 
-/** A fake Polar API: records calls, serves subscriptions from `subs`. */
+test('plan records: an older provider read never overwrites a newer one', async () => {
+  const plans = createPlans({ db: createMemoryDb(), env: {}, logger: quiet });
+  const rec = (status, syncedAt) => ({ plan: 'pro', status, provider: 'polar', subscriptionId: 's', syncedAt });
+  assert.equal(await plans.setPlan('alice', rec('canceled', 2000)), true);
+  assert.equal(await plans.setPlan('alice', rec('active', 1000)), false, 'read earlier: dropped');
+  assert.equal((await plans.stored('alice')).status, 'canceled');
+  assert.equal(await plans.setPlan('alice', rec('active', 3000)), true);
+  assert.equal(await plans.setPlan('alice', rec('trialing', null)), true, 'no stamp: always written');
+  assert.equal((await plans.stored('alice')).status, 'trialing');
+});
+
+/** A fake Polar API: records calls; subscriptions live in `subs`, keyed by id. */
 function fakePolar() {
   const calls = [];
   const subs = new Map();
-  let failRevoke = false;
-  const reply = (status, body) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
+  const fail = { revoke: false, list: null, products: 0 };
+  const reply = (status, body) => new Response(status === 204 ? null : JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
   const fetch = async (url, init) => {
     const u = new URL(url);
     const p = u.pathname.replace(/^\/v1/, '');
     const body = init.body ? JSON.parse(init.body) : null;
-    calls.push({ method: init.method, path: p, body, headers: init.headers, origin: u.origin });
+    calls.push({ method: init.method, path: p, query: Object.fromEntries(u.searchParams), body, headers: init.headers, origin: u.origin });
     if (init.method === 'POST' && p === '/checkouts/') return reply(201, { id: 'chk_1', url: 'https://sandbox.polar.sh/checkout/chk_1' });
     if (init.method === 'POST' && p === '/customer-sessions/') return reply(201, { customer_portal_url: 'https://sandbox.polar.sh/portal/x' });
-    if (init.method === 'GET' && p === '/products/prod_pro') return reply(200, { id: 'prod_pro', recurring_interval: 'month', prices: [{ amount_type: 'fixed', price_amount: 800, price_currency: 'usd' }] });
+    if (init.method === 'GET' && p === '/products/prod_pro') {
+      if (fail.products) await new Promise((r) => setTimeout(r, fail.products));
+      return reply(200, { id: 'prod_pro', recurring_interval: 'month', prices: [{ amount_type: 'fixed', price_amount: 800, price_currency: 'usd' }] });
+    }
+    if (init.method === 'GET' && p === '/subscriptions/') {
+      if (fail.list) return reply(fail.list, { error: 'nope' });
+      const items = [...subs.values()].filter((s) => s.customer?.external_id === u.searchParams.get('external_customer_id'));
+      return reply(200, { items, pagination: { total_count: items.length, max_page: 1 } });
+    }
     const m = p.match(/^\/subscriptions\/(.+)$/);
-    if (m && init.method === 'GET') return subs.has(m[1]) ? reply(200, subs.get(m[1])) : reply(404, { error: 'ResourceNotFound' });
     if (m && init.method === 'DELETE') {
-      if (failRevoke) return reply(500, { error: 'boom' });
+      if (fail.revoke) return reply(500, { error: 'boom' });
       const s = subs.get(m[1]);
       if (!s || s.status === 'canceled') return reply(403, { error: 'AlreadyCanceledSubscription' });
       subs.set(m[1], { ...s, status: 'canceled', ended_at: new Date().toISOString() });
       return reply(200, subs.get(m[1]));
     }
+    const c = p.match(/^\/customers\/external\/(.+)$/);
+    if (c && init.method === 'DELETE') {
+      const mine = [...subs.values()].filter((s) => s.customer?.external_id === c[1]);
+      if (!mine.length) return reply(404, { error: 'ResourceNotFound' });
+      for (const s of mine) subs.set(s.id, { ...s, customer: { ...s.customer, external_id: null } });
+      return reply(204);
+    }
     return reply(404, { error: 'not faked' });
   };
-  return { fetch, calls, subs, set failRevoke(v) { failRevoke = v; } };
+  return { fetch, calls, subs, fail };
 }
 
-async function withServer(fn, { env = ENV } = {}) {
+async function withServer(fn, { env = ENV, db = createMemoryDb() } = {}) {
   const polar = fakePolar();
-  const sync = createSyncService({ db: createMemoryDb() });
+  const sync = createSyncService({ db });
   const server = createWonderServer({
     mode: 'demo', client: fakeClient({ text: 'x' }), demoDelayMs: 0, logger: quiet, memory: createMemoryStore({ file: null }), push: null, sync,
     getUserId: (req) => req.headers['x-test-user'] || null, deleteAuthUser: async () => true, billingFetch: polar.fetch, env,
@@ -102,7 +134,12 @@ async function withServer(fn, { env = ENV } = {}) {
     const res = await fetch(base + p, { method, headers: { 'Content-Type': 'application/json', ...(user ? { 'x-test-user': user } : {}), ...headers }, body: body == null ? undefined : typeof body === 'string' ? body : JSON.stringify(body) });
     return { status: res.status, body: await res.json().catch(() => null) };
   };
-  const hook = (event, key = standardKey(ENV.POLAR_WEBHOOK_SECRET)) => { const raw = JSON.stringify(event); return call(null, 'POST', '/api/billing/webhook', raw, signed(raw, key)); };
+  // a webhook for a subscription as it is in the fake now (or `data` as given)
+  const hook = (type, idOrData, key = standardKey(ENV.POLAR_WEBHOOK_SECRET)) => {
+    const data = typeof idOrData === 'string' ? polar.subs.get(idOrData) || { id: idOrData } : idOrData;
+    const raw = JSON.stringify({ type, data });
+    return call(null, 'POST', '/api/billing/webhook', raw, signed(raw, key));
+  };
   try {
     await fn({ call, hook, polar, sync, base });
   } finally {
@@ -130,10 +167,11 @@ test('over HTTP: checkout, webhook makes the account Pro, portal, and cancellati
     assert.equal(req.body.external_customer_id, 'alice');
     assert.equal(req.body.success_url, `${base}/?checkout_id={CHECKOUT_ID}#/you`);
 
-    // the webhook: a bad signature is refused; a good one fetches the subscription and stores it
-    assert.equal((await hook({ type: 'subscription.active', data: { id: 'sub_1' } }, Buffer.from('wrong'))).status, 401);
+    // the webhook: a bad signature is refused; a good one lists the user's subscriptions and stores the best
     polar.subs.set('sub_1', sub());
-    assert.equal((await hook({ type: 'subscription.active', data: { id: 'sub_1', status: 'incomplete' } })).status, 200);
+    assert.equal((await hook('subscription.active', 'sub_1', Buffer.from('wrong'))).status, 401);
+    assert.equal((await hook('subscription.active', { ...sub(), status: 'incomplete' })).status, 200, 'the payload is only a pointer');
+    assert.equal(polar.calls.at(-1).query.external_customer_id, 'alice');
     const pro = (await call('alice', 'GET', '/api/account')).body;
     assert.equal(pro.plan.id, 'pro');
     assert.equal(pro.plan.source, 'subscription');
@@ -147,12 +185,12 @@ test('over HTTP: checkout, webhook makes the account Pro, portal, and cancellati
 
     // cancel at period end: still Pro, ending; then revoked: Free
     polar.subs.set('sub_1', sub({ cancel_at_period_end: true }));
-    await hook({ type: 'subscription.canceled', data: { id: 'sub_1' } });
+    await hook('subscription.canceled', 'sub_1');
     const ending = (await call('alice', 'GET', '/api/account')).body.plan;
     assert.equal(ending.id, 'pro');
     assert.ok(ending.endsAt);
     polar.subs.set('sub_1', sub({ status: 'canceled', ended_at: new Date().toISOString() }));
-    await hook({ type: 'subscription.revoked', data: { id: 'sub_1' } });
+    await hook('subscription.revoked', 'sub_1');
     const after = (await call('alice', 'GET', '/api/account')).body;
     assert.equal(after.plan.id, 'free');
     assert.equal(after.billing.canUpgrade, true);
@@ -160,51 +198,116 @@ test('over HTTP: checkout, webhook makes the account Pro, portal, and cancellati
   });
 });
 
-test('webhooks: other events and products are ignored, an old subscription never replaces a live one, Polar errors are retried', async () => {
-  await withServer(async ({ call, hook, polar, sync }) => {
-    assert.equal((await hook({ type: 'order.paid', data: { id: 'ord_1' } })).status, 202);
-    polar.subs.set('sub_x', sub({ id: 'sub_x', product_id: 'prod_other' }));
-    assert.equal((await hook({ type: 'subscription.active', data: { id: 'sub_x' } })).status, 202);
-    polar.subs.set('sub_n', sub({ id: 'sub_n', customer: { id: 'cus_1', external_id: null }, metadata: {} }));
-    assert.equal((await hook({ type: 'subscription.active', data: { id: 'sub_n' } })).status, 202, 'no user named');
-    assert.equal(await sync.db.getPlan('alice'), null);
-
-    polar.subs.set('sub_2', sub({ id: 'sub_2' }));
-    await hook({ type: 'subscription.active', data: { id: 'sub_2' } });
+test('checkout refuses a second subscription the webhook has not recorded yet', async () => {
+  await withServer(async ({ call, polar }) => {
+    polar.subs.set('sub_1', sub());
+    const r = await call('alice', 'POST', '/api/billing/checkout');
+    assert.equal(r.status, 409);
+    assert.match(r.body.error, /already have a Pro subscription/);
+    polar.subs.set('sub_1', sub({ status: 'paused' }));
+    assert.equal((await call('alice', 'POST', '/api/billing/checkout')).status, 409, 'a paused one counts');
     polar.subs.set('sub_1', sub({ status: 'canceled' }));
-    assert.equal((await hook({ type: 'subscription.revoked', data: { id: 'sub_1' } })).status, 202);
-    assert.equal((await sync.db.getPlan('alice')).subscriptionId, 'sub_2', 'the live subscription stays');
-
-    polar.subs.set('sub_b', sub({ id: 'sub_b', status: 'canceled', customer: { id: 'cus_b', external_id: 'bob' } }));
-    assert.equal((await hook({ type: 'subscription.revoked', data: { id: 'sub_b' } })).status, 202);
-    assert.equal(await sync.db.getPlan('bob'), null, 'an ended subscription with no record is not stored');
-
-    assert.equal((await hook({ type: 'subscription.updated', data: { id: 'sub_missing' } })).status, 500, 'a Polar error: Polar retries');
-    assert.equal((await call(null, 'POST', '/api/billing/webhook', 'not json')).status, 401);
+    assert.equal((await call('alice', 'POST', '/api/billing/checkout')).status, 200, 'an ended one does not');
+    assert.equal(polar.calls.filter((c) => c.path === '/checkouts/').length, 1);
   });
 });
 
-test('deleting an account ends its Pro subscription first; if that fails nothing is deleted', async () => {
+test('webhooks: two subscriptions, product switches, ignored events, and which errors Polar retries', async () => {
   await withServer(async ({ call, hook, polar, sync }) => {
+    assert.equal((await hook('order.paid', { id: 'ord_1' })).status, 202);
+    assert.equal((await hook('subscription.active', { id: 'sub_n', customer: { external_id: null }, metadata: {} })).status, 202, 'no user named');
+
+    // two live subscriptions: ending one keeps Pro while the other lives
     polar.subs.set('sub_1', sub());
-    await hook({ type: 'subscription.active', data: { id: 'sub_1' } });
+    polar.subs.set('sub_2', sub({ id: 'sub_2', current_period_end: new Date(Date.now() + 10 * DAY).toISOString() }));
+    await hook('subscription.active', 'sub_2');
+    assert.equal((await sync.db.getPlan('alice')).subscriptionId, 'sub_1', 'the one running longest');
+    polar.subs.set('sub_1', sub({ status: 'canceled' }));
+    await hook('subscription.revoked', 'sub_1');
+    assert.equal((await sync.db.getPlan('alice')).subscriptionId, 'sub_2');
+    assert.equal((await call('alice', 'GET', '/api/account')).body.plan.id, 'pro');
+
+    // switching to another listed Pro product stays Pro; moving off Pro ends it
+    await withServer(async ({ hook: hook2, polar: p2, sync: s2 }) => {
+      p2.subs.set('sub_y', sub({ id: 'sub_y', product_id: 'prod_year' }));
+      await hook2('subscription.updated', 'sub_y');
+      assert.equal((await s2.db.getPlan('alice')).status, 'active');
+      p2.subs.set('sub_y', sub({ id: 'sub_y', product_id: 'prod_other' }));
+      await hook2('subscription.updated', 'sub_y');
+      assert.equal((await s2.db.getPlan('alice')).status, 'canceled', 'moved off Pro');
+    }, { env: { ...ENV, POLAR_PRODUCT_ID: 'prod_pro,prod_year' } });
+
+    // an ended subscription for someone with no record is not stored
+    polar.subs.set('sub_b', sub({ id: 'sub_b', status: 'canceled', customer: { id: 'cus_b', external_id: 'bob' } }));
+    assert.equal((await hook('subscription.revoked', 'sub_b')).status, 200);
+    assert.equal(await sync.db.getPlan('bob'), null);
+
+    // a Polar error retrying cannot fix is dropped (202) so the endpoint is not disabled; others retry
+    polar.fail.list = 422;
+    assert.equal((await hook('subscription.updated', 'sub_2')).status, 202);
+    polar.fail.list = 503;
+    assert.equal((await hook('subscription.updated', 'sub_2')).status, 500);
+    polar.fail.list = 429;
+    assert.equal((await hook('subscription.updated', 'sub_2')).status, 500);
+    polar.fail.list = null;
+    assert.equal((await call(null, 'POST', '/api/billing/webhook', 'not json')).status, 400, 'like every JSON route');
+  });
+});
+
+test('deleting an account ends every Polar subscription and the customer first; if that fails nothing is deleted', async () => {
+  await withServer(async ({ call, hook, polar, sync }) => {
+    // one recorded, one not yet (its webhook is still on the way), one paused
+    polar.subs.set('sub_1', sub());
+    await hook('subscription.active', 'sub_1');
+    polar.subs.set('sub_2', sub({ id: 'sub_2' }));
+    polar.subs.set('sub_3', sub({ id: 'sub_3', status: 'paused' }));
     await call('alice', 'POST', '/api/sync', { since: 0, changes: [{ kind: 'lesson', id: 'L1', data: { title: 'x' } }] });
-    polar.failRevoke = true;
+    polar.fail.revoke = true;
     const failed = await call('alice', 'DELETE', '/api/account');
     assert.equal(failed.status, 502);
     assert.match(failed.body.error, /nothing was deleted/);
     assert.equal(await sync.count('alice'), 1);
-    polar.failRevoke = false;
+    polar.fail.revoke = false;
     assert.equal((await call('alice', 'DELETE', '/api/account')).status, 200);
-    assert.equal(polar.calls.filter((c) => c.method === 'DELETE' && c.path === '/subscriptions/sub_1').length, 2);
+    for (const id of ['sub_1', 'sub_2', 'sub_3']) assert.equal(polar.subs.get(id).status, 'canceled', id);
+    const del = polar.calls.find((c) => c.method === 'DELETE' && c.path === '/customers/external/alice');
+    assert.equal(del.query.anonymize, 'true');
     assert.equal(await sync.db.getPlan('alice'), null, 'the plan goes with the account');
-    // the revoke's own webhook arrives after the delete and does not bring a record back
-    assert.equal((await hook({ type: 'subscription.revoked', data: { id: 'sub_1' } })).status, 202);
+    // the revokes' own webhooks arrive after the delete and bring nothing back
+    assert.equal((await hook('subscription.revoked', { ...polar.subs.get('sub_2'), customer: { external_id: 'alice' } })).status, 200);
     assert.equal(await sync.db.getPlan('alice'), null);
-    // a Free account deletes without calling Polar
-    const before = polar.calls.length;
+    // a Free account that never bought anything deletes fine (Polar has no such customer)
     assert.equal((await call('bob', 'DELETE', '/api/account')).status, 200);
-    assert.equal(polar.calls.filter((c, i) => i >= before && c.method === 'DELETE').length, 0);
+  });
+});
+
+test('deleting an account: a database error says so, and a delete that fails after cancelling says the subscription ended', async () => {
+  const db = createMemoryDb();
+  const getPlan = db.getPlan;
+  const deleteUser = db.deleteUser;
+  await withServer(async ({ call, hook, polar }) => {
+    db.getPlan = async () => { throw new Error('db down'); };
+    const r = await call('alice', 'DELETE', '/api/account');
+    assert.equal(r.status, 503);
+    assert.match(r.body.error, /Could not delete your account right now/);
+    db.getPlan = getPlan;
+    polar.subs.set('sub_1', sub());
+    await hook('subscription.active', 'sub_1');
+    db.deleteUser = async () => { throw new Error('db down'); };
+    const r2 = await call('alice', 'DELETE', '/api/account');
+    assert.equal(r2.status, 500);
+    assert.match(r2.body.error, /subscription was canceled, but deleting your data failed/);
+    db.deleteUser = deleteUser;
+  }, { db });
+});
+
+test('the account card does not wait long for a slow Polar price', async () => {
+  await withServer(async ({ call, polar }) => {
+    polar.fail.products = 4000;
+    const t0 = Date.now();
+    const a = (await call('alice', 'GET', '/api/account')).body;
+    assert.ok(Date.now() - t0 < 3000, 'answered without the price');
+    assert.equal(a.billing.price, null);
   });
 });
 
