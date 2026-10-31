@@ -429,3 +429,50 @@ test('billing off: no offer on /api/account, and the billing routes say so', asy
     assert.equal((await call(null, 'POST', '/api/billing/webhook', '{}')).status, 404);
   }, { env: {} });
 });
+
+test('GET /api/plans: both plans\' caps and the Pro price, signed out too, for the pricing page', async () => {
+  await withServer(async ({ call }) => {
+    const p = (await call(null, 'GET', '/api/plans')).body;
+    assert.equal(p.accounts, true);
+    assert.equal(p.free.lesson, 20);
+    assert.equal(p.pro.tutor, 500);
+    assert.equal(p.pro.course, 40, 'WONDER_PRO_LIMIT_* applies');
+    assert.equal(p.free.grade, null, 'a cap turned off is no limit');
+    assert.equal(p.price, '$8 / month');
+    assert.equal(p.buyable, true);
+    assert.equal(p.sandbox, true);
+  }, { env: { ...ENV, WONDER_PRO_LIMIT_COURSE: '40', WONDER_LIMIT_GRADE: 'off' } });
+  await withServer(async ({ call }) => {
+    const p = (await call(null, 'GET', '/api/plans')).body;
+    assert.deepEqual([p.buyable, p.price, p.sandbox, p.pro.lesson, p.signedIn], [false, null, false, 100, false]);
+    assert.equal(p.plan, undefined);
+  }, { env: {} });
+});
+
+test('GET /api/plans: a signed-in visitor gets their plan and offer in the same answer', async () => {
+  await withServer(async ({ call, polar }) => {
+    const p = (await call('alice', 'GET', '/api/plans')).body;
+    assert.equal(p.signedIn, true);
+    assert.equal(p.plan.id, 'free');
+    assert.deepEqual(p.billing, { provider: 'polar', sandbox: true, price: '$8 / month', canUpgrade: true, canManage: false });
+    // checkout opened from the pricing page: Back from Polar returns there; paying still lands on You
+    await call('alice', 'POST', '/api/billing/checkout', { from: 'pricing' });
+    const req = polar.calls.findLast((c) => c.path === '/checkouts/');
+    assert.match(req.body.return_url, /\/pricing$/);
+    assert.match(req.body.success_url, /#\/you$/);
+    await call('alice', 'POST', '/api/billing/checkout', { from: 'https://evil.example' });
+    assert.match(polar.calls.findLast((c) => c.path === '/checkouts/').body.return_url, /\/#\/you$/, 'anything else returns to You');
+  });
+});
+
+test('GET /api/plans: a server without accounts says so', async () => {
+  const server = createWonderServer({ client: fakeClient({ text: 'x' }), logger: quiet, memory: createMemoryStore({ file: null }), push: null, env: {} });
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  try {
+    const p = await (await fetch(`http://127.0.0.1:${server.address().port}/api/plans`)).json();
+    assert.deepEqual([p.accounts, p.signedIn, p.buyable], [false, false, false]);
+  } finally {
+    server.closeAllConnections?.();
+    await new Promise((r) => server.close(r));
+  }
+});
