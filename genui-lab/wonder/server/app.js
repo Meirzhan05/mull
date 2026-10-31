@@ -14,6 +14,7 @@
 //   POST /api/memory/extract    -> 0-3 new memory facts from a finished lesson
 //   GET  /api/account           -> {sync, signedIn, plan, billing, usage, push} (account sync: server/sync/)
 //   DELETE /api/account         -> delete everything kept for the signed-in user, then the sign-in
+//   GET  /api/plans             -> {accounts, free, pro (daily caps, null: none), price, buyable} (public; /pricing)
 //   POST /api/billing/checkout  -> {url} of a Polar checkout for Pro (signed in; server/billing.js)
 //   POST /api/billing/portal    -> {url} of Polar's customer portal: card, invoices, cancel (signed in)
 //   POST /api/billing/sync      -> {plan}: the plan read from Polar now (signed in; back from checkout)
@@ -826,6 +827,7 @@ export function createWonderCore(opts = {}) {
     // account sync + Web Push
     'GET /api/account': account,
     'DELETE /api/account': deleteAccount,
+    'GET /api/plans': plansRoute,
     'POST /api/sync': syncRoute,
     'POST /api/push/subscribe': pushSubscribe,
     'DELETE /api/push/subscribe': pushUnsubscribe,
@@ -911,6 +913,23 @@ export function createWonderCore(opts = {}) {
       ...(userId ? { userId, records: await sync.count(userId), plan, billing: pay ? await pay.offer(record, plan) : null } : {}),
       ...(userId && state.client ? { usage: await usageGate(sync).today(userId, plan.id, { unlimited: plan.source === 'admin' }) } : {}),
       push: sync && push ? { publicKey: push.publicKey } : null,
+    });
+  }
+
+  /** Free and Pro side by side for the pricing page (public/pricing): the caps this server uses. */
+  async function plansRoute(t) {
+    const sync = await syncReady;
+    const gate = sync ? usageGate(sync) : null;
+    const caps = (limits) => Object.fromEntries(Object.entries(limits).map(([k, v]) => [k, v === Infinity ? null : v]));
+    const pay = sync ? billingFor(sync) : null;
+    t.json(200, {
+      ok: true,
+      accounts: !!sync, // no accounts: one learner, no caps, nothing to buy
+      free: caps(gate?.limits || usageLimits(env)),
+      pro: caps(gate?.proLimits || usageLimits(env, 'pro')),
+      price: pay ? await pay.price() : null,
+      buyable: !!pay,
+      sandbox: pay?.server === 'sandbox',
     });
   }
 

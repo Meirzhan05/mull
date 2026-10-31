@@ -150,7 +150,8 @@ async function showPlan(row, btn, live = () => true) {
   ].filter(Boolean);
   row.replaceChildren(el('div', { class: 'setting-text' },
     el('strong', null, `${plan.name} plan`),
-    el('p', { class: 'muted small' }, [standing, pitch, test].filter(Boolean).join(' '))),
+    el('p', { class: 'muted small' }, [standing, pitch, test].filter(Boolean).join(' '),
+      plan.id === 'free' ? [' ', el('a', { href: '/pricing' }, 'Compare plans')] : null)),
   actions.length ? el('div', { style: { display: 'flex', gap: '8px', flexWrap: 'wrap' } }, ...actions) : null);
   row.hidden = false;
 }

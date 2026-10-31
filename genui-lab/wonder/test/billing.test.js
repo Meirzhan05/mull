@@ -429,3 +429,21 @@ test('billing off: no offer on /api/account, and the billing routes say so', asy
     assert.equal((await call(null, 'POST', '/api/billing/webhook', '{}')).status, 404);
   }, { env: {} });
 });
+
+test('GET /api/plans: both plans\' caps and the Pro price, signed out too, for the pricing page', async () => {
+  await withServer(async ({ call }) => {
+    const p = (await call(null, 'GET', '/api/plans')).body;
+    assert.equal(p.accounts, true);
+    assert.equal(p.free.lesson, 20);
+    assert.equal(p.pro.tutor, 500);
+    assert.equal(p.pro.course, 40, 'WONDER_PRO_LIMIT_* applies');
+    assert.equal(p.free.grade, null, 'a cap turned off is no limit');
+    assert.equal(p.price, '$8 / month');
+    assert.equal(p.buyable, true);
+    assert.equal(p.sandbox, true);
+  }, { env: { ...ENV, WONDER_PRO_LIMIT_COURSE: '40', WONDER_LIMIT_GRADE: 'off' } });
+  await withServer(async ({ call }) => {
+    const p = (await call(null, 'GET', '/api/plans')).body;
+    assert.deepEqual([p.buyable, p.price, p.sandbox, p.pro.lesson], [false, null, false, 100]);
+  }, { env: {} });
+});

@@ -246,6 +246,9 @@ export function createPolarBilling({ config, plans, fetch: fetchImpl = globalThi
       };
     },
 
+    /** The Pro price label ("$8 / month"), or null while Polar cannot say (the pricing page). */
+    price: () => currentPrice(),
+
     /** Bring the user's plan up to date from Polar now (back from checkout, or on request). */
     sync: (userId) => syncUser(userId),
 
