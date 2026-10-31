@@ -84,13 +84,14 @@ h1, h2, p { margin: 0; }
 
 .notes { margin-top: 28px; display: grid; gap: 8px; max-width: 42rem; color: var(--ink-faint); font-size: 0.86rem; }
 .notes b { color: var(--ink-soft); font-weight: 500; }
-.notes__error { color: #FF6166; }
+.is-error { color: #FF6166; }
+/* until GET /api/plans answers (pricing.js), the parts that depend on the visitor wait unseen */
+.is-loading [data-cta], .is-loading [data-price], .is-loading [data-bar] { visibility: hidden; }
 
 .foot { padding: 24px var(--gutter) 32px; border-top: 1px solid var(--line); color: var(--ink-faint); font-size: 0.82rem; text-align: center; }
 .foot__mark { color: var(--ink); font-weight: 600; margin-right: 6px; }
 
 @media (max-width: 720px) {
   .plans { grid-template-columns: 1fr; }
-  .plan--pro { order: -1; }
 }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }

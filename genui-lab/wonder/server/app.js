@@ -14,8 +14,8 @@
 //   POST /api/memory/extract    -> 0-3 new memory facts from a finished lesson
 //   GET  /api/account           -> {sync, signedIn, plan, billing, usage, push} (account sync: server/sync/)
 //   DELETE /api/account         -> delete everything kept for the signed-in user, then the sign-in
-//   GET  /api/plans             -> {accounts, free, pro (daily caps, null: none), price, buyable} (public; /pricing)
-//   POST /api/billing/checkout  -> {url} of a Polar checkout for Pro (signed in; server/billing.js)
+//   GET  /api/plans             -> {accounts, free, pro (daily caps, null: none), price, buyable, sandbox, signedIn, plan, billing} (public; /pricing)
+//   POST /api/billing/checkout  -> {url} of a Polar checkout for Pro (signed in; server/billing.js); {from: 'pricing'} returns there
 //   POST /api/billing/portal    -> {url} of Polar's customer portal: card, invoices, cancel (signed in)
 //   POST /api/billing/sync      -> {plan}: the plan read from Polar now (signed in; back from checkout)
 //   POST /api/billing/webhook   -> Polar subscription events (signed over t.rawBody) -> plan records
@@ -72,6 +72,8 @@ export const STATIC_ROOTS = [
   { prefix: '/vendor/katex/', dir: path.join(WONDER_ROOT, 'node_modules', 'katex', 'dist'), exts: new Set(['.js', '.mjs', '.css', '.woff2', '.woff', '.ttf']) },
   { prefix: '/', dir: path.join(WONDER_ROOT, 'public'), exts: new Set(['.js', '.css', '.html', '.svg', '.png', '.ico', '.json', '.webmanifest']) },
 ];
+/** Static pages at their own paths, as next.config.mjs rewrites them. */
+const PAGES = { '/welcome': '/welcome/index.html', '/pricing': '/pricing/index.html' };
 export const MIME = { '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.html': 'text/html; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon', '.json': 'application/json', '.webmanifest': 'application/manifest+json', '.mjs': 'text/javascript; charset=utf-8', '.woff2': 'font/woff2', '.woff': 'font/woff', '.ttf': 'font/ttf' };
 export const MAX_BODY = 2 * 1024 * 1024;
 /** Request bodies up to this size are also kept as raw text (t.rawBody), for signature checks. */
@@ -149,6 +151,7 @@ export function resolveStatic(pathname, roots = STATIC_ROOTS) {
   let rel;
   try { rel = decodeURIComponent(pathname); } catch { return null; }
   if (rel === '/' || rel === '') rel = '/index.html';
+  rel = PAGES[rel] || rel;
   for (const root of roots) {
     if (!rel.startsWith(root.prefix)) continue;
     const file = path.resolve(root.dir, '.' + rel.slice(root.prefix.length - 1));
@@ -916,12 +919,18 @@ export function createWonderCore(opts = {}) {
     });
   }
 
-  /** Free and Pro side by side for the pricing page (public/pricing): the caps this server uses. */
+  /**
+   * Free and Pro side by side for the pricing page (public/pricing): the caps this server uses, the
+   * Pro price, and for a signed-in visitor their plan and what billing offers them.
+   */
   async function plansRoute(t) {
     const sync = await syncReady;
+    const userId = sync && typeof t.userId === 'string' && t.userId ? t.userId : null;
     const gate = sync ? usageGate(sync) : null;
     const caps = (limits) => Object.fromEntries(Object.entries(limits).map(([k, v]) => [k, v === Infinity ? null : v]));
     const pay = sync ? billingFor(sync) : null;
+    const record = userId ? await userPlans(sync).record(userId) : null;
+    const plan = userId ? await userPlans(sync).describe(userId, record) : null;
     t.json(200, {
       ok: true,
       accounts: !!sync, // no accounts: one learner, no caps, nothing to buy
@@ -930,6 +939,8 @@ export function createWonderCore(opts = {}) {
       price: pay ? await pay.price() : null,
       buyable: !!pay,
       sandbox: pay?.server === 'sandbox',
+      signedIn: !!userId,
+      ...(userId ? { plan, billing: pay ? await pay.offer(record, plan) : null } : {}),
     });
   }
 
@@ -1016,7 +1027,7 @@ export function createWonderCore(opts = {}) {
     return { userId, sync, pay };
   }
 
-  async function billingCheckout(t) {
+  async function billingCheckout(t, body) {
     const b = await billingScope(t);
     if (!b) return;
     const plans = userPlans(b.sync);
@@ -1024,7 +1035,8 @@ export function createWonderCore(opts = {}) {
     if (plan.id === 'pro') return t.json(409, { ok: false, error: 'You are already on Pro.', plan });
     let url;
     try {
-      url = await b.pay.checkout(b.userId, { origin: t.origin });
+      // leaving checkout without paying goes back where it was opened: the pricing page or You
+      url = await b.pay.checkout(b.userId, { origin: t.origin, back: body?.from === 'pricing' ? '/pricing' : '/#/you' });
     } catch (e) {
       if (e.resynced) return t.json(409, { ok: false, error: e.message, resynced: true });
       logger.error?.(`[wonder] checkout failed: ${e.message}`);

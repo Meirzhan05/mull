@@ -1,21 +1,14 @@
-// The pricing page (public/pricing, served at /pricing). The daily caps and the Pro price are this
-// server's own (GET /api/plans); the buttons follow the visitor (GET /api/account): signed out,
-// Continue with Google; on Free, Upgrade opens a Polar checkout here, which returns to the You page
-// (public/you.js finishes the upgrade); on Pro, a way to manage it.
+// The pricing page (public/pricing, served at /pricing). One request, GET /api/plans, says this
+// server's daily caps, the Pro price and, for a signed-in visitor, their plan; pricing-core.js
+// turns it into what to show. On Free, Upgrade opens a Polar checkout from here (Back from it
+// returns here; paying lands on the You page, which finishes the upgrade: public/you.js).
 
-const ROWS = [['lesson', 'Lessons'], ['tutor', 'Tutor messages'], ['teacher', 'Teacher messages'], ['course', 'Course plans'], ['grade', 'Graded answers']];
+import { el } from '/ui.js';
+import { openBilling } from '/billing-client.js';
+import { CAP_ROWS, pricingView } from '/pricing/pricing-core.js';
 
 const $ = (sel) => document.querySelector(sel);
-function el(tag, attrs, ...kids) {
-  const n = document.createElement(tag);
-  for (const [k, v] of Object.entries(attrs || {})) {
-    if (v == null || v === false) continue;
-    if (k.startsWith('on')) n.addEventListener(k.slice(2), v);
-    else n.setAttribute(k, v === true ? '' : v);
-  }
-  n.append(...kids.filter((k) => k != null));
-  return n;
-}
+
 async function getJson(path) {
   try {
     const r = await fetch(path, { headers: { Accept: 'application/json' } });
@@ -25,86 +18,67 @@ async function getJson(path) {
   }
 }
 
-function showCaps(id, caps) {
-  $(`[data-caps="${id}"]`).replaceChildren(...ROWS.map(([k, label]) => el('li', null, el('span', null, label), el('b', null, caps[k] == null ? 'No limit' : caps[k].toLocaleString('en-US')))));
-}
+const capText = (n) => (n == null ? 'No limit' : n.toLocaleString('en-US'));
 
-/** "$8 / month" as a big amount and a small period. */
-function showPrice(label) {
-  const [amount, per] = label.split(' / ');
-  $('[data-price]').replaceChildren(el('b', null, amount), per ? ` / ${per}` : '');
-}
-
-function setCta(id, ...kids) {
-  $(`[data-cta="${id}"]`).replaceChildren(...kids);
-}
-
-function markCurrent(id) {
-  $(`#${id}-h`).append(el('span', { class: 'plan__current' }, 'Your plan'));
-}
-
-function upgradeButton(price) {
+function upgrade(label) {
   const note = el('p', { class: 'plan__note', role: 'status' });
-  const btn = el('button', { class: 'btn btn--primary', type: 'button' }, price ? `Upgrade · ${price}` : 'Upgrade to Pro');
-  const label = btn.textContent;
-  const free = () => { btn.disabled = false; btn.textContent = label; };
-  // Back from Polar restores this page from the bfcache: the button is usable again
-  window.addEventListener('pageshow', (e) => { if (e.persisted) free(); });
+  const btn = el('button', { class: 'btn btn--primary', type: 'button' }, label);
   btn.addEventListener('click', async () => {
     btn.disabled = true;
     btn.textContent = 'Opening checkout…';
     note.textContent = '';
-    note.classList.remove('notes__error');
+    note.classList.remove('is-error');
     try {
-      const r = await fetch('/api/billing/checkout', { method: 'POST', headers: { Accept: 'application/json' } });
-      const d = await r.json().catch(() => ({}));
-      // already Pro (or Polar had a subscription the plan missed): the You page shows it
-      if (r.status === 409) { location.href = '/#/you'; return; }
-      if (r.status === 401) { location.href = '/#/signin'; return; }
-      if (!r.ok || !d.url) throw new Error(d.error || 'Could not open checkout. Try again in a minute.');
-      location.href = d.url;
+      const { resynced } = await openBilling('/api/billing/checkout', { from: 'pricing' });
+      // Polar already had a subscription the plan missed: the server synced it
+      if (resynced) {
+        note.textContent = resynced;
+        btn.replaceWith(el('a', { class: 'btn btn--primary', href: '/#/you' }, 'See it on the You page'));
+        return;
+      }
     } catch (e) {
-      free();
+      if (e.status === 401) { location.href = '/#/signin'; return; }
       note.textContent = e.message;
-      note.classList.add('notes__error');
+      note.classList.add('is-error');
     }
+    btn.disabled = false;
+    btn.textContent = label;
   });
   return [btn, note];
 }
 
-const [plans, account] = await Promise.all([getJson('/api/plans'), getJson('/api/account')]);
-
-if (plans?.accounts) {
-  showCaps('free', plans.free);
-  showCaps('pro', plans.pro);
-  if (plans.price) showPrice(plans.price);
-  $('[data-test]').hidden = !plans.sandbox;
+function cta({ cta: c, note }) {
+  const button = c.kind === 'upgrade' ? upgrade(c.label)
+    : c.kind === 'disabled' ? [el('button', { class: 'btn', type: 'button', disabled: true }, c.label)]
+      : [el('a', { class: c.primary ? 'btn btn--primary' : 'btn', href: c.href }, c.label)];
+  return note ? [...button, el('p', { class: 'plan__note' }, note)] : button;
 }
 
-const notOnSale = () => {
-  $('[data-price]').replaceChildren(el('b', null, 'Soon'));
-  setCta('pro', el('button', { class: 'btn', type: 'button', disabled: true }, 'Not on sale yet'), el('p', { class: 'plan__note' }, 'Pro opens here soon. Free has everything until then.'));
-};
-
-if (plans && !plans.accounts) {
-  // a server without accounts: one learner and no caps, so there is nothing to choose
-  for (const id of ['free', 'pro']) setCta(id, el('a', { class: 'btn', href: '/#/' }, 'Open Mull'));
-  $('.notes').prepend(el('p', null, el('b', null, 'This Mull server has no accounts, so it has no daily limits.')));
-} else if (account?.signedIn && account.plan) {
-  const { plan, billing } = account;
-  markCurrent(plan.id);
-  setCta('free', el('a', { class: 'btn', href: '/#/' }, 'Open Mull'));
-  if (plan.id === 'pro') {
-    setCta('pro', plan.source === 'subscription'
-      ? el('a', { class: 'btn btn--primary', href: '/#/you' }, 'Manage on the You page')
-      : el('a', { class: 'btn btn--primary', href: '/#/' }, 'Open Mull'),
-    plan.source === 'admin' ? el('p', { class: 'plan__note' }, 'Admin on this server: no daily limits.')
-      : plan.source === 'comped' ? el('p', { class: 'plan__note' }, 'Given to you by this Mull server.') : null);
-  } else if (billing?.canUpgrade) {
-    setCta('pro', ...upgradeButton(billing.price || plans?.price));
-  } else {
-    notOnSale();
+function draw(view) {
+  if (view.noAccounts) {
+    // a server without accounts: one learner and no caps, so there is nothing to choose
+    $('.plans').hidden = true;
+    $('.notes').replaceChildren(el('p', null, 'This Mull server has no accounts, so it has no daily limits and nothing to buy.'),
+      el('p', null, el('a', { class: 'btn', href: '/#/' }, 'Open Mull')));
+    return;
   }
-} else if (plans && !plans.buyable) {
-  notOnSale();
+  const bar = $('[data-bar]');
+  bar.textContent = view.bar.label;
+  bar.href = view.bar.href;
+  for (const id of ['free', 'pro']) {
+    $(`[data-caps="${id}"]`).replaceChildren(...CAP_ROWS.map(([k, label]) => el('li', null, el('span', null, label), el('b', null, capText(view.caps[id][k])))));
+    $(`[data-for="${id}"]`).textContent = view.pitch[id];
+    $(`[data-cta="${id}"]`).replaceChildren(...cta(view[id]));
+  }
+  $('[data-price]').replaceChildren(el('b', null, view.price.amount), view.price.per ? ` / ${view.price.per}` : '');
+  if (view.current) $(`#${view.current}-h`).append(el('span', { class: 'plan__current' }, 'Your plan'));
+  $('[data-test]').hidden = !view.test;
+}
+
+try {
+  const view = pricingView(await getJson('/api/plans'));
+  if (view) draw(view);
+} finally {
+  // the buttons and price were hidden until known (index.html): without an answer, the defaults show
+  document.documentElement.classList.remove('is-loading');
 }

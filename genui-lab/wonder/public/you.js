@@ -3,6 +3,7 @@
 // kept and synced; they just have no place on this screen.
 
 import { el, icon, toast } from './ui.js';
+import { openBilling } from './billing-client.js';
 import { learnerTotals, activityGrid, LEVELS, levelOf } from './progress-core.js';
 import { interestGrid } from './onboarding.js';
 import { masteryPanel } from './mastery-screen.js'; // Phase 6
@@ -130,19 +131,9 @@ async function showPlan(row, btn, live = () => true) {
   const pitch = plan.id === 'free' && billing?.canUpgrade ? 'Pro gives you more lessons, tutor and Teacher messages each day.' : '';
   const test = billing?.sandbox && (billing.canUpgrade || billing.canManage) ? 'Test mode: pay with card 4242 4242 4242 4242.' : '';
   const go = (path) => async () => {
-    const r = await fetch(path, { method: 'POST', headers: { Accept: 'application/json' } });
-    const d = await r.json().catch(() => ({}));
+    const { resynced } = await openBilling(path);
     // Polar already had a subscription the plan missed: the server synced it, so redraw
-    if (r.status === 409 && d.resynced) { toast(d.error); if (live()) showPlan(row, btn, live); return; }
-    if (!r.ok || !d.url) throw new Error(d.error || 'That did not work');
-    location.href = d.url;
-    // busy while the page leaves. Back restores this page from the bfcache (pageshow), which frees
-    // the button; so does a navigation that never happened (still here and visible after 15 s)
-    await new Promise((resolve) => {
-      window.addEventListener('pageshow', resolve, { once: true });
-      const check = () => (document.visibilityState === 'visible' ? resolve() : setTimeout(check, 15000));
-      setTimeout(check, 15000);
-    });
+    if (resynced) { toast(resynced); if (live()) showPlan(row, btn, live); }
   };
   const actions = [
     billing?.canUpgrade ? btn(billing.price ? `Upgrade · ${billing.price}` : 'Upgrade to Pro', 'btn-primary', go('/api/billing/checkout'), 'Opening checkout…') : null,
@@ -151,7 +142,7 @@ async function showPlan(row, btn, live = () => true) {
   row.replaceChildren(el('div', { class: 'setting-text' },
     el('strong', null, `${plan.name} plan`),
     el('p', { class: 'muted small' }, [standing, pitch, test].filter(Boolean).join(' '),
-      plan.id === 'free' ? [' ', el('a', { href: '/pricing' }, 'Compare plans')] : null)),
+      billing?.canUpgrade ? [' ', el('a', { href: '/pricing' }, 'Compare plans')] : null)),
   actions.length ? el('div', { style: { display: 'flex', gap: '8px', flexWrap: 'wrap' } }, ...actions) : null);
   row.hidden = false;
 }

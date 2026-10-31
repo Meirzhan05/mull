@@ -256,7 +256,7 @@ export function createPolarBilling({ config, plans, fetch: fetchImpl = globalThi
      * A hosted checkout for Pro; resolves its URL. When Polar already has a live or paused Pro
      * subscription the plan record missed, it syncs the plan from it and refuses (409, resynced).
      */
-    async checkout(userId, { origin }) {
+    async checkout(userId, { origin, back = '/#/you' }) {
       if ((await userSubscriptions(userId)).some((sub) => isPro(sub) && SUBSCRIBED.includes(sub.status))) {
         await syncUser(userId);
         throw Object.assign(new Error('You already have a Pro subscription. Your plan is updated.'), { status: 409, resynced: true });
@@ -266,7 +266,7 @@ export function createPolarBilling({ config, plans, fetch: fetchImpl = globalThi
         external_customer_id: userId,
         metadata: { wonderUserId: userId },
         success_url: `${origin}/?checkout_id={CHECKOUT_ID}#/you`,
-        return_url: `${origin}/#/you`,
+        return_url: `${origin}${back}`,
       });
       if (typeof c?.url !== 'string') throw new Error('Polar sent no checkout URL');
       return c.url;
