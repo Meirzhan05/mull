@@ -871,6 +871,12 @@ Three catalog components put pictures or video next to the explanation.
   - **Critic.** In these runs it flagged Diagram problems the lint cannot see: "to lungs/to body" arrows leaving the bottom of the ventricles, an earthquake epicenter drawn off to the side of its focus, and a Diagram step's arithmetic (a 44 mm image does not fit a 36 mm sensor "sideways").
   - **Remaining format misses.** Mostly `key_terms`: lessons use 6-7 distinct KeyTerms where the lint wants 2-5.
 
+## Privacy, terms and visit counts
+
+- **`/privacy` and `/terms`** are server-rendered pages (`app/privacy/page.js`, `app/terms/page.js`, framed by `app/legal-page.js`). They describe what this app actually keeps and who sees it (Anthropic, Vercel, Neon, Google, Polar, Wikimedia and YouTube), so update them when that changes, along with `LEGAL_UPDATED`. `WONDER_CONTACT_EMAIL` is the address both give for questions and data requests; without it they point to the contact on the Polar receipt. The landing page's footer and the foot of the You page link to both. Give Polar and the Google OAuth consent screen the same two URLs.
+- **Vercel Web Analytics** (`app/analytics.js`): cookieless page views. Turn it on in the Vercel project's Analytics tab; the script and its endpoint are served from this origin (`/_vercel/insights`), so the CSP is unchanged in production. The app routes with the hash, which Vercel's stock component never sees, so each screen is sent as its own path (`app/analytics-path.js`: `/lesson`, `/review`, `/start`, `/you`…) and the URL is cut at `?` and `#`. A view never names a lesson, a topic or an id. `/welcome` loads the same script itself. In development the debug script logs views to the console and sends nothing.
+  - **Reading the funnel.** `/welcome` (landing) → `/start` (pressed a composer or topic) → `/lesson` (opened a lesson) → `/review` (came back to review). Signups and payments are in Neon and Polar.
+
 ## Accounts, sync, daily limits and plans
 
 Accounts are off unless **both** Neon Auth and a database are set. Without them Mull runs exactly as before: browser-only, one local learner.
@@ -900,12 +906,12 @@ Accounts are off unless **both** Neon Auth and a database are set. Without them 
 
 | Kind | Free | Pro | Override (Free / Pro) |
 |---|---|---|---|
-| Lessons (new, steer, resume, revise) | 20 | 100 | `WONDER_LIMIT_LESSON` / `WONDER_PRO_LIMIT_LESSON` |
-| Tutor messages | 100 | 500 | `WONDER_LIMIT_TUTOR` / `WONDER_PRO_LIMIT_TUTOR` |
-| Teacher messages | 60 | 300 | `WONDER_LIMIT_TEACHER` / `WONDER_PRO_LIMIT_TEACHER` |
-| Course plans | 10 | 50 | `WONDER_LIMIT_COURSE` / `WONDER_PRO_LIMIT_COURSE` |
-| Card and memory extractions | 60 | 300 | `WONDER_LIMIT_EXTRACT` / `WONDER_PRO_LIMIT_EXTRACT` |
-| Graded free-response answers | 150 | 750 | `WONDER_LIMIT_GRADE` / `WONDER_PRO_LIMIT_GRADE` |
+| Lessons (new, steer, resume, revise) | 5 | 100 | `WONDER_LIMIT_LESSON` / `WONDER_PRO_LIMIT_LESSON` |
+| Tutor messages | 30 | 500 | `WONDER_LIMIT_TUTOR` / `WONDER_PRO_LIMIT_TUTOR` |
+| Teacher messages | 20 | 300 | `WONDER_LIMIT_TEACHER` / `WONDER_PRO_LIMIT_TEACHER` |
+| Course plans | 2 | 50 | `WONDER_LIMIT_COURSE` / `WONDER_PRO_LIMIT_COURSE` |
+| Card and memory extractions | 15 | 300 | `WONDER_LIMIT_EXTRACT` / `WONDER_PRO_LIMIT_EXTRACT` |
+| Graded free-response answers | 40 | 750 | `WONDER_LIMIT_GRADE` / `WONDER_PRO_LIMIT_GRADE` |
 
   `off` or a negative number removes a cap, and `0` turns that kind off.
 - **Counting.** Counts live in the database (`wonder_usage`, one atomic upsert per request), so they hold across serverless instances. If the database can't count a request, the request is refused with `503 {code: 'usage_unavailable'}` rather than let through.

@@ -12,13 +12,15 @@
 import { normalizePracticeItem } from '../public/practice-core.js';
 
 /** Default daily caps per Free user. */
+// A taste of everything: an Opus lesson costs about $0.16, so 5 a day (steers included) keeps a
+// Free user under about $1.50 a day with the tutor and the Teacher.
 export const DEFAULT_LIMITS = Object.freeze({
-  lesson: 20, // POST /api/lesson/stream (new lessons, resumes, revisions) and accepted live steers
-  tutor: 100, // POST /api/tutor/stream
-  teacher: 60, // POST /api/teacher/stream
-  course: 10, // POST /api/course/plan
-  extract: 60, // POST /api/practice/extract and /api/memory/extract (after each lesson)
-  grade: 150, // free-response grading (widget actions explain_grade, and practice_grade on an explain item)
+  lesson: 5, // POST /api/lesson/stream (new lessons, resumes, revisions) and accepted live steers
+  tutor: 30, // POST /api/tutor/stream
+  teacher: 20, // POST /api/teacher/stream
+  course: 2, // POST /api/course/plan
+  extract: 15, // POST /api/practice/extract and /api/memory/extract (after each lesson)
+  grade: 40, // free-response grading (widget actions explain_grade, and practice_grade on an explain item)
 });
 
 /** Default daily caps per Pro user. */

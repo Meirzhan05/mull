@@ -178,7 +178,8 @@ test('every response carries the security headers', async () => {
     assert.equal(csp['connect-src'], prod ? "'self'" : "'self' ws: wss:", env.NODE_ENV);
     assert.equal(csp['img-src'], "'self' data: blob: https://upload.wikimedia.org https://thumb.wikimedia.org");
     assert.equal(csp['frame-src'], 'https://www.youtube-nocookie.com https://*.youtube.com');
-    assert.equal(csp['script-src'], "'self' 'unsafe-inline' 'unsafe-eval'");
+    // dev loads Web Analytics' debug script; deployments serve it from this origin (/_vercel)
+    assert.equal(csp['script-src'], `'self' 'unsafe-inline' 'unsafe-eval'${prod ? '' : ' https://va.vercel-scripts.com'}`);
     assert.equal(csp['object-src'], "'none'");
     assert.equal(csp['frame-ancestors'], "'none'");
     assert.equal(csp['base-uri'], "'self'");

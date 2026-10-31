@@ -1,0 +1,19 @@
+/* The privacy and terms pages (app/legal-page.js): a narrow article on the app's tokens. */
+.legal { min-height: 100dvh; background: var(--bg); }
+.legal-bar {
+  display: flex; align-items: center; justify-content: space-between; gap: 16px;
+  max-width: 44rem; margin: 0 auto; padding: 20px 16px; border-bottom: 1px solid var(--line);
+}
+.legal-mark { font-weight: 600; font-size: 15px; text-decoration: none; }
+.legal-bar nav { display: flex; gap: 16px; }
+.legal-bar nav a { color: var(--ink-2); text-decoration: none; }
+.legal-bar nav a:hover { color: var(--ink); }
+.legal-body { max-width: 44rem; margin: 0 auto; padding: 32px 16px 80px; font-size: 15px; line-height: 1.65; color: var(--ink-2); }
+.legal-body h1 { margin: 0 0 4px; font-size: 28px; line-height: 1.2; letter-spacing: -0.02em; color: var(--ink); }
+.legal-body h2 { margin: 36px 0 8px; font-size: 17px; color: var(--ink); }
+.legal-body p, .legal-body ul { margin: 0 0 12px; }
+.legal-body ul { padding-left: 20px; }
+.legal-body li { margin-bottom: 6px; }
+.legal-body strong { color: var(--ink); font-weight: 600; }
+.legal-body a { color: var(--accent); }
+.legal-date { color: var(--ink-3); font-size: 13px; margin-bottom: 28px !important; }

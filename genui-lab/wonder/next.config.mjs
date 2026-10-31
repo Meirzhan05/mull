@@ -26,13 +26,14 @@ if (fs.existsSync(userEnv)) {
 //   frames (chatgpt-dil/src/host.js), which may pass through youtube.com for consent; /welcome uses
 //   Google Fonts.
 // - connect: this origin only, so nothing a lesson renders can send data elsewhere.
-// - preview deployments also load the Vercel toolbar (vercel.live), and dev its hot-reload socket.
+// - preview deployments also load the Vercel toolbar (vercel.live), and dev its hot-reload socket
+//   and Web Analytics' debug script (va.vercel-scripts.com; deployments serve it from /_vercel).
 const dev = process.env.NODE_ENV !== 'production';
 const preview = process.env.VERCEL_ENV === 'preview';
 const toolbar = (...hosts) => (preview ? ` ${hosts.join(' ')}` : '');
 const CSP = [
   "default-src 'self'",
-  `script-src 'self' 'unsafe-inline' 'unsafe-eval'${toolbar('https://vercel.live')}`,
+  `script-src 'self' 'unsafe-inline' 'unsafe-eval'${dev ? ' https://va.vercel-scripts.com' : ''}${toolbar('https://vercel.live')}`,
   `style-src 'self' 'unsafe-inline' https://fonts.googleapis.com${toolbar('https://vercel.live')}`,
   `img-src 'self' data: blob: https://upload.wikimedia.org https://thumb.wikimedia.org${toolbar('https://vercel.live', 'https://vercel.com')}`,
   `font-src 'self' data: https://fonts.gstatic.com${toolbar('https://vercel.live', 'https://assets.vercel.com')}`,
