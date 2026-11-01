@@ -48,10 +48,10 @@ test('pricing: on Pro, the way to manage it depends on where Pro came from', () 
 });
 
 test('pricing: the pitch follows the caps this server uses', () => {
-  assert.equal(proPitch(DEFAULT_LIMITS, DEFAULT_PRO_LIMITS), 'Five times the daily limits, for learning a lot.');
-  const half = Object.fromEntries(Object.entries(DEFAULT_PRO_LIMITS).map(([k, v]) => [k, v / 2.5]));
-  assert.equal(proPitch(DEFAULT_LIMITS, half), 'Twice the daily limits, for learning a lot.');
-  assert.equal(proPitch(DEFAULT_LIMITS, { ...DEFAULT_PRO_LIMITS, lesson: 40 }), 'Higher daily limits, for learning a lot.');
+  assert.equal(proPitch(DEFAULT_LIMITS, DEFAULT_PRO_LIMITS), 'Twice the daily limits, for learning a lot.');
+  const fivefold = Object.fromEntries(Object.entries(DEFAULT_LIMITS).map(([k, v]) => [k, v * 5]));
+  assert.equal(proPitch(DEFAULT_LIMITS, fivefold), 'Five times the daily limits, for learning a lot.');
+  assert.equal(proPitch(DEFAULT_LIMITS, { ...DEFAULT_PRO_LIMITS, lesson: 60 }), 'Higher daily limits, for learning a lot.');
   assert.equal(proPitch(DEFAULT_LIMITS, { ...DEFAULT_PRO_LIMITS, grade: null }), 'Higher daily limits, for learning a lot.');
   assert.equal(freePitch({ lesson: 20 }), 'Up to 20 lessons a day, with the tutor and the Teacher.');
   assert.equal(freePitch({ lesson: 1 }), 'Up to 1 lesson a day, with the tutor and the Teacher.');

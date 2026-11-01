@@ -435,7 +435,7 @@ test('GET /api/plans: both plans\' caps and the Pro price, signed out too, for t
     const p = (await call(null, 'GET', '/api/plans')).body;
     assert.equal(p.accounts, true);
     assert.equal(p.free.lesson, 20);
-    assert.equal(p.pro.tutor, 500);
+    assert.equal(p.pro.tutor, 200);
     assert.equal(p.pro.course, 40, 'WONDER_PRO_LIMIT_* applies');
     assert.equal(p.free.grade, null, 'a cap turned off is no limit');
     assert.equal(p.price, '$8 / month');
@@ -444,7 +444,7 @@ test('GET /api/plans: both plans\' caps and the Pro price, signed out too, for t
   }, { env: { ...ENV, WONDER_PRO_LIMIT_COURSE: '40', WONDER_LIMIT_GRADE: 'off' } });
   await withServer(async ({ call }) => {
     const p = (await call(null, 'GET', '/api/plans')).body;
-    assert.deepEqual([p.buyable, p.price, p.sandbox, p.pro.lesson, p.signedIn], [false, null, false, 100, false]);
+    assert.deepEqual([p.buyable, p.price, p.sandbox, p.pro.lesson, p.signedIn], [false, null, false, 40, false]);
     assert.equal(p.plan, undefined);
   }, { env: {} });
 });
