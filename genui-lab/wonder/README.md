@@ -900,12 +900,12 @@ Accounts are off unless **both** Neon Auth and a database are set. Without them 
 
 | Kind | Free | Pro | Override (Free / Pro) |
 |---|---|---|---|
-| Lessons (new, steer, resume, revise) | 20 | 100 | `WONDER_LIMIT_LESSON` / `WONDER_PRO_LIMIT_LESSON` |
-| Tutor messages | 100 | 500 | `WONDER_LIMIT_TUTOR` / `WONDER_PRO_LIMIT_TUTOR` |
-| Teacher messages | 60 | 300 | `WONDER_LIMIT_TEACHER` / `WONDER_PRO_LIMIT_TEACHER` |
-| Course plans | 10 | 50 | `WONDER_LIMIT_COURSE` / `WONDER_PRO_LIMIT_COURSE` |
-| Card and memory extractions | 60 | 300 | `WONDER_LIMIT_EXTRACT` / `WONDER_PRO_LIMIT_EXTRACT` |
-| Graded free-response answers | 150 | 750 | `WONDER_LIMIT_GRADE` / `WONDER_PRO_LIMIT_GRADE` |
+| Lessons (new, steer, resume, revise) | 20 | 40 | `WONDER_LIMIT_LESSON` / `WONDER_PRO_LIMIT_LESSON` |
+| Tutor messages | 100 | 200 | `WONDER_LIMIT_TUTOR` / `WONDER_PRO_LIMIT_TUTOR` |
+| Teacher messages | 60 | 120 | `WONDER_LIMIT_TEACHER` / `WONDER_PRO_LIMIT_TEACHER` |
+| Course plans | 10 | 20 | `WONDER_LIMIT_COURSE` / `WONDER_PRO_LIMIT_COURSE` |
+| Card and memory extractions | 60 | 120 | `WONDER_LIMIT_EXTRACT` / `WONDER_PRO_LIMIT_EXTRACT` |
+| Graded free-response answers | 150 | 300 | `WONDER_LIMIT_GRADE` / `WONDER_PRO_LIMIT_GRADE` |
 
   `off` or a negative number removes a cap, and `0` turns that kind off.
 - **Counting.** Counts live in the database (`wonder_usage`, one atomic upsert per request), so they hold across serverless instances. If the database can't count a request, the request is refused with `503 {code: 'usage_unavailable'}` rather than let through.
