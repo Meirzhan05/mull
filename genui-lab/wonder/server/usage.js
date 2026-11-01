@@ -23,8 +23,12 @@ export const DEFAULT_LIMITS = Object.freeze({
   grade: 40, // free-response grading (widget actions explain_grade, and practice_grade on an explain item)
 });
 
-/** Default daily caps per Pro user. */
-export const DEFAULT_PRO_LIMITS = Object.freeze({ lesson: 100, tutor: 500, teacher: 300, course: 50, extract: 300, grade: 750 });
+/**
+ * Default daily caps per Pro user: eight times Free's (the pricing page says so when every cap is the
+ * same multiple). An Opus lesson costs about $0.16, so even these let one subscriber at the cap spend
+ * far more than a month of Pro; they stop scripts, not learners.
+ */
+export const DEFAULT_PRO_LIMITS = Object.freeze({ lesson: 40, tutor: 240, teacher: 160, course: 16, extract: 120, grade: 320 });
 
 const NOUN = { lesson: 'lessons', tutor: 'tutor messages', teacher: 'Teacher messages', course: 'course plans', extract: 'card and memory extractions', grade: 'graded answers' };
 

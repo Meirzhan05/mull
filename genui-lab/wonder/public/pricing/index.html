@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Mull · Pricing</title>
+<meta name="description" content="Mull is free to start. Pro raises how many lessons, tutor and Teacher messages you get each day.">
+<meta name="theme-color" content="#0A0A0A">
+<link rel="icon" href="/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/apple-icon.png">
+<!-- Served at /pricing (next.config.mjs), so paths here are absolute. The caps, the price and the
+     buttons come from GET /api/plans (pricing.js); the numbers below are the defaults, shown without
+     JavaScript or an answer. Until then the buttons and price are hidden (is-loading), so a
+     signed-in visitor never sees the signed-out ones first; never for more than 4 s. -->
+<script>document.documentElement.classList.add('is-loading');setTimeout(function(){document.documentElement.classList.remove('is-loading')},4000)</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@300..700&family=Geist+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="/pricing/pricing.css">
+</head>
+<body>
+
+<header class="bar">
+  <a class="bar__mark" href="/welcome" aria-label="Mull, about the app">
+    <svg viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="9"/><path d="M8.5 21.5V14.25a3.75 3.75 0 0 1 7.5 0V21.5M16 14.25a3.75 3.75 0 0 1 7.5 0v4.5a2.5 2.5 0 0 1-5 0"/><circle cx="18.5" cy="15.2" r="1.6"/></svg>
+    <span>Mull</span>
+  </a>
+  <a class="bar__in" data-bar href="/#/">Open Mull</a>
+</header>
+
+<main class="wrap">
+  <div class="head">
+    <h1>Free to start. Pro if you learn every day.</h1>
+    <p>Both plans have all of Mull: lessons, the tutor, the Teacher, courses and reviews. Pro only raises how much you can do each day.</p>
+  </div>
+
+  <div class="plans">
+    <section class="plan" id="free" aria-labelledby="free-h">
+      <div class="plan__top">
+        <h2 id="free-h">Free</h2>
+        <p class="plan__price"><b>$0</b></p>
+        <p class="plan__for" data-for="free">Up to 5 lessons a day, with the tutor and the Teacher.</p>
+      </div>
+      <div class="plan__cta" data-cta="free"><a class="btn" href="/#/start">Continue with Google</a></div>
+      <ul class="caps" data-caps="free" aria-label="Free: each day">
+        <li><span>Lessons</span><b>5</b></li>
+        <li><span>Tutor messages</span><b>30</b></li>
+        <li><span>Teacher messages</span><b>20</b></li>
+        <li><span>Course plans</span><b>2</b></li>
+        <li><span>Graded answers</span><b>40</b></li>
+      </ul>
+    </section>
+
+    <section class="plan plan--pro" id="pro" aria-labelledby="pro-h">
+      <div class="plan__top">
+        <h2 id="pro-h">Pro</h2>
+        <p class="plan__price" data-price><b>Paid</b></p>
+        <p class="plan__for" data-for="pro">Eight times the daily limits, for learning a lot.</p>
+      </div>
+      <div class="plan__cta" data-cta="pro"><a class="btn btn--primary" href="/#/start">Continue with Google</a><p class="plan__note">Then upgrade from the You page.</p></div>
+      <ul class="caps" data-caps="pro" aria-label="Pro: each day">
+        <li><span>Lessons</span><b>40</b></li>
+        <li><span>Tutor messages</span><b>240</b></li>
+        <li><span>Teacher messages</span><b>160</b></li>
+        <li><span>Course plans</span><b>16</b></li>
+        <li><span>Graded answers</span><b>320</b></li>
+      </ul>
+    </section>
+  </div>
+
+  <div class="notes">
+    <p>Limits are per day and reset at midnight UTC. Only what Claude writes for you counts: a new lesson (or the rest of one that stopped partway), messages, course plans and graded answers. Rereading a finished lesson, your library and syncing never do.</p>
+    <p>Payment and sales tax are handled by Polar. Cancel any time from <b>You → Manage billing</b>; Pro lasts to the end of the period you paid for.</p>
+    <p class="notes__test" data-test hidden>This server is in test mode: pay with card 4242 4242 4242 4242, nothing is charged.</p>
+  </div>
+</main>
+
+<footer class="foot">
+  <p><span class="foot__mark">Mull</span> Lessons, the tutor and the Teacher are written by Claude, an AI made by Anthropic.</p>
+</footer>
+
+<script type="module" src="/pricing/pricing.js"></script>
+</body>
+</html>

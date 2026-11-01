@@ -427,6 +427,8 @@ button { cursor: pointer; }
 /* ------------------------------------------------- the ways in --------- */
 .bar__end { justify-self: end; display: flex; align-items: center; gap: 18px; }
 .bar__in { color: var(--sc-ink); text-decoration: none; font-size: 0.86rem; font-weight: 550; padding: 6px 12px; border-radius: 8px; border: 1px solid var(--line-strong); white-space: nowrap; transition: border-color 160ms var(--sc-ease-out), background-color 160ms var(--sc-ease-out); }
+.bar__link { color: var(--sc-ink-soft); text-decoration: none; font-size: 0.86rem; font-weight: 500; white-space: nowrap; }
+@media (hover: hover) and (pointer: fine) { .bar__link:hover { color: var(--sc-ink); } }
 @media (hover: hover) and (pointer: fine) { .bar__in:hover { border-color: var(--sc-ink-soft); background: var(--surface-2); } }
 .bar__in:active { transform: translateY(1px); }
 

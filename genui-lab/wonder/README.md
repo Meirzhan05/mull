@@ -906,12 +906,12 @@ Accounts are off unless **both** Neon Auth and a database are set. Without them 
 
 | Kind | Free | Pro | Override (Free / Pro) |
 |---|---|---|---|
-| Lessons (new, steer, resume, revise) | 5 | 100 | `WONDER_LIMIT_LESSON` / `WONDER_PRO_LIMIT_LESSON` |
-| Tutor messages | 30 | 500 | `WONDER_LIMIT_TUTOR` / `WONDER_PRO_LIMIT_TUTOR` |
-| Teacher messages | 20 | 300 | `WONDER_LIMIT_TEACHER` / `WONDER_PRO_LIMIT_TEACHER` |
-| Course plans | 2 | 50 | `WONDER_LIMIT_COURSE` / `WONDER_PRO_LIMIT_COURSE` |
-| Card and memory extractions | 15 | 300 | `WONDER_LIMIT_EXTRACT` / `WONDER_PRO_LIMIT_EXTRACT` |
-| Graded free-response answers | 40 | 750 | `WONDER_LIMIT_GRADE` / `WONDER_PRO_LIMIT_GRADE` |
+| Lessons (new, steer, resume, revise) | 5 | 40 | `WONDER_LIMIT_LESSON` / `WONDER_PRO_LIMIT_LESSON` |
+| Tutor messages | 30 | 240 | `WONDER_LIMIT_TUTOR` / `WONDER_PRO_LIMIT_TUTOR` |
+| Teacher messages | 20 | 160 | `WONDER_LIMIT_TEACHER` / `WONDER_PRO_LIMIT_TEACHER` |
+| Course plans | 2 | 16 | `WONDER_LIMIT_COURSE` / `WONDER_PRO_LIMIT_COURSE` |
+| Card and memory extractions | 15 | 120 | `WONDER_LIMIT_EXTRACT` / `WONDER_PRO_LIMIT_EXTRACT` |
+| Graded free-response answers | 40 | 320 | `WONDER_LIMIT_GRADE` / `WONDER_PRO_LIMIT_GRADE` |
 
   `off` or a negative number removes a cap, and `0` turns that kind off.
 - **Counting.** Counts live in the database (`wonder_usage`, one atomic upsert per request), so they hold across serverless instances. If the database can't count a request, the request is refused with `503 {code: 'usage_unavailable'}` rather than let through.
@@ -936,7 +936,8 @@ Accounts are off unless **both** Neon Auth and a database are set. Without them 
 - **Webhook.** `POST /api/billing/webhook` checks the Standard Webhooks signature over the raw body (secrets made since September 2026 and older ones both work). An event only says which user to look at (its customer's external id, or the user id in its metadata): their subscriptions are read from Polar as they are now (by external customer id, plus the stored and the event's subscription when those name the user only in metadata) and the best Pro one becomes the plan record (a live one, renewing first, then latest period end). So late, repeated or out-of-order events cannot leave a stale state, and a user with two subscriptions stays Pro while either lives. Each record is versioned by Polar's latest change time across the user's subscriptions, and an older read never overwrites a newer one. Events naming no user are ignored. A Polar error about the request itself (a 4xx other than 401, 403 and 429) is logged and answered 202, because Polar disables an endpoint after 10 failed deliveries in a row; a bad or under-scoped token, rate limits and server errors answer 500 so Polar redelivers once fixed.
 - **Cancelling.** Cancel at period end keeps Pro until then (`endsAt`); once no Pro subscription is live the account is Free.
 - **Deleting an account.** A user with no plan record never opened checkout, so nothing at Polar is touched. Otherwise every subscription Polar has for the user that is not over (paused, unpaid and not-yet-recorded ones too) is revoked first; a revoke Polar refuses counts only once Polar shows it ended. If Polar cannot be reached or refuses, nothing is deleted and the user is told to try again, so a deleted account is never charged again. Once the data is gone, the Polar customer is deleted and anonymized (best effort).
-- **The price** on the Upgrade button comes from the Pro product, cached for an hour, and is looked up only for users who can upgrade. A cold cache waits at most 1.5 seconds; after that the button reads "Upgrade to Pro" and the price shows next time.
+- **Pricing page.** `/pricing` (`public/pricing`, linked from the landing page and, when Pro can be bought, the You page) shows Free and Pro side by side from one public request, `GET /api/plans`: this server's daily caps for each plan (`null` for none), the Pro price, whether Pro is on sale, and for a signed-in visitor their plan and offer. What it shows for each answer is `public/pricing/pricing-core.js` (tested). Signed out it offers Sign in and Continue with Google; on Free, Upgrade opens checkout from there (`{from: 'pricing'}`: Back from Polar returns to the pricing page, paying lands on You); on Pro, the You page. Both pages open Polar through `public/billing-client.js`.
+- **The price** on the Upgrade button comes from the Pro product, cached for an hour, and is looked up only for users who can upgrade and for the pricing page. A cold cache waits at most 1.5 seconds; after that the button reads "Upgrade to Pro" and the price shows next time.
 - **Raw bodies.** Both transports hand routes the exact request text as `t.rawBody` (bodies up to 256 KB), which the webhook signature is checked over.
 - **Sandbox first.** `POLAR_SERVER` is `sandbox` unless set to `production`. Sandbox has its own dashboard (sandbox.polar.sh), tokens and test card (4242 4242 4242 4242).
 - **Setup.**

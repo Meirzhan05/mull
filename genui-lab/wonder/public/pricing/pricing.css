@@ -1,0 +1,97 @@
+/* Mull pricing page. The landing page's tokens (public/welcome/css/site.css), on a plain page. */
+:root {
+  --canvas: #0A0A0A;
+  --surface: #111111;
+  --surface-2: #161616;
+  --ink: #EDEDED;
+  --ink-soft: #A1A1A1;
+  --ink-faint: #8F8F8F;
+  --line: #242424;
+  --line-strong: #333333;
+  --accent: #0070F3;
+  --accent-ink: #FFFFFF;
+  --link: #52A8FF;
+  --bar-h: 56px;
+  --gutter: clamp(16px, 4vw, 40px);
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0; min-height: 100vh; display: flex; flex-direction: column;
+  background: var(--canvas); color: var(--ink);
+  font: 380 1rem/1.6 "Geist", system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+a { color: var(--link); }
+h1, h2, p { margin: 0; }
+
+.bar {
+  position: sticky; top: 0; z-index: 10; height: var(--bar-h);
+  display: flex; align-items: center; justify-content: space-between; padding-inline: var(--gutter);
+  background: color-mix(in oklab, var(--canvas) 94%, transparent); border-bottom: 1px solid var(--line);
+  backdrop-filter: blur(8px);
+}
+.bar__mark { display: inline-flex; align-items: center; gap: 10px; color: var(--ink); text-decoration: none; font-weight: 600; letter-spacing: -0.01em; }
+.bar__mark svg { width: 22px; height: 22px; }
+.bar__mark rect { fill: var(--ink); }
+.bar__mark path { fill: none; stroke: var(--canvas); stroke-width: 2.6; stroke-linejoin: round; stroke-linecap: round; }
+.bar__mark circle { fill: var(--accent); }
+.bar__in { color: var(--ink); text-decoration: none; font-size: 0.86rem; font-weight: 550; padding: 6px 12px; border-radius: 8px; border: 1px solid var(--line-strong); transition: border-color 160ms var(--ease-out), background-color 160ms var(--ease-out); }
+
+.wrap { width: 100%; max-width: 60rem; margin: 0 auto; padding: clamp(40px, 8vw, 88px) var(--gutter) 48px; flex: 1; }
+.head { max-width: 38rem; margin-bottom: clamp(28px, 5vw, 48px); }
+.head h1 { font-size: clamp(2rem, 5.2vw, 3.1rem); line-height: 1.08; font-weight: 560; letter-spacing: -0.03em; text-wrap: balance; }
+.head p { margin-top: 16px; color: var(--ink-soft); font-size: 1.06rem; line-height: 1.66; text-wrap: pretty; }
+
+.plans { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 16px; row-gap: 16px; }
+/* each card's three parts sit on shared rows, so the cap lists line up whatever a button's note says */
+.plan {
+  display: grid; grid-row: span 3; grid-template-rows: subgrid; row-gap: 22px; align-content: start; padding: clamp(20px, 3vw, 28px);
+  background: var(--surface); border: 1px solid var(--line); border-radius: 16px;
+}
+.plan--pro { border-color: color-mix(in oklab, var(--accent) 55%, var(--line)); background: linear-gradient(180deg, color-mix(in oklab, var(--accent) 9%, var(--surface)), var(--surface) 55%); }
+.plan h2 { font-size: 1.05rem; font-weight: 600; display: flex; align-items: center; gap: 10px; }
+.plan__current { font-size: 0.72rem; font-weight: 500; color: var(--ink-soft); border: 1px solid var(--line-strong); border-radius: 999px; padding: 1px 8px; }
+.plan__price { margin-top: 10px; font-variant-numeric: tabular-nums; color: var(--ink-soft); }
+.plan__price b { font-size: 2.1rem; line-height: 1.1; font-weight: 600; letter-spacing: -0.02em; color: var(--ink); }
+.plan__for { margin-top: 6px; color: var(--ink-soft); font-size: 0.94rem; }
+.plan__cta { display: flex; flex-direction: column; gap: 8px; align-self: start; }
+.caps { align-self: start; }
+.plan__note { color: var(--ink-faint); font-size: 0.82rem; }
+
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; min-height: 42px; padding: 9px 16px;
+  font: inherit; font-size: 0.94rem; font-weight: 550; text-decoration: none; cursor: pointer;
+  color: var(--ink); background: var(--surface-2); border: 1px solid var(--line-strong); border-radius: 10px;
+  transition: border-color 160ms var(--ease-out), background-color 160ms var(--ease-out), opacity 160ms;
+}
+.btn--primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+.btn:active { transform: translateY(1px); }
+.btn:disabled, .btn[aria-disabled="true"] { opacity: 0.55; cursor: default; transform: none; }
+.btn:focus-visible, .bar__in:focus-visible, .bar__mark:focus-visible { outline: 2px solid var(--link); outline-offset: 2px; }
+@media (hover: hover) and (pointer: fine) {
+  .btn:not(:disabled):hover, .bar__in:hover { border-color: var(--ink-soft); }
+  .btn--primary:not(:disabled):hover { background: #1A80F5; border-color: #1A80F5; }
+}
+
+.caps { list-style: none; margin: 0; padding: 18px 0 0; border-top: 1px solid var(--line); display: grid; gap: 10px; }
+.caps::before { content: "Each day"; font: 500 0.72rem/1 "Geist Mono", ui-monospace, monospace; letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-faint); margin-bottom: 2px; }
+.caps li { display: flex; justify-content: space-between; gap: 12px; font-size: 0.94rem; color: var(--ink-soft); }
+.caps b { color: var(--ink); font-weight: 550; font-variant-numeric: tabular-nums; }
+
+.notes { margin-top: 28px; display: grid; gap: 8px; max-width: 42rem; color: var(--ink-faint); font-size: 0.86rem; }
+.notes b { color: var(--ink-soft); font-weight: 500; }
+.is-error { color: #FF6166; }
+/* until GET /api/plans answers (pricing.js), the parts that depend on the visitor wait unseen */
+.is-loading [data-cta], .is-loading [data-price], .is-loading [data-bar] { visibility: hidden; }
+
+.foot { padding: 24px var(--gutter) 32px; border-top: 1px solid var(--line); color: var(--ink-faint); font-size: 0.82rem; text-align: center; }
+.foot__mark { color: var(--ink); font-weight: 600; margin-right: 6px; }
+
+@media (max-width: 720px) {
+  .plans { grid-template-columns: 1fr; }
+}
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
