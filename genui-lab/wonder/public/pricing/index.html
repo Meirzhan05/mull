@@ -8,7 +8,18 @@
 <meta name="theme-color" content="#0A0A0A">
 <link rel="icon" href="/icon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="/apple-icon.png">
-<!-- Served at /pricing (next.config.mjs), so paths here are absolute. The caps, the price and the
+<!-- Link previews. app/static-page.js makes og:url and og:image absolute when Next serves this page. -->
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Mull">
+<meta property="og:url" content="/pricing">
+<meta property="og:title" content="Mull · Pricing">
+<meta property="og:description" content="Mull is free to start. Pro raises how many lessons, tutor and Teacher messages you get each day.">
+<meta property="og:image" content="/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="A glass prism splitting a beam of light into a spectrum, beside the words: Mull. Name anything you want to understand.">
+<meta name="twitter:card" content="summary_large_image">
+<!-- Served at /pricing (app/pricing/route.js), so paths here are absolute. The caps, the price and the
      buttons come from GET /api/plans (pricing.js); the numbers below are the defaults, shown without
      JavaScript or an answer. Until then the buttons and price are hidden (is-loading), so a
      signed-in visitor never sees the signed-out ones first; never for more than 4 s. -->
