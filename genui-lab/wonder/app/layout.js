@@ -4,6 +4,7 @@ import { Geist, Geist_Mono } from 'next/font/google';
 import { syncConfig } from '../server/sync/index.js';
 import { landingScript } from './landing-script.js';
 import { Analytics } from './analytics';
+import { SITE_URL } from './site-url.js';
 import '../../chatgpt-dil/src/dil.css';
 import 'katex/dist/katex.min.css';
 import './styles/styles.css';
@@ -23,6 +24,7 @@ const mono = Geist_Mono({ subsets: ['latin'], variable: '--font-mono-face', disp
 export const metadata = {
   title: 'Mull',
   description: 'Learn anything with interactive AI lessons, a tutor, and spaced-repetition review.',
+  metadataBase: new URL(SITE_URL), // link previews need absolute URLs (app/page.js)
   // icons: app/icon.svg (favicon) and app/apple-icon.png (home screen), picked up by file convention
 };
 

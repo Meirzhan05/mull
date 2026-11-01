@@ -8,9 +8,18 @@
 <meta name="theme-color" content="#0A0A0A">
 <link rel="icon" href="/icon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="/apple-icon.png">
+<!-- Link previews. app/static-page.js makes og:url and og:image absolute when Next serves this page. -->
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Mull">
+<meta property="og:url" content="/welcome">
 <meta property="og:title" content="Mull · Name anything you want to understand">
-<meta property="og:image" content="/welcome/assets/og.webp">
-<!-- Where "Start a lesson" goes: the app at /, which opens #/learn/<topic> as a new lesson. Served at /welcome (next.config.mjs), so paths here are absolute. -->
+<meta property="og:description" content="Name anything you want to understand. Mull writes you a short lesson as you read, with a tutor beside the text and reviews that help it stay.">
+<meta property="og:image" content="/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="A glass prism splitting a beam of light into a spectrum, beside the words: Mull. Name anything you want to understand.">
+<meta name="twitter:card" content="summary_large_image">
+<!-- Where "Start a lesson" goes: the app at /, which opens #/learn/<topic> as a new lesson. Served at /welcome (app/welcome/route.js), so paths here are absolute. -->
 <meta name="wonder-app" content="/">
 <!-- Seen once: the app sends a first-time visitor here (app/layout.js), and not again after this. -->
 <script>try{localStorage.setItem('wonder.welcomed','1')}catch(e){}</script>
