@@ -893,6 +893,7 @@ Accounts are off unless **both** Neon Auth and a database are set. Without them 
 - **Routes and server checks.** `app/api/auth/[...path]` is Neon's proxy (`auth.handler()`). The server reads the user with `auth.getSession()` (`server/auth.js`). No middleware is needed: signed-out visitors can browse, and only the API enforces sign-in.
 - **Google credentials.** Development uses Neon's shared Google credentials. For production, register your own Google OAuth client in Neon Auth (its callback is `{NEON_AUTH_BASE_URL}/callback/google`, on Neon's host, so no custom domain is needed).
 - **Trusted domains.** Add each site origin, such as the `….vercel.app` address, to Neon Auth's trusted domains. Localhost is allowed by default.
+- **Signed-in writes and Origin.** Neon Auth refuses signed-in writes (sign-out, delete-user) from the app's own domains with 403 `Invalid origin`, even when those domains are trusted and pass its callbackURL check; there it accepts only localhost and its own origin (seen October 2026). So `server/auth.js` checks the origin itself: a signed-in write whose Origin (or Referer) is this server's host goes to Neon Auth with Neon Auth's own origin, through the `/api/auth` proxy and the server's own calls alike, and any other origin is passed on unchanged for Neon Auth to refuse. Sign-in and reads are untouched (`test/sync-auth.test.js`).
 
 **Sync.**
 - Each signed-in browser keeps a cache in IndexedDB and syncs it through `POST /api/sync`. The server keeps a revision counter per user and merges conflicting edits.
