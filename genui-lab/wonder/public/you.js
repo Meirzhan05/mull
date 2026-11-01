@@ -143,7 +143,8 @@ async function showPlan(row, btn, live = () => true) {
     el('strong', null, `${plan.name} plan`),
     el('p', { class: 'muted small' }, [standing, pitch, test].filter(Boolean).join(' '),
       billing?.canUpgrade ? [' ', el('a', { href: '/pricing' }, 'Compare plans')] : null)),
-  actions.length ? el('div', { style: { display: 'flex', gap: '8px', flexWrap: 'wrap' } }, ...actions) : null);
+  // no buttons (an admin, a comped user, billing off): replaceChildren would write a null as text
+  ...(actions.length ? [el('div', { style: { display: 'flex', gap: '8px', flexWrap: 'wrap' } }, ...actions)] : []));
   row.hidden = false;
 }
 
