@@ -12,6 +12,7 @@ import { createSyncService } from '../server/sync/service.js';
 import { createMemoryDb } from '../server/sync/memory-db.js';
 import { syncConfig } from '../server/sync/index.js';
 import { fakeClient } from './helpers.js';
+import { originForNeon, requestForNeon } from '../server/auth.js';
 
 const quiet = { warn() {}, error() {}, log() {}, info() {} };
 const NOTES = '# Photosynthesis\n\nPlants turn light, water and carbon dioxide into glucose and oxygen. The light reactions happen in the thylakoids.';
@@ -259,4 +260,36 @@ test('recoverable streams with accounts: a streamKey only supersedes the same us
     assert.equal(calls[0].signal.aborted, true, 'Alice\'s own retry supersedes her older request');
     await first;
   });
+});
+
+// Which Origin Neon Auth sees for a signed-in write (server/auth.js): its own origin when the
+// request comes from this app's host, the request's own otherwise, so Neon Auth still refuses
+// another site.
+const NEON = 'https://ep-x.neonauth.us-east-1.aws.neon.tech/neondb/auth';
+const headers = (h) => (n) => h[n] ?? null;
+const SESSION = '__Secure-neon-auth.session_token=abc; other=1';
+
+test('originForNeon: this host gets Neon Auth\'s origin, any other keeps its own', () => {
+  const neon = 'https://ep-x.neonauth.us-east-1.aws.neon.tech';
+  assert.equal(originForNeon(headers({ origin: 'https://mull-learn.vercel.app', host: 'mull-learn.vercel.app' }), NEON), neon);
+  assert.equal(originForNeon(headers({ origin: 'https://mull-learn.vercel.app', 'x-forwarded-host': 'mull-learn.vercel.app', host: 'internal:3000' }), NEON), neon, 'the forwarded host wins');
+  assert.equal(originForNeon(headers({ referer: 'https://mull-learn.vercel.app/#/you', host: 'mull-learn.vercel.app' }), NEON), neon, 'Referer when there is no Origin');
+  assert.equal(originForNeon(headers({ origin: 'https://evil.example', host: 'mull-learn.vercel.app' }), NEON), 'https://evil.example');
+  assert.equal(originForNeon(headers({ origin: 'https://mull-learn.vercel.app.evil.example', host: 'mull-learn.vercel.app' }), NEON), 'https://mull-learn.vercel.app.evil.example');
+  assert.equal(originForNeon(headers({ host: 'mull-learn.vercel.app' }), NEON), '', 'neither header: nothing to vouch for');
+  assert.equal(originForNeon(headers({ origin: 'null', host: 'mull-learn.vercel.app' }), NEON), 'null', 'an opaque origin is not this host');
+});
+
+test('requestForNeon: only a signed-in write from this host is rewritten, body intact', async () => {
+  const req = (method, h, body) => new Request('https://mull-learn.vercel.app/api/auth/sign-out', { method, headers: { host: 'mull-learn.vercel.app', ...h }, body });
+  const out = await requestForNeon(req('POST', { origin: 'https://mull-learn.vercel.app', cookie: SESSION, 'content-type': 'application/json' }, '{"a":1}'), NEON);
+  assert.equal(out.headers.get('origin'), 'https://ep-x.neonauth.us-east-1.aws.neon.tech');
+  assert.equal(out.headers.get('cookie'), SESSION);
+  assert.equal(await out.text(), '{"a":1}');
+  const cross = req('POST', { origin: 'https://evil.example', cookie: SESSION }, '{}');
+  assert.equal(await requestForNeon(cross, NEON), cross, 'another site: left for Neon Auth to refuse');
+  const signedOut = req('POST', { origin: 'https://mull-learn.vercel.app', cookie: 'other=1' }, '{}');
+  assert.equal(await requestForNeon(signedOut, NEON), signedOut, 'no session: as it is (sign-in)');
+  const read = req('GET', { origin: 'https://mull-learn.vercel.app', cookie: SESSION });
+  assert.equal(await requestForNeon(read, NEON), read);
 });
