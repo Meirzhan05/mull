@@ -985,6 +985,9 @@ body[data-screen="lesson"] main { padding-top: 0; }
 /* ---------------------------------------------------------------- you */
 .you { display: grid; gap: 20px; max-width: 1040px; margin: 0 auto; }
 .you-layout { display: grid; grid-template-columns: minmax(0, 1fr); gap: 24px; align-items: start; }
+.you-legal { margin: 8px 0 0; text-align: center; }
+.you-legal a { color: var(--ink-3); }
+.you-legal a:hover { color: var(--ink); }
 @media (min-width: 900px) { .you-layout { grid-template-columns: 180px minmax(0, 1fr); gap: 32px; } .you-nav { position: sticky; top: 32px; flex-direction: column; } }
 .you-nav { display: flex; gap: 2px; overflow-x: auto; }
 .you-nav-link { display: block; padding: 6px 10px; border-radius: var(--r-sm); text-decoration: none; font-size: 0.875rem; font-weight: 500; color: var(--ink-2); white-space: nowrap; }

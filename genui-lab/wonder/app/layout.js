@@ -3,6 +3,7 @@
 import { Geist, Geist_Mono } from 'next/font/google';
 import { syncConfig } from '../server/sync/index.js';
 import { landingScript } from './landing-script.js';
+import { Analytics } from './analytics';
 import '../../chatgpt-dil/src/dil.css';
 import 'katex/dist/katex.min.css';
 import './styles/styles.css';
@@ -51,7 +52,7 @@ export default function RootLayout({ children }) {
         <script dangerouslySetInnerHTML={{ __html: LANDING_SCRIPT }} />
         <script dangerouslySetInnerHTML={{ __html: THEME_SCRIPT }} />
       </head>
-      <body>{children}</body>
+      <body>{children}<Analytics /></body>
     </html>
   );
 }

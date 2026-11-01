@@ -143,7 +143,7 @@ async function showPlan(row, btn, live = () => true) {
     el('strong', null, `${plan.name} plan`),
     el('p', { class: 'muted small' }, [standing, pitch, test].filter(Boolean).join(' '),
       billing?.canUpgrade ? [' ', el('a', { href: '/pricing' }, 'Compare plans')] : null)),
-  actions.length ? el('div', { style: { display: 'flex', gap: '8px', flexWrap: 'wrap' } }, ...actions) : null);
+  ...(actions.length ? [el('div', { style: { display: 'flex', gap: '8px', flexWrap: 'wrap' } }, ...actions)] : []));
   row.hidden = false;
 }
 
@@ -276,7 +276,8 @@ export function renderYou(ctx) {
     sec('activity', heat),
     sec('preferences', settingsCard),
     accountPanel({ ...ctx, onAccountShown: (on) => { accountLink.hidden = !on; } }));
-  app.replaceChildren(el('div', { class: 'you' }, el('h1', { class: 'h-xl you-title' }, 'You'), el('div', { class: 'you-layout' }, nav, content)));
+  const legal = el('p', { class: 'muted small you-legal' }, el('a', { href: '/privacy' }, 'Privacy'), ' · ', el('a', { href: '/terms' }, 'Terms'));
+  app.replaceChildren(el('div', { class: 'you' }, el('h1', { class: 'h-xl you-title' }, 'You'), el('div', { class: 'you-layout' }, nav, content), legal));
   // scrolled to the end: the last section, which may be too short to reach the band below
   const atEnd = () => window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 4;
   const markEnd = () => { if (atEnd()) mark([...content.children].filter((n) => !n.hidden).pop().id.replace('you-', '')); };

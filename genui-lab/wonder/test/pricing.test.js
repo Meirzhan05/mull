@@ -48,7 +48,7 @@ test('pricing: on Pro, the way to manage it depends on where Pro came from', () 
 });
 
 test('pricing: the pitch follows the caps this server uses', () => {
-  assert.equal(proPitch(DEFAULT_LIMITS, DEFAULT_PRO_LIMITS), 'Twice the daily limits, for learning a lot.');
+  assert.equal(proPitch(DEFAULT_LIMITS, DEFAULT_PRO_LIMITS), 'Eight times the daily limits, for learning a lot.');
   const fivefold = Object.fromEntries(Object.entries(DEFAULT_LIMITS).map(([k, v]) => [k, v * 5]));
   assert.equal(proPitch(DEFAULT_LIMITS, fivefold), 'Five times the daily limits, for learning a lot.');
   assert.equal(proPitch(DEFAULT_LIMITS, { ...DEFAULT_PRO_LIMITS, lesson: 60 }), 'Higher daily limits, for learning a lot.');

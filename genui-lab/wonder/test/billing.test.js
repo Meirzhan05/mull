@@ -12,6 +12,7 @@ import { createMemoryDb } from '../server/sync/memory-db.js';
 import { polarConfig, verifyWebhook, planFromSubscription, priceLabel, bestSubscription, POLAR_API, POLAR_VERSION, WEBHOOK_TOLERANCE_MS } from '../server/billing.js';
 import { cleanPlanRecord, createPlans } from '../server/plans.js';
 import { fakeClient } from './helpers.js';
+import { DEFAULT_LIMITS, DEFAULT_PRO_LIMITS } from '../server/usage.js';
 
 const quiet = { warn() {}, error() {}, log() {}, info() {} };
 const DAY = 24 * 3600_000;
@@ -434,8 +435,8 @@ test('GET /api/plans: both plans\' caps and the Pro price, signed out too, for t
   await withServer(async ({ call }) => {
     const p = (await call(null, 'GET', '/api/plans')).body;
     assert.equal(p.accounts, true);
-    assert.equal(p.free.lesson, 20);
-    assert.equal(p.pro.tutor, 200);
+    assert.equal(p.free.lesson, DEFAULT_LIMITS.lesson);
+    assert.equal(p.pro.tutor, DEFAULT_PRO_LIMITS.tutor);
     assert.equal(p.pro.course, 40, 'WONDER_PRO_LIMIT_* applies');
     assert.equal(p.free.grade, null, 'a cap turned off is no limit');
     assert.equal(p.price, '$8 / month');
@@ -444,7 +445,7 @@ test('GET /api/plans: both plans\' caps and the Pro price, signed out too, for t
   }, { env: { ...ENV, WONDER_PRO_LIMIT_COURSE: '40', WONDER_LIMIT_GRADE: 'off' } });
   await withServer(async ({ call }) => {
     const p = (await call(null, 'GET', '/api/plans')).body;
-    assert.deepEqual([p.buyable, p.price, p.sandbox, p.pro.lesson, p.signedIn], [false, null, false, 40, false]);
+    assert.deepEqual([p.buyable, p.price, p.sandbox, p.pro.lesson, p.signedIn], [false, null, false, DEFAULT_PRO_LIMITS.lesson, false]);
     assert.equal(p.plan, undefined);
   }, { env: {} });
 });
