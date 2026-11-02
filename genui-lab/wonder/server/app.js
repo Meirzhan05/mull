@@ -931,16 +931,18 @@ export function createWonderCore(opts = {}) {
     const pay = sync ? billingFor(sync) : null;
     const record = userId ? await userPlans(sync).record(userId) : null;
     const plan = userId ? await userPlans(sync).describe(userId, record) : null;
+    // together, so a cold price lookup is waited for once (the page's wait), not twice
+    const [price, billing] = await Promise.all([pay ? pay.price() : null, userId && pay ? pay.offer(record, plan) : null]);
     t.json(200, {
       ok: true,
       accounts: !!sync, // no accounts: one learner, no caps, nothing to buy
       free: caps(gate?.limits || usageLimits(env)),
       pro: caps(gate?.proLimits || usageLimits(env, 'pro')),
-      price: pay ? await pay.price() : null,
+      price,
       buyable: !!pay,
       sandbox: pay?.server === 'sandbox',
       signedIn: !!userId,
-      ...(userId ? { plan, billing: pay ? await pay.offer(record, plan) : null } : {}),
+      ...(userId ? { plan, billing } : {}),
     });
   }
 

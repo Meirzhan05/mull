@@ -70,7 +70,7 @@ function draw(view) {
     $(`[data-for="${id}"]`).textContent = view.pitch[id];
     $(`[data-cta="${id}"]`).replaceChildren(...cta(view[id]));
   }
-  $('[data-price]').replaceChildren(el('b', null, view.price.amount), view.price.per ? ` / ${view.price.per}` : '');
+  if (view.price) $('[data-price]').replaceChildren(el('b', null, view.price.amount), view.price.per ? ` / ${view.price.per}` : '');
   if (view.current) $(`#${view.current}-h`).append(el('span', { class: 'plan__current' }, 'Your plan'));
   $('[data-test]').hidden = !view.test;
 }

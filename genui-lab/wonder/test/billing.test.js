@@ -450,6 +450,23 @@ test('GET /api/plans: both plans\' caps and the Pro price, signed out too, for t
   }, { env: {} });
 });
 
+test('GET /api/plans waits longer than the account card for a cold Polar price, once', async () => {
+  await withServer(async ({ call, polar }) => {
+    polar.fail.products = 2500; // past the account card's wait, inside the page's
+    const t0 = Date.now();
+    const p = (await call('alice', 'GET', '/api/plans')).body;
+    assert.equal(p.price, '$8 / month');
+    assert.equal(polar.calls.filter((c) => c.path.startsWith('/products/')).length, 1);
+  });
+  await withServer(async ({ call, polar }) => {
+    polar.fail.products = 5000; // past both waits: answered without it, after the page's wait alone
+    const t0 = Date.now();
+    const p = (await call('alice', 'GET', '/api/plans')).body;
+    assert.equal(p.price, null);
+    assert.ok(Date.now() - t0 < 4500, 'the page and the offer wait together, not one after the other');
+  });
+});
+
 test('GET /api/plans: a signed-in visitor gets their plan and offer in the same answer', async () => {
   await withServer(async ({ call, polar }) => {
     const p = (await call('alice', 'GET', '/api/plans')).body;

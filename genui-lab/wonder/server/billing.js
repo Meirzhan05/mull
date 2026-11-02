@@ -29,6 +29,11 @@ export const WEBHOOK_TOLERANCE_MS = 5 * 60_000;
 const PRICE_TTL_MS = 60 * 60_000;
 /** How long GET /api/account waits for a first price label before answering without one. */
 const PRICE_WAIT_MS = 1500;
+/**
+ * How long GET /api/plans waits for it: the price is what the pricing page is for, and a cold
+ * server's first Polar lookup can take longer than 1.5 s. Under the page's 4 s loading budget.
+ */
+export const PAGE_PRICE_WAIT_MS = 3500;
 
 /** Polar settings from the environment, or null when billing is off. */
 export function polarConfig(env = process.env) {
@@ -197,10 +202,10 @@ export function createPolarBilling({ config, plans, fetch: fetchImpl = globalThi
       price = { label: price.label, at: now() - PRICE_TTL_MS + 60_000 }; // try again in a minute
     })
     .finally(() => { pricePending = null; }));
-  async function currentPrice() {
+  async function currentPrice(wait = PRICE_WAIT_MS) {
     if (now() - price.at >= PRICE_TTL_MS) {
       const p = refreshPrice();
-      if (price.label == null) await Promise.race([p, new Promise((r) => setTimeout(r, PRICE_WAIT_MS).unref?.())]);
+      if (price.label == null) await Promise.race([p, new Promise((r) => setTimeout(r, wait).unref?.())]);
     }
     return price.label;
   }
@@ -247,7 +252,7 @@ export function createPolarBilling({ config, plans, fetch: fetchImpl = globalThi
     },
 
     /** The Pro price label ("$8 / month"), or null while Polar cannot say (the pricing page). */
-    price: () => currentPrice(),
+    price: () => currentPrice(PAGE_PRICE_WAIT_MS),
 
     /** Bring the user's plan up to date from Polar now (back from checkout, or on request). */
     sync: (userId) => syncUser(userId),
