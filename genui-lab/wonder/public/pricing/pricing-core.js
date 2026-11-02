@@ -31,8 +31,9 @@ const NOT_ON_SALE = { cta: { kind: 'disabled', label: 'Not on sale yet' }, note:
 /**
  * The page for one /api/plans answer, or null when there is none (the request failed: the page
  * keeps its defaults). {noAccounts} alone for a server without accounts. Otherwise:
- * {bar, current, test, caps: {free, pro}, price: {amount, per}, pitch: {free, pro}, free: {cta, note}, pro: {cta, note}}
- * where a cta is {kind: 'link', label, href, primary} | {kind: 'upgrade', label} | {kind: 'disabled', label}.
+ * {bar, current, test, caps: {free, pro}, price: {amount, per} | null, priceLater, pitch: {free, pro}, free: {cta, note}, pro: {cta, note}}
+ * where a null price keeps the page's default ($15 / month) and priceLater says to ask again for it,
+ * and a cta is {kind: 'link', label, href, primary} | {kind: 'upgrade', label} | {kind: 'disabled', label}.
  */
 export function pricingView(p) {
   if (!p?.ok) return null;
@@ -44,8 +45,10 @@ export function pricingView(p) {
     current: signedIn ? p.plan.id : null,
     test: !!p.sandbox,
     caps: { free: p.free, pro: p.pro },
-    // no price yet: on sale (the lookup is slow) or not, or given to this user (admin, comped)
-    price: price ? splitPrice(price) : { amount: p.buyable ? 'Paid' : signedIn && p.plan.id === 'pro' ? 'Free for you' : 'Soon', per: null },
+    // no price yet: on sale (Polar's lookup is slow on a cold server: the default until it lands)
+    // or not, or given to this user (admin, comped)
+    price: price ? splitPrice(price) : p.buyable ? null : { amount: signedIn && p.plan.id === 'pro' ? 'Free for you' : 'Soon', per: null },
+    priceLater: !price && !!p.buyable,
     pitch: { free: freePitch(p.free), pro: proPitch(p.free, p.pro) },
     free: { cta: signedIn ? link('Open Mull', '/#/') : link('Continue with Google', '/#/start'), note: null },
     pro: null,
