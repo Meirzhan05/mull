@@ -54,10 +54,6 @@ function cta({ cta: c, note }) {
   return note ? [...button, el('p', { class: 'plan__note' }, note)] : button;
 }
 
-function drawPrice(price) {
-  if (price) $('[data-price]').replaceChildren(el('b', null, price.amount), price.per ? ` / ${price.per}` : '');
-}
-
 function draw(view) {
   if (view.noAccounts) {
     // a server without accounts: one learner and no caps, so there is nothing to choose
@@ -74,21 +70,15 @@ function draw(view) {
     $(`[data-for="${id}"]`).textContent = view.pitch[id];
     $(`[data-cta="${id}"]`).replaceChildren(...cta(view[id]));
   }
-  drawPrice(view.price);
+  if (view.price) $('[data-price]').replaceChildren(el('b', null, view.price.amount), view.price.per ? ` / ${view.price.per}` : '');
   if (view.current) $(`#${view.current}-h`).append(el('span', { class: 'plan__current' }, 'Your plan'));
   $('[data-test]').hidden = !view.test;
 }
 
-let view = null;
 try {
-  view = pricingView(await getJson('/api/plans'));
+  const view = pricingView(await getJson('/api/plans'));
   if (view) draw(view);
 } finally {
   // the buttons and price were hidden until known (index.html): without an answer, the defaults show
   document.documentElement.classList.remove('is-loading');
-}
-// the server kept looking the price up after answering without it: ask once more for the card
-if (view?.priceLater) {
-  await new Promise((r) => setTimeout(r, 2500));
-  drawPrice(pricingView(await getJson('/api/plans'))?.price);
 }

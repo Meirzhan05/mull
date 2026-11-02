@@ -31,10 +31,10 @@ test('pricing: on Free, Upgrade with the price; without billing, not on sale', (
   assert.equal(v.current, 'free');
   assert.equal(v.bar.label, 'Open Mull');
   assert.deepEqual(v.pro.cta, { kind: 'upgrade', label: 'Upgrade · $8 / month' });
-  // a slow price lookup: the card keeps its default price and asks again, the button has no price
+  // Polar did not answer in time: the card keeps its default price, the button has no price
   const slow = pricingView({ ...signedIn({ id: 'free' }, { canUpgrade: true, price: null }), price: null });
-  assert.deepEqual([slow.price, slow.priceLater, slow.pro.cta.label], [null, true, 'Upgrade to Pro']);
-  assert.equal(v.priceLater, false);
+  assert.deepEqual([slow.price, slow.pro.cta.label], [null, 'Upgrade to Pro']);
+  assert.equal(pricingView({ ...base, price: null }).price, null, 'signed out too');
   assert.equal(pricingView({ ...signedIn({ id: 'free' }), buyable: false, price: null }).pro.cta.kind, 'disabled');
 });
 
