@@ -2,9 +2,11 @@
   <img src="docs/readme/banner.jpg" alt="White light passing through a prism and splitting into a rainbow" width="100%">
 </p>
 
-<h1 align="center">
-  <img src="docs/readme/logo.svg" alt="" width="44" height="44" align="center">&nbsp;Mull
-</h1>
+<p align="center">
+  <img src="docs/readme/logo.svg" alt="Mull logo" width="72" height="72">
+</p>
+
+<h1 align="center">Mull</h1>
 
 <p align="center">
   <b>Ask about anything. Get a short lesson you can touch.</b><br>
