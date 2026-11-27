@@ -71,10 +71,7 @@ When you finish a lesson, its key ideas become review cards. Mull schedules thos
 
 ## How it works
 
-Mull joins two ideas that this repository first took apart from shipped web clients:
-
-- **ChatGPT's generative UI.** The model writes JSX-like tags inside its markdown. The server compiles the growing message into a small UI program on every revision and streams it to the browser. The browser runs the program in a sandboxed Web Worker and applies the result to the page.
-- **wondering.app's learning loop.** Short paged lessons, a tutor, review cards and spaced repetition.
+Claude writes each lesson as markdown with UI tags mixed in. The server compiles the growing message into a small UI program on every revision and streams it to the browser. The browser runs the program in a sandboxed Web Worker and applies the result to the page, so widgets appear while the lesson is still being written.
 
 ```text
   Claude  ──text──▶  compiler  ──UI program──▶  NDJSON stream  ──▶  sandboxed worker  ──▶  page
@@ -102,36 +99,6 @@ To run the tests:
 ```bash
 npm --prefix genui-lab/wonder test
 ```
-
-## The research behind it
-
-Mull started as a reverse-engineering study of two "intelligent UI" systems. The findings and working rebuilds are still here.
-
-| Path | What it holds |
-|---|---|
-| [`re/chatgpt-findings.md`](re/chatgpt-findings.md) | ChatGPT's web client: the DIL generative-UI runtime, the conversation-source NDJSON stream, the Skybridge widget host and the Octane/StyleX stack. |
-| [`re/wondering-findings.md`](re/wondering-findings.md) | wondering.app: `{{interactive:…}}` lesson widgets, the chat and Teacher SSE streams, the realtime voice tutor, FSRS practice and the Supabase backend. |
-| [`genui-lab/chatgpt-dil/`](genui-lab/chatgpt-dil) | A rebuild of the DIL compiler, the sandboxed worker runtime, the DOM host and stream replay. |
-| [`genui-lab/wondering-genui/`](genui-lab/wondering-genui) | A rebuild of the interactive-marker parser, component registry, SSE reducers and FSRS. |
-| [`genui-lab/wonder/`](genui-lab/wonder) | Mull itself. |
-
-To view the two rebuilds and run their tests:
-
-```bash
-python3 -m http.server 8740 --directory genui-lab
-```
-
-```bash
-node --test genui-lab/chatgpt-dil/test/index.js genui-lab/wondering-genui/test/*.test.js
-```
-
-<details>
-<summary><b>How the evidence was handled</b></summary>
-<br>
-
-The analysis was static and used public JavaScript bundles. Live capture was limited to three logged-out ChatGPT test prompts. Session tokens (conduit, resume, stop, sentinel, proof, turnstile) are redacted in every committed file. Raw captures and copied third-party bundles are excluded by `.gitignore`.
-
-</details>
 
 <br>
 
